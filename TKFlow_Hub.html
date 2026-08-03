@@ -416,6 +416,50 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
   var loginError = document.getElementById('login-error');
   var loginSubmit = document.getElementById('login-submit');
 
+  // Merges Supabase's companies/company_groups/company_pocs into the
+  // existing clients/clientGroups objects. Only overwrites fields that
+  // actually exist in Supabase today (name, headcount, payroll type,
+  // ticketing mode/url, POCs) -- task status arrays, cutoff schedule
+  // configs, and avatar colors aren't in the database yet, so those
+  // fields are left as whatever the hardcoded seed already has.
+  async function loadCompaniesFromSupabase() {
+    var groupsRes = await supabaseClient.from('company_groups').select('*');
+    var companiesRes = await supabaseClient.from('companies').select('*, company_pocs(*)');
+    if (groupsRes.error || companiesRes.error) {
+      console.warn('Failed to load companies from Supabase', groupsRes.error, companiesRes.error);
+      return;
+    }
+    var groupByCode = {};
+    (groupsRes.data || []).forEach(function(g) { groupByCode[g.code] = g; });
+
+    (companiesRes.data || []).forEach(function(c) {
+      var group = c.group_id ? (groupsRes.data || []).find(function(g){ return g.id === c.group_id; }) : null;
+      if (!clients[c.short_key]) clients[c.short_key] = {};
+      var existing = clients[c.short_key];
+      existing.name = c.name;
+      existing.hc = c.headcount;
+      existing.payrollType = c.payroll_type;
+      existing.basicPayOffset = c.basic_pay_offset;
+      existing.taskConfig = c.task_config;
+      existing.ticketingMode = c.ticketing_mode;
+      existing.ticketingUrl = c.ticketing_url;
+      if (group) { existing.group = group.code; existing.groupName = group.name; }
+      existing.pocs = (c.company_pocs || []).map(function(p) {
+        return { name: p.name, role: p.role, phone: p.phone || '', email: p.email || '' };
+      });
+    });
+
+    (groupsRes.data || []).forEach(function(g) {
+      if (!clientGroups[g.code]) clientGroups[g.code] = { name: g.name, av: g.code, avClass: 'av-g', subs: [], subNames: {} };
+      var existingGroup = clientGroups[g.code];
+      existingGroup.name = g.name;
+      var subs = (companiesRes.data || []).filter(function(c){ return c.group_id === g.id; });
+      existingGroup.subs = subs.map(function(c){ return c.short_key; });
+      existingGroup.subNames = {};
+      subs.forEach(function(c){ existingGroup.subNames[c.short_key] = c.name; });
+    });
+  }
+
   async function loadCurrentUserFromSession(session) {
     var uid = session.user.id;
     var profileRes = await supabaseClient.from('users').select('*').eq('id', uid).maybeSingle();
@@ -450,7 +494,11 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       processClients: byType.processing,
       auditClients: byType.audit
     };
+    await loadCompaniesFromSupabase();
     if (typeof refreshUserUI === 'function') refreshUserUI();
+    if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
+    if (typeof renderDashSchedule === 'function') renderDashSchedule();
+    if (typeof filterClientGrid === 'function') filterClientGrid();
     loginOverlay.style.display = 'none';
     return true;
   }
