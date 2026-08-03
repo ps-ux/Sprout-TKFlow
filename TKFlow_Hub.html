@@ -4819,6 +4819,28 @@ function lastWorkingDayOnOrBefore(dateObj, clientKey) {
   return d;
 }
 
+// Same accent-color mapping already used for client avatars elsewhere (Policy Bank filter
+// chips, Client Assignments) -- reused here so calendar events shown outside a client's own
+// workspace (dashboard schedule, mini calendar, Team Calendar) are colored by which CLIENT
+// they belong to instead of just event type, making it possible to tell clients apart at a
+// glance in a shared view. Only 4 buckets exist (same limitation as everywhere else this
+// mapping is used), so cycles/repeats once there are more than 4 distinct clients.
+function avClassAccentColor(avClass) {
+  return {'av-g':'#32CE13','av-b':'#1679FA','av-o':'#e67e00','av-p':'#16A34A'}[avClass] || '#6b6b80';
+}
+// Resolves a _calStore key (a real client short_key, or a group code for multi-entity
+// clients) to a representative avClass -- groups don't reliably carry their own avClass
+// (companies loaded from Supabase default every real group to 'av-g'), so this uses the
+// first sub's own avClass instead, which is diversified per-client at creation time.
+function avClassForStoreKey(storeKey) {
+  if (typeof clients !== 'undefined' && clients[storeKey]) return clients[storeKey].avClass;
+  if (typeof clientGroups !== 'undefined' && clientGroups[storeKey] && clientGroups[storeKey].subs && clientGroups[storeKey].subs.length) {
+    var firstSub = clientGroups[storeKey].subs[0];
+    return (clients[firstSub] && clients[firstSub].avClass) || 'av-g';
+  }
+  return 'av-g';
+}
+
 function renderDashSchedule() {
   var el = document.getElementById('dash-schedule-list');
   var dateEl = document.getElementById('dash-schedule-date');
@@ -4885,7 +4907,7 @@ function renderDashSchedule() {
               timeStr: 'Payout',
               label: p.monthName + ' ' + (p.period===1?'1st':'2nd') + ' Payout',
               sub: clientLabel,
-              color: 'var(--ub-500)',
+              color: avClassAccentColor(cl.avClass),
               icon: 'ti-cash'
             });
           }
@@ -4905,7 +4927,7 @@ function renderDashSchedule() {
               timeStr: timeStr,
               label: dl.label,
               sub: clientLabel + ' · ' + p.monthName + ' ' + (p.period===1?'1st':'2nd'),
-              color: 'var(--bb-600)',
+              color: avClassAccentColor(cl.avClass),
               icon: 'ti-clock'
             });
           }
@@ -4934,7 +4956,7 @@ function renderDashSchedule() {
         timeStr: 'Today',
         label: r.lastName + ', ' + r.firstName + ' \u2014 ' + transferLabel + (isEarly ? ' (actual: ' + fmtLMDate(r.anniversary) + ')' : ''),
         sub: clientName + ' \u00b7 Leave Monitoring',
-        color: '#7c3aed',
+        color: avClassAccentColor(clients[ck] && clients[ck].avClass),
         icon: 'ti-calendar-heart'
       });
     });
@@ -5022,7 +5044,7 @@ function renderMiniCal() {
         if (p.payout) {
           var pd = new Date(yr, p.month, p.payout.getDate());
           if (pd >= mon && pd <= fri)
-            weekEvents.push({client: clientLabel, activity: 'Payout ' + (p.period===1?'1st':'2nd'), day: pd, color:'var(--ub-500)', icon:'ti-cash', timeStr: null});
+            weekEvents.push({client: clientLabel, activity: 'Payout ' + (p.period===1?'1st':'2nd'), day: pd, color: avClassAccentColor(cl.avClass), icon:'ti-cash', timeStr: null});
         }
         p.deadlines.forEach(function(dl) {
           if (!dl.date) return;
@@ -5030,7 +5052,7 @@ function renderMiniCal() {
           var mn = dl.hasTime ? dl.date.getMinutes() : 0;
           var dd = new Date(yr, p.month, dl.date.getDate(), hr, mn);
           if (dd >= mon && dd <= fri)
-            weekEvents.push({client: clientLabel, activity: dl.label, day: dd, color:'var(--bb-600)', icon:'ti-clock',
+            weekEvents.push({client: clientLabel, activity: dl.label, day: dd, color: avClassAccentColor(cl.avClass), icon:'ti-clock',
               timeStr: dl.hasTime ? dd.toLocaleTimeString('en-PH',{hour:'numeric',minute:'2-digit',hour12:true}) : null});
         });
       });
@@ -5061,7 +5083,7 @@ function renderMiniCal() {
         weekEvents.push({
           client: clientName,
           activity: r.lastName + ', ' + r.firstName + ' \u2014 ' + (r.yearsOfService ? r.yearsOfService + 'yr' : '1yr') + ' transfer' + (isEarly ? ' (actual ' + fmtLMDate(r.anniversary) + ')' : ''),
-          day: reminderDate, color: '#7c3aed', icon: 'ti-calendar-heart', timeStr: null
+          day: reminderDate, color: avClassAccentColor(clients[ck] && clients[ck].avClass), icon: 'ti-calendar-heart', timeStr: null
         });
       }
     });
@@ -5592,10 +5614,14 @@ function renderAdminCalendar() {
     if (!store || !store.calPeriods) return;
     var clientName = (typeof clientGroups !== 'undefined' && clientGroups[storeKey]) ? clientGroups[storeKey].name
       : (typeof clients !== 'undefined' && clients[storeKey]) ? clients[storeKey].name : storeKey;
+    // Colored by client (not event type) -- this view aggregates every client's calendar
+    // into one place, so event-type coloring alone made it impossible to tell whose event
+    // is whose at a glance.
+    var eventColor = avClassAccentColor(avClassForStoreKey(storeKey));
     store.calPeriods.forEach(function(p) {
-      if (p.payout) addEvent(p.payout, clientName, 'Payout', '#32CE13');
+      if (p.payout) addEvent(p.payout, clientName, 'Payout', eventColor);
       (p.deadlines || []).forEach(function(dl) {
-        if (dl.date) addEvent(dl.date, clientName, dl.label, '#1679FA');
+        if (dl.date) addEvent(dl.date, clientName, dl.label, eventColor);
       });
     });
   });
@@ -5605,11 +5631,12 @@ function renderAdminCalendar() {
     var lmStore = window.leaveMonitoringStore[lk];
     if (!lmStore) return;
     var lmClientName = (typeof clients !== 'undefined' && clients[lk]) ? clients[lk].name : lk;
+    var lmColor = avClassAccentColor(avClassForStoreKey(lk));
     (lmStore.oneYear || []).forEach(function(r) {
-      if (r.anniversary) addEvent(r.anniversary, lmClientName, r.lastName + ', ' + r.firstName + ' \u2014 1yr transfer', '#7c3aed');
+      if (r.anniversary) addEvent(r.anniversary, lmClientName, r.lastName + ', ' + r.firstName + ' \u2014 1yr transfer', lmColor);
     });
     (lmStore.fiveYear || []).forEach(function(r) {
-      if (r.anniversary) addEvent(r.anniversary, lmClientName, r.lastName + ', ' + r.firstName + ' \u2014 ' + r.yearsOfService + 'yr transfer', '#7c3aed');
+      if (r.anniversary) addEvent(r.anniversary, lmClientName, r.lastName + ', ' + r.firstName + ' \u2014 ' + r.yearsOfService + 'yr transfer', lmColor);
     });
   });
 
