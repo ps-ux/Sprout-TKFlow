@@ -20497,8 +20497,20 @@ async function loadCalendarsFromSupabase() {
   (res.data || []).forEach(function(row) {
     var key = row.scope_type === 'group' ? groupIdToCode[row.scope_id] : companyIdToShortKey[row.scope_id];
     if (!key) return;
+    // cal_periods round-trips through jsonb, which has no Date type -- period.payout and
+    // deadlines[].date were real Date objects when parsed, but come back as plain ISO
+    // strings, so anything downstream calling .getDate()/.getMonth()/etc on them throws.
+    // Revive them here, once, on load.
+    var periods = (row.cal_periods || []).map(function(p) {
+      return Object.assign({}, p, {
+        payout: p.payout ? new Date(p.payout) : p.payout,
+        deadlines: (p.deadlines || []).map(function(d) {
+          return Object.assign({}, d, { date: d.date ? new Date(d.date) : d.date });
+        })
+      });
+    });
     _calStore[key] = {
-      calPeriods: row.cal_periods || [],
+      calPeriods: periods,
       calHolidays: row.cal_holidays || {},
       calFileName: row.file_name || ''
     };
