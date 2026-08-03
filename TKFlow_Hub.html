@@ -451,6 +451,40 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
     loginBox.style.display = 'block';
   }
 
+  // tasks/tasks2/tasks3, cutoffs, av/avClass, and status fields aren't
+  // modeled in Supabase yet -- for a client that was already part of the
+  // hardcoded seed, these already exist and are left untouched. For a
+  // client created after the seed (e.g. via Add Client) that survives a
+  // refresh, these would otherwise be undefined and break the workspace
+  // tab/profile view, so fill in the same pending-state defaults
+  // makeDefaultClientEntry() uses, one field at a time, without
+  // clobbering anything already present.
+  function ensureClientTaskScaffold(existing, shortKey) {
+    var avatarColors = ['av-g', 'av-b', 'av-o', 'av-p'];
+    if (!existing.av) existing.av = shortKey.slice(0, 3);
+    if (!existing.avClass) existing.avClass = avatarColors[Object.keys(clients).length % avatarColors.length];
+    if (!existing.meta) existing.meta = 'Newly added';
+    if (!existing.status) { existing.status = 'Pending'; existing.statusClass = 'wsp-b'; }
+    if (!existing.cutoff) existing.cutoff = 'Not yet set';
+    if (existing.absent === undefined) existing.absent = 0;
+    if (existing.disp === undefined) existing.disp = 0;
+    if (!existing.dispSub) existing.dispSub = 'No disputes yet';
+    if (!existing.cutoffs) existing.cutoffs = [];
+    if (!existing.disputes) existing.disputes = [];
+    if (!existing.tasks) existing.tasks = [
+      { ico: 'ico-g', icon: 'ti-table-plus', name: 'Variance analysis', taskKey: 'variance', st: 'tst-pend', stl: 'Pending' },
+      { ico: 'ico-b', icon: 'ti-clock-check', name: 'Current Attendance Validation', taskKey: 'validation', st: 'tst-pend', stl: 'Pending' },
+      { ico: 'ico-p', icon: 'ti-file-description', name: 'Dispute summary', taskKey: 'disputes_summary', st: 'tst-pend', stl: 'Pending' }
+    ];
+    if (!existing.tasks2) existing.tasks2 = [
+      { ico: 'ico-g', icon: 'ti-user-plus', name: 'New hires upload', taskKey: 'newhires', st: 'tst-pend', stl: 'Pending' },
+      { ico: 'ico-b', icon: 'ti-user-edit', name: 'Profile updates', taskKey: 'profile', st: 'tst-pend', stl: 'Pending' }
+    ];
+    if (!existing.tasks3) existing.tasks3 = [
+      { ico: 'ico-o', icon: 'ti-file-invoice', name: 'Payroll Instructions', taskKey: 'payroll_instructions', st: 'tst-pend', stl: 'Pending' }
+    ];
+  }
+
   // Merges Supabase's companies/company_groups/company_pocs into the
   // existing clients/clientGroups objects. Only overwrites fields that
   // actually exist in Supabase today (name, headcount, payroll type,
@@ -482,6 +516,7 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       existing.pocs = (c.company_pocs || []).map(function(p) {
         return { name: p.name, role: p.role, phone: p.phone || '', email: p.email || '' };
       });
+      ensureClientTaskScaffold(existing, c.short_key);
     });
 
     (groupsRes.data || []).forEach(function(g) {
