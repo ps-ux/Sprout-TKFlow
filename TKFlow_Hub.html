@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sprout TKFlow</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2332CE13'/%3E%3Ccircle cx='16' cy='17' r='9' fill='none' stroke='%23fff' stroke-width='2.4'/%3E%3Cpath d='M16 11v6l4 3' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600&display=swap" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -395,8 +396,12 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
 </head>
 <body>
 <div id="login-overlay" style="position:fixed;inset:0;z-index:99999;background:var(--n-50);display:flex;align-items:center;justify-content:center;font-family:Rubik,sans-serif;overflow:hidden;">
-  <svg style="position:absolute;top:-40px;left:-40px;width:220px;height:238px;opacity:0.06;pointer-events:none;"><use href="#tkf-asterisk"/></svg>
-  <svg style="position:absolute;bottom:-60px;right:-30px;width:260px;height:281px;opacity:0.05;pointer-events:none;"><use href="#tkf-asterisk"/></svg>
+  <svg style="position:absolute;top:-40px;left:-40px;width:220px;height:238px;opacity:0.16;transform:rotate(-12deg);pointer-events:none;"><use href="#tkf-asterisk" style="fill:#32CE13;"/></svg>
+  <svg style="position:absolute;bottom:-60px;right:-30px;width:260px;height:281px;opacity:0.16;transform:rotate(8deg);pointer-events:none;"><use href="#tkf-asterisk" style="fill:#1679FA;"/></svg>
+  <svg style="position:absolute;top:60px;right:80px;width:70px;height:76px;opacity:0.18;transform:rotate(20deg);pointer-events:none;"><use href="#tkf-asterisk" style="fill:#e67e00;"/></svg>
+  <svg style="position:absolute;bottom:90px;left:100px;width:50px;height:54px;opacity:0.16;transform:rotate(-25deg);pointer-events:none;"><use href="#tkf-asterisk" style="fill:#32CE13;"/></svg>
+  <svg style="position:absolute;top:220px;left:60px;width:34px;height:37px;opacity:0.18;transform:rotate(45deg);pointer-events:none;"><use href="#tkf-asterisk" style="fill:#1679FA;"/></svg>
+  <svg style="position:absolute;bottom:40px;right:220px;width:40px;height:43px;opacity:0.16;transform:rotate(-40deg);pointer-events:none;"><use href="#tkf-asterisk" style="fill:#e67e00;"/></svg>
 
   <div id="login-checking" style="color:var(--text-muted);font-size:13px;display:flex;align-items:center;gap:8px;">
     <i class="ti ti-loader-2" style="font-size:16px;animation:tkfSpin 0.8s linear infinite;"></i> Checking session&hellip;
@@ -412,7 +417,7 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
         <div style="font-size:10px;color:var(--text-muted);">OTK Hub &middot; MPS - Sprout Solutions</div>
       </div>
     </div>
-    <div style="display:inline-block;background:var(--kk-50);color:var(--kk-700);font-size:11px;font-weight:600;padding:4px 12px;border-radius:20px;border:1px solid var(--kk-200);margin-bottom:16px;">Payroll Ops Portal</div>
+    <div style="display:inline-block;background:var(--kk-50);color:var(--kk-700);font-size:11px;font-weight:600;padding:4px 12px;border-radius:20px;border:1px solid var(--kk-200);margin-bottom:16px;">MPS OTK Hub</div>
     <div style="font-size:13px;color:var(--text-secondary);margin-bottom:20px;">Sign in with your Sprout email to continue.</div>
     <form id="login-form">
       <input id="login-email" class="login-input" type="email" required placeholder="you@sprout.ph" autocomplete="username">
