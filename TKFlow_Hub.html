@@ -4658,8 +4658,21 @@ async function _saveClientConfirmed() {
       }
     });
     if (relationRows.length) {
+      // Dedup -- 'assigned' can be queued twice for the same person (once via the canAssign
+      // admin auto-grant above, once via being checked as Specialist/Auditor themselves).
+      // Without this, two identical rows in one insert batch violate the table's primary key
+      // and Postgres rejects the WHOLE batch -- silently, since only console.warn'd below --
+      // so the specialist assignment (and everything else in this batch) never actually
+      // persisted despite currentUser already having been optimistically updated above.
+      var seenRel = {};
+      relationRows = relationRows.filter(function(r) {
+        var k = r.user_id + '|' + r.company_id + '|' + r.relation_type;
+        if (seenRel[k]) return false;
+        seenRel[k] = true;
+        return true;
+      });
       var relResInsert = await supabaseClient.from('user_company_relations').insert(relationRows);
-      if (relResInsert.error) console.warn('Could not save user_company_relations', relResInsert.error);
+      if (relResInsert.error) { console.warn('Could not save user_company_relations', relResInsert.error); if (typeof showToast === 'function') showToast('Client saved, but specialist/access assignment failed to save: ' + relResInsert.error.message, '#c0392b'); }
     }
   }
 
