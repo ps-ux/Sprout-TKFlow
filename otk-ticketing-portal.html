@@ -1,0 +1,1080 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sprout Outsourced Timekeeping Support Portal</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useEffect } = React;
+
+
+const NATURE_OPTIONS = ["Payroll Dispute", "Missing / Incorrect Logs", "Leave Application", "Others"];
+
+const BRAND = {
+  greenApple: "#32CE13",
+  deepGreen: "#092903",
+  blueberry: "#1679FA",
+  lime: "#D2F612",
+  carrot: "#FF7F00",
+  ubas: "#8139EE",
+  n1: "#F7F5F2",
+  n2: "#F7F9ED",
+  n3: "#E8FAF8",
+  n4: "#E1F6C8",
+  n5: "#F5F3FF",
+  textPrimary: "#1a1a2e",
+  textSecondary: "#4a4a6a",
+  textMuted: "#8a8a9a",
+};
+
+const STATUS_STYLE = {
+  "Open": { bg: "#e8f0fe", text: BRAND.blueberry, label: "Open" },
+  "In Progress": { bg: "#fff0e0", text: "#a35700", label: "In progress" },
+  "Resolved": { bg: BRAND.n4, text: "#1f7a0a", label: "Resolved" },
+  "Closed": { bg: BRAND.n1, text: BRAND.textSecondary, label: "Closed" },
+};
+
+// Company hierarchy: a "group" can have subcompanies. Each subcompany can either
+// share one POC across the whole group, or have its own dedicated POC.
+const COMPANY_STRUCTURE = [
+  {
+    group: "Solstice Manufacturing",
+    isGroupLabelOnly: false,           // Solstice itself is also a real operating company
+    subcompanies: [],
+    sharedPoc: { name: "Bea Ramos", email: "bea.ramos@solstice.com" },
+  },
+  {
+    group: "Harborview Logistics",
+    isGroupLabelOnly: false,
+    subcompanies: [],
+    sharedPoc: { name: "Miguel Tan", email: "miguel.tan@harborview.com" },
+  },
+  {
+    group: "Kuehne Nagel",
+    isGroupLabelOnly: false,           // parent is a real operating company too
+    subcompanies: [
+      { name: "Kuehne Nagel Logistics Services Inc.", poc: { name: "Ana Villar", email: "ana.villar@kuehne-nagel.com" } },
+    ],
+    sharedPoc: { name: "Ramon Cruz", email: "ramon.cruz@kuehne-nagel.com" }, // POC for the parent entity itself
+  },
+  {
+    group: "HDI Group of Companies",
+    isGroupLabelOnly: true,            // group name only — not itself an operating company
+    subcompanies: [
+      { name: "World", poc: { name: "Liza Fernandez", email: "liza.fernandez@hdiworld.com" } },
+      { name: "Adventure", poc: { name: "Liza Fernandez", email: "liza.fernandez@hdiworld.com" } }, // same POC as World
+      { name: "Stanford", poc: { name: "Kevin Ong", email: "kevin.ong@hdistanford.com" } },
+      { name: "Capital Growth", poc: { name: "Kevin Ong", email: "kevin.ong@hdistanford.com" } },
+      { name: "Hillcroft", poc: { name: "Trisha Sy", email: "trisha.sy@hdihillcroft.com" } },
+      { name: "Erminland", poc: { name: "Trisha Sy", email: "trisha.sy@hdihillcroft.com" } },
+    ],
+    sharedPoc: null,
+  },
+];
+
+// Flattened lookup: full company display name -> { group, entityName, poc }
+// entityName is what actually shows on the ticket (the real employing entity).
+const COMPANY_LOOKUP = {};
+COMPANY_STRUCTURE.forEach(g => {
+  if (g.subcompanies.length === 0) {
+    COMPANY_LOOKUP[g.group] = { group: g.group, entityName: g.group, poc: g.sharedPoc };
+  } else {
+    if (!g.isGroupLabelOnly) {
+      COMPANY_LOOKUP[g.group] = { group: g.group, entityName: g.group, poc: g.sharedPoc };
+    }
+    g.subcompanies.forEach(sub => {
+      const label = g.isGroupLabelOnly ? `${g.group} — ${sub.name}` : `${g.group} — ${sub.name}`;
+      COMPANY_LOOKUP[label] = { group: g.group, entityName: sub.name, poc: sub.poc };
+    });
+  }
+});
+
+const COMPANIES = Object.keys(COMPANY_LOOKUP);
+const POC_BY_COMPANY = Object.fromEntries(Object.entries(COMPANY_LOOKUP).map(([k, v]) => [k, v.poc]));
+
+const OTK_AGENT = { name: "Jam Dela Cruz", email: "jam.delacruz@sprout.ph" };
+
+// ── Push to TKFlow ───────────────────────────────────────────────────────────
+// Sends every status change (and a couple of other real updates) to TKFlow the moment they
+// happen — not just once at the end. TKFlow's receive-side logic is receiveTicketUpdate();
+// this payload shape matches it exactly. "company" must be TKFlow's real client name
+// (e.g. "Kuehne + Nagel, Inc."), not this tool's internal display label — swap in the real
+// name for each client when this tool is actually configured per client.
+//
+// TODO: replace with the real endpoint once the Vercel + Supabase backend exists. Until then
+// this will just log a console warning instead of failing silently.
+const TKFLOW_PUSH_URL = "https://YOUR-TKFLOW-BACKEND/api/tickets/webhook";
+
+async function pushToTKFlow(ticket) {
+  const payload = {
+    id: ticket.id,
+    employeeName: ticket.employeeName,
+    employeeId: ticket.employeeId,
+    employeeEmail: ticket.employeeEmail,
+    company: ticket.company, // must match a real TKFlow client name exactly
+    nature: ticket.nature,
+    datesOfDispute: ticket.datesOfDispute,
+    dateSubmitted: ticket.dateSubmitted,
+    submittedAt: ticket.submittedAt || null, // real timestamp for TAT — falls back to null for older/seed tickets that predate this field
+    status: ticket.status,
+    assignedTo: ticket.assignedTo,
+    details: ticket.details,
+  };
+  // Payroll Instructions data (captured when a ticket closes) — only sent when it's actually
+  // applicable to payroll, matching TKFlow's own piLines shape (code/number/unit/addDed/remarks).
+  if (ticket.payrollInstructions && ticket.payrollInstructions.applicable) {
+    payload.payrollInstructions = {
+      code: ticket.payrollInstructions.disputeType,
+      number: ticket.payrollInstructions.number,
+      unit: ticket.payrollInstructions.unit,
+      addDed: ticket.payrollInstructions.additionDeduction,
+      remarks: ticket.payrollInstructions.remarks,
+    };
+  }
+  try {
+    await fetch(TKFLOW_PUSH_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    // No real backend to receive this yet — starts working the moment TKFLOW_PUSH_URL
+    // points to a real endpoint. Logged so it's visible/testable in the meantime.
+    console.warn("TKFlow push not sent (no backend yet):", payload, err);
+  }
+}
+
+
+const seedTickets = [
+  {
+    id: "TK-1001",
+    employeeId: "EMP-2201",
+    employeeName: "Carla Santos",
+    employeeEmail: "carla.santos@solstice.com",
+    company: "Solstice Manufacturing",
+    nature: "Missing / Incorrect Logs",
+    datesOfDispute: ["2026-07-17", "2026-07-18"],
+    dateSubmitted: "2026-07-19",
+    details: "My time-in for July 17 shows 10:45 AM but I clocked in at 8:00 AM. My biometric log seems to be missing.",
+    attachments: [{ name: "biometric_screenshot.png", type: "image" }],
+    status: "In Progress",
+    assignedTo: OTK_AGENT.name,
+    thread: [
+      { author: "Carla Santos", role: "employee", text: "Attached my screenshot for reference, hoping this can be corrected before cutoff.", time: "Jul 19, 9:02 AM" },
+      { author: OTK_AGENT.name, role: "otk", text: "Thanks Carla, checking this with the timekeeping team now. @Bea Ramos could you confirm if there was a system outage on the 17th?", time: "Jul 19, 1:40 PM", mentions: ["Bea Ramos"] },
+    ],
+    employeeConfirmedResolved: false,
+    resolvedAt: null,
+  },
+  {
+    id: "TK-1002",
+    employeeId: "EMP-2214",
+    employeeName: "Ronnel Cruz",
+    employeeEmail: "ronnel.cruz@solstice.com",
+    company: "Solstice Manufacturing",
+    nature: "Leave Application",
+    datesOfDispute: ["2026-07-10"],
+    dateSubmitted: "2026-07-11",
+    details: "Filed a leave application on July 8 for July 10, but it still shows as pending in Sprout HR and I was marked absent.",
+    attachments: [],
+    status: "Resolved",
+    assignedTo: OTK_AGENT.name,
+    thread: [
+      { author: OTK_AGENT.name, role: "otk", text: "Verified with the approver, your leave has now been reflected and the absence tag was removed.", time: "Jul 15, 11:20 AM" },
+    ],
+    employeeConfirmedResolved: false,
+    resolvedAt: "2026-07-15T11:20:00",
+  },
+  {
+    id: "TK-1003",
+    employeeId: "EMP-3390",
+    employeeName: "Diane Reyes",
+    employeeEmail: "diane.reyes@harborview.com",
+    company: "Harborview Logistics",
+    nature: "Payroll Dispute",
+    datesOfDispute: ["2026-06-21", "2026-06-30"],
+    dateSubmitted: "2026-07-06",
+    details: "My overtime hours for the June 21-30 cutoff were not reflected in my payslip.",
+    attachments: [{ name: "payslip_june.pdf", type: "pdf" }],
+    status: "Open",
+    assignedTo: OTK_AGENT.name,
+    thread: [],
+    employeeConfirmedResolved: false,
+    resolvedAt: null,
+  },
+];
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+const FAQS = [
+  { q: "What kind of concerns can I raise here?", a: "Anything related to your Sprout HR timekeeping — payroll discrepancies, missing or incorrect logs, and leave application issues." },
+  { q: "How long does it take to resolve a ticket?", a: "Tickets received before 12NN are catered by end of day the same day. Tickets received 12:01PM onwards are catered by end of day the next day. This turnaround time applies to quick concerns — more complex issues may take longer depending on what's involved, and resolution isn't guaranteed within this window." },
+  { q: "Can I attach files to my ticket?", a: "Yes — you can attach images or PDF files as supporting reference for your concern." },
+  { q: "Who can see my ticket?", a: "Only you, your company's POC, and the OTK team assigned to your company can see your ticket. Other employees and companies can't see it." },
+  { q: "What happens after my ticket is marked resolved?", a: "You'll be asked to confirm that everything looks good. If we don't hear back within 7 days, the ticket closes automatically." },
+  { q: "Can I still reply after my ticket is closed?", a: "Once closed, a ticket's thread is locked. If the same concern comes up again, please raise a new ticket." },
+];
+
+function initials(name) {
+  return name.split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
+}
+
+function StatusBadge({ status }) {
+  const s = STATUS_STYLE[status];
+  return (
+    <span style={{ background: s.bg, color: s.text, fontSize: 12, fontWeight: 500, padding: "3px 10px", borderRadius: 999, whiteSpace: "nowrap" }}>
+      {s.label}
+    </span>
+  );
+}
+
+function Sparkle({ size = 20, color = BRAND.ubas, style }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={style}>
+      <path d="M12 1L14.2 9.8L23 12L14.2 14.2L12 23L9.8 14.2L1 12L9.8 9.8L12 1Z" fill={color} />
+    </svg>
+  );
+}
+
+function Burst({ size = 20, color = BRAND.blueberry, style }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={style}>
+      <path d="M12 2 L13.5 8.5 L20 6 L15.5 11 L22 12 L15.5 13 L20 18 L13.5 15.5 L12 22 L10.5 15.5 L4 18 L8.5 13 L2 12 L8.5 11 L4 6 L10.5 8.5 Z" fill={color} />
+    </svg>
+  );
+}
+
+function Leaf({ size = 22, color = BRAND.greenApple, style }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={style}>
+      <path d="M20 4C20 4 12 4 8 8C4 12 4 20 4 20C4 20 12 20 16 16C20 12 20 4 20 4Z" fill={color} />
+    </svg>
+  );
+}
+
+function Avatar({ name, tone = "#F5F3FF", textColor = "#8139EE" }) {
+  return (
+    <div style={{ width: 34, height: 34, borderRadius: "50%", background: tone, color: textColor, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 500, fontSize: 13, flexShrink: 0 }}>
+      {initials(name)}
+    </div>
+  );
+}
+
+function EmailNotification({ to, subject, preview, onDismiss }) {
+  return (
+    <div style={{ background: "#fff", border: "1px solid #E1F5EE", borderRadius: 14, padding: "14px 16px", display: "flex", gap: 12, boxShadow: "0 2px 10px rgba(15,110,86,0.08)", maxWidth: 420 }}>
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: "#E1F5EE", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+        <span style={{ fontSize: 18 }}>✉️</span>
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11, color: "#5F5E5A", marginBottom: 2 }}>Gmail notification &middot; to {to}</div>
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: "#04342C", marginBottom: 3 }}>{subject}</div>
+        <div style={{ fontSize: 12.5, color: "#444441", lineHeight: 1.5 }}>{preview}</div>
+      </div>
+      <button onClick={onDismiss} style={{ border: "none", background: "none", color: "#888780", cursor: "pointer", fontSize: 14, alignSelf: "flex-start" }}>✕</button>
+    </div>
+  );
+}
+
+function OTKTicketing() {
+  const [role, setRole] = useState("employee");
+  const [currentCompany, setCurrentCompany] = useState("Solstice Manufacturing"); // POC role can switch this — previously hardcoded, so testing any client besides Solstice wasn't possible
+  const [isSubmitting, setIsSubmitting] = useState(false); // guards against a fast double-click creating two tickets with the same generated id
+  const [currentEmployee] = useState({ id: "EMP-2201", name: "Carla Santos", email: "carla.santos@solstice.com", company: "Solstice Manufacturing" });
+  const [tickets, setTickets] = useState(seedTickets);
+  const [view, setView] = useState("list");
+  const [selectedTicket, setSelectedTicket] = useState(null);
+  const [notifications, setNotifications] = useState([]);
+  const [commentDraft, setCommentDraft] = useState("");
+  const [commentAttachments, setCommentAttachments] = useState([]);
+  const [filterCompany, setFilterCompany] = useState("All");
+  const [filterStatus, setFilterStatus] = useState("All");
+  const [sortBy, setSortBy] = useState("newest");
+  const [payrollPromptTicketId, setPayrollPromptTicketId] = useState(null);
+
+  const STATUS_ORDER = { "Open": 0, "In Progress": 1, "Resolved": 2, "Closed": 3 };
+
+  const [form, setForm] = useState({
+    nature: "", datesOfDispute: [""], details: "", attachments: [],
+  });
+
+  function pushNotification(to, subject, preview) {
+    const id = Date.now() + Math.random();
+    setNotifications(n => [...n, { id, to, subject, preview }]);
+    setTimeout(() => setNotifications(n => n.filter(x => x.id !== id)), 9000);
+  }
+
+  function nextTicketId() {
+    const nums = tickets.map(t => parseInt(t.id.split("-")[1], 10));
+    return "TK-" + (Math.max(...nums, 1000) + 1);
+  }
+
+  function submitTicket(e) {
+    e.preventDefault();
+    if (isSubmitting) return;
+    const cleanDates = form.datesOfDispute.filter(d => d);
+    if (!form.nature || cleanDates.length === 0 || !form.details.trim()) return;
+    setIsSubmitting(true);
+    const id = nextTicketId();
+    const newTicket = {
+      id,
+      employeeId: currentEmployee.id,
+      employeeName: currentEmployee.name,
+      employeeEmail: currentEmployee.email,
+      company: currentEmployee.company,
+      nature: form.nature,
+      datesOfDispute: cleanDates,
+      dateSubmitted: new Date().toISOString().slice(0, 10),
+      submittedAt: new Date().toISOString(), // full timestamp, used by TKFlow for real TAT math — dateSubmitted above stays date-only for display/sorting
+      details: form.details,
+      attachments: form.attachments,
+      status: "Open",
+      assignedTo: OTK_AGENT.name,
+      thread: [],
+      employeeConfirmedResolved: false,
+      resolvedAt: null,
+    };
+    setTickets(t => [newTicket, ...t]);
+    pushToTKFlow(newTicket);
+    setForm({ nature: "", datesOfDispute: [""], details: "", attachments: [] });
+    pushNotification(OTK_AGENT.email, `New ticket ${id} — ${form.nature}`, `${currentEmployee.name} from ${currentEmployee.company} just raised a concern. Tap in to take a look.`);
+    setView("list");
+    setIsSubmitting(false);
+  }
+
+  function handleFileChange(e) {
+    // Object URLs only work for the lifetime of this browser tab (no real backend to store
+    // files in yet) — but that's still enough to let someone actually open what they just
+    // attached, instead of it being purely decorative metadata.
+    const files = Array.from(e.target.files || []).map(f => ({
+      name: f.name,
+      type: f.type.includes("pdf") ? "pdf" : "image",
+      url: URL.createObjectURL(f),
+    }));
+    setForm(f => ({ ...f, attachments: [...f.attachments, ...files] }));
+  }
+
+  function updateStatus(ticketId, newStatus) {
+    const pushTime = new Date().toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    setTickets(ts => ts.map(t => {
+      if (t.id !== ticketId) return t;
+      const updated = { ...t, status: newStatus, lastPushedAt: pushTime };
+      if (newStatus === "Resolved") updated.resolvedAt = new Date().toISOString();
+      return updated;
+    }));
+    const t = tickets.find(t => t.id === ticketId);
+    if (t) pushToTKFlow({ ...t, status: newStatus });
+    if (t && (newStatus === "Resolved" || newStatus === "In Progress")) {
+      pushNotification(t.employeeEmail, `Ticket ${ticketId} update — now ${STATUS_STYLE[newStatus].label}`, `Your OTK agent moved your ticket to "${STATUS_STYLE[newStatus].label}". Open the tool to see the details.`);
+    }
+    setSelectedTicket(prev => prev && prev.id === ticketId ? { ...prev, status: newStatus, lastPushedAt: pushTime, resolvedAt: newStatus === "Resolved" ? new Date().toISOString() : prev.resolvedAt } : prev);
+    if (newStatus === "Closed") setPayrollPromptTicketId(ticketId);
+  }
+
+  function savePayrollInstructions(ticketId, data) {
+    setTickets(ts => ts.map(t => t.id === ticketId ? { ...t, payrollInstructions: data } : t));
+    setSelectedTicket(prev => prev && prev.id === ticketId ? { ...prev, payrollInstructions: data } : prev);
+    setPayrollPromptTicketId(null);
+    const t = tickets.find(t => t.id === ticketId);
+    if (t) pushToTKFlow({ ...t, payrollInstructions: data });
+  }
+
+  function confirmResolutionAndClose(ticketId) {
+    const t = tickets.find(t => t.id === ticketId);
+    setTickets(ts => ts.map(t => t.id === ticketId ? { ...t, status: "Closed", employeeConfirmedResolved: true } : t));
+    setSelectedTicket(prev => prev && prev.id === ticketId ? { ...prev, status: "Closed", employeeConfirmedResolved: true } : prev);
+    if (t) pushToTKFlow({ ...t, status: "Closed" });
+    // Same reminder updateStatus() already gives when an OTK agent closes a ticket directly —
+    // previously this, the actual common closure path (employee confirms), skipped it entirely.
+    setPayrollPromptTicketId(ticketId);
+  }
+
+  function postComment(ticket, files) {
+    if (!commentDraft.trim() && (!files || files.length === 0)) return;
+    const mentions = [];
+    // Mentionable people for THIS ticket's thread — the actual employee who filed it, the
+    // OTK agent, and whichever POC really owns this ticket's company. Previously this was
+    // hardcoded to two specific demo names (Bea Ramos, Miguel Tan), so mentioning any of the
+    // other 5 real POCs across Kuehne Nagel / HDI silently did nothing.
+    const ticketPoc = POC_BY_COMPANY[ticket.company];
+    const mentionable = [ticket.employeeName, OTK_AGENT.name, ticketPoc && ticketPoc.name].filter(Boolean);
+    mentionable.forEach(name => {
+      if (commentDraft.includes("@" + name)) mentions.push(name);
+    });
+    const authorName = role === "otk" ? OTK_AGENT.name : role === "poc" ? POC_BY_COMPANY[ticket.company].name : currentEmployee.name;
+    const authorRole = role;
+    const attachments = (files || []).map(f => ({ name: f.name, type: f.type.includes("pdf") ? "pdf" : "image", url: URL.createObjectURL(f) }));
+    const newEntry = { author: authorName, role: authorRole, text: commentDraft, time: "Just now", mentions, attachments };
+    const autoProgressesNow = authorRole === "otk" && ticket.status === "Open";
+    setTickets(ts => ts.map(t => {
+      if (t.id !== ticket.id) return t;
+      const shouldAutoProgress = authorRole === "otk" && t.status === "Open";
+      return {
+        ...t,
+        thread: [...t.thread, newEntry],
+        status: shouldAutoProgress ? "In Progress" : t.status,
+        lastPushedAt: shouldAutoProgress ? new Date().toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : t.lastPushedAt,
+      };
+    }));
+    if (autoProgressesNow) pushToTKFlow({ ...ticket, status: "In Progress" });
+    setSelectedTicket(prev => {
+      if (!prev || prev.id !== ticket.id) return prev;
+      const shouldAutoProgress = authorRole === "otk" && prev.status === "Open";
+      return {
+        ...prev,
+        thread: [...prev.thread, newEntry],
+        status: shouldAutoProgress ? "In Progress" : prev.status,
+      };
+    });
+
+    mentions.forEach(m => {
+      let email = null;
+      if (m === OTK_AGENT.name) email = OTK_AGENT.email;
+      else if (m === ticket.employeeName) email = ticket.employeeEmail; // this ticket's own employee, not necessarily whoever's currently logged in
+      else { const poc = Object.values(POC_BY_COMPANY).find(p => p.name === m); if (poc) email = poc.email; }
+      if (email) pushNotification(email, `You were mentioned on ${ticket.id}`, `${authorName} tagged you in the ticket thread: "${commentDraft.slice(0, 60)}${commentDraft.length > 60 ? "…" : ""}"`);
+    });
+    if (authorRole !== "employee") {
+      pushNotification(ticket.employeeEmail, `New reply on your ticket ${ticket.id}`, `${authorName}: "${commentDraft.slice(0, 70)}${commentDraft.length > 70 ? "…" : ""}"`);
+    }
+    if (authorRole === "otk" && ticket.status === "Open") {
+      pushNotification(ticket.employeeEmail, `Ticket ${ticket.id} update — now In Progress`, `Your OTK agent has started looking into this.`);
+    }
+    setCommentDraft("");
+    setCommentAttachments([]);
+  }
+
+  const visibleTickets = useMemo(() => {
+    let list = tickets;
+    if (role === "employee") list = list.filter(t => t.employeeId === currentEmployee.id);
+    if (role === "poc") list = list.filter(t => t.company === currentCompany);
+    if (role === "otk") {
+      if (filterCompany !== "All") list = list.filter(t => t.company === filterCompany);
+      if (filterStatus !== "All") list = list.filter(t => t.status === filterStatus);
+    }
+    list = [...list];
+    if (sortBy === "status") {
+      list.sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status]);
+    } else if (sortBy === "oldest") {
+      list.sort((a, b) => a.dateSubmitted.localeCompare(b.dateSubmitted));
+    } else {
+      list.sort((a, b) => b.dateSubmitted.localeCompare(a.dateSubmitted));
+    }
+    return list;
+  }, [tickets, role, currentCompany, currentEmployee.id, filterCompany, filterStatus, sortBy]);
+
+  const daysSinceResolved = (t) => {
+    if (!t.resolvedAt) return null;
+    return Math.floor((Date.now() - new Date(t.resolvedAt).getTime()) / 86400000);
+  };
+
+  // Attachments hold an object URL for the life of this tab so they can actually be opened —
+  // revoked here on unmount as a safety net against unbounded memory growth over a long
+  // single session, since there's no real backend to hand file storage off to yet.
+  useEffect(() => {
+    return () => {
+      tickets.forEach(t => (t.attachments || []).forEach(a => a.url && URL.revokeObjectURL(a.url)));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Enforces the "auto-closes after 7 days" behavior the FAQ and the countdown UI both
+  // promise — previously nothing actually did this, so a Resolved ticket the employee never
+  // confirmed would just sit there forever. Checks once on load, then hourly.
+  useEffect(() => {
+    function checkAutoClose() {
+      const toClose = tickets.filter(t => {
+        if (t.status !== "Resolved" || !t.resolvedAt) return false;
+        const days = Math.floor((Date.now() - new Date(t.resolvedAt).getTime()) / 86400000);
+        return days >= 7;
+      });
+      if (toClose.length === 0) return;
+      setTickets(ts => ts.map(t => toClose.some(c => c.id === t.id) ? { ...t, status: "Closed", employeeConfirmedResolved: false, autoClosed: true } : t));
+      toClose.forEach(t => pushToTKFlow({ ...t, status: "Closed" }));
+      setPayrollPromptTicketId(toClose[toClose.length - 1].id);
+    }
+    checkAutoClose();
+    const interval = setInterval(checkAutoClose, 60 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [tickets]);
+
+  const page = {
+    fontFamily: "'Rubik', 'Segoe UI', system-ui, sans-serif",
+    background: BRAND.n1,
+    minHeight: "100vh",
+    color: BRAND.textPrimary,
+    display: "flex",
+    flexDirection: "column",
+  };
+
+  return (
+    <div style={page}>
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@600;700;800&family=Rubik:wght@400;500;600;700&display=swap" rel="stylesheet" />
+      <style>{`
+        * { box-sizing: border-box; }
+        button { font-family: inherit; cursor: pointer; }
+        input, select, textarea { font-family: inherit; }
+        ::placeholder { color: #b8b8c4; }
+        h1, h2, .heading { font-family: 'Inter', sans-serif; }
+      `}</style>
+
+      <div style={{ position: "fixed", top: 16, right: 16, display: "flex", flexDirection: "column", gap: 10, zIndex: 50 }}>
+        {notifications.map(n => (
+          <EmailNotification key={n.id} to={n.to} subject={n.subject} preview={n.preview} onDismiss={() => setNotifications(ns => ns.filter(x => x.id !== n.id))} />
+        ))}
+      </div>
+
+      <div style={{ background: BRAND.n3, padding: "16px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, position: "relative", overflow: "hidden", borderBottom: "1px solid #DCEEEC" }}>
+        <Sparkle size={16} color={BRAND.lime} style={{ position: "absolute", top: 10, left: 240, opacity: 0.8 }} />
+        <Burst size={14} color={BRAND.blueberry} style={{ position: "absolute", bottom: 8, left: 300, opacity: 0.6 }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", zIndex: 1 }}>
+          <img src="data:image/png;base64,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" alt="Sprout logo" style={{ width: 36, height: 36, objectFit: "contain" }} />
+          <div className="heading" style={{ color: BRAND.deepGreen, fontWeight: 700, fontSize: 16 }}>Sprout Outsourced Timekeeping Support Portal</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", zIndex: 1 }}>
+          {role === "employee" && (
+            <button onClick={() => { setView(view === "faq" ? "list" : "faq"); setSelectedTicket(null); }}
+              style={{ background: view === "faq" ? BRAND.n5 : "#fff", border: "1px solid #DCEEEC", borderRadius: 10, padding: "8px 14px", fontSize: 13, fontWeight: 600, color: BRAND.deepGreen }}>
+              FAQs
+            </button>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#fff", padding: 6, borderRadius: 12, border: "1px solid #DCEEEC" }}>
+            <span style={{ color: BRAND.textSecondary, fontSize: 12, paddingLeft: 8 }}>Viewing as</span>
+            <select value={role} onChange={e => { setRole(e.target.value); setView("list"); setSelectedTicket(null); }}
+              style={{ border: "none", borderRadius: 8, padding: "6px 10px", fontSize: 13, fontWeight: 600, background: BRAND.n5, color: BRAND.deepGreen }}>
+              <option value="employee">Employee — Carla Santos</option>
+              <option value="poc">Client POC — {POC_BY_COMPANY[currentCompany].name}</option>
+              <option value="otk">OTK team — {OTK_AGENT.name}</option>
+            </select>
+          </div>
+          {role === "poc" && (
+            <select value={currentCompany} onChange={e => setCurrentCompany(e.target.value)}
+              style={{ border: "1px solid #DCEEEC", borderRadius: 10, padding: "8px 10px", fontSize: 12.5, fontWeight: 600, background: "#fff", color: BRAND.deepGreen }}>
+              {COMPANIES.map(c => <option key={c} value={c}>{c} — {POC_BY_COMPANY[c].name}</option>)}
+            </select>
+          )}
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 880, margin: "0 auto", padding: "28px 20px 60px", width: "100%", flex: 1 }}>
+
+        {role === "employee" && view === "list" && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+            <div>
+              <div className="heading" style={{ fontSize: 21, fontWeight: 700 }}>{greeting()}, Carla!</div>
+              <div style={{ color: BRAND.textSecondary, fontSize: 14 }}>Here's where you can track your tickets.</div>
+            </div>
+            <button onClick={() => setView("new")} style={{ background: BRAND.ubas, color: "#fff", border: "none", padding: "11px 18px", borderRadius: 12, fontWeight: 700, fontSize: 14 }}>
+              + Raise a ticket
+            </button>
+          </div>
+        )}
+
+        {role === "employee" && view === "new" && (
+          <div>
+            <button onClick={() => setView("list")} style={{ background: "none", border: "none", color: BRAND.ubas, fontWeight: 600, fontSize: 13, marginBottom: 14, padding: 0 }}>← Back to my tickets</button>
+            <div style={{ background: "#fff", borderRadius: 18, padding: "26px 28px", border: "1px solid #ECEAF7", position: "relative" }}>
+              <Sparkle size={18} color={BRAND.lime} style={{ position: "absolute", top: 20, right: 24 }} />
+              <div className="heading" style={{ fontSize: 19, fontWeight: 700, marginBottom: 4 }}>Tell us what's going on</div>
+              <div style={{ color: BRAND.textSecondary, fontSize: 13.5, marginBottom: 20 }}>We're here to help sort out your timekeeping, leave, or payroll concern.</div>
+              <form onSubmit={submitTicket}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+                  <Field label="Employee ID"><input disabled value={currentEmployee.id} style={inputStyle(true)} /></Field>
+                  <Field label="Name"><input disabled value={currentEmployee.name} style={inputStyle(true)} /></Field>
+                  <Field label="Company"><input disabled value={currentEmployee.company} style={inputStyle(true)} /></Field>
+                  <Field label="Email"><input disabled value={currentEmployee.email} style={inputStyle(true)} /></Field>
+                </div>
+                <Field label="Nature of dispute">
+                  <select required value={form.nature} onChange={e => setForm(f => ({ ...f, nature: e.target.value }))} style={inputStyle()}>
+                    <option value="">Choose one</option>
+                    {NATURE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </Field>
+                <Field label="Date(s) of dispute">
+                  {form.datesOfDispute.map((d, i) => (
+                    <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                      <input required type="date" value={d}
+                        onChange={e => setForm(f => ({ ...f, datesOfDispute: f.datesOfDispute.map((x, xi) => xi === i ? e.target.value : x) }))}
+                        style={inputStyle()} />
+                      {form.datesOfDispute.length > 1 && (
+                        <button type="button" onClick={() => setForm(f => ({ ...f, datesOfDispute: f.datesOfDispute.filter((_, xi) => xi !== i) }))}
+                          style={{ border: "1px solid #D8D5EE", background: "#fff", borderRadius: 10, width: 36, flexShrink: 0, color: BRAND.textSecondary }}>✕</button>
+                      )}
+                    </div>
+                  ))}
+                  <button type="button" onClick={() => setForm(f => ({ ...f, datesOfDispute: [...f.datesOfDispute, ""] }))}
+                    style={{ background: "none", border: "none", color: BRAND.ubas, fontWeight: 600, fontSize: 12.5, padding: 0 }}>
+                    + Add another date
+                  </button>
+                </Field>
+                <Field label="Details of your concern">
+                  <textarea required rows={5} placeholder="Walk us through what happened — dates, amounts, or anything specific helps us look into it faster."
+                    value={form.details} onChange={e => setForm(f => ({ ...f, details: e.target.value }))} style={{ ...inputStyle(), resize: "vertical" }} />
+                </Field>
+                <Field label="Attachments (images or PDF)">
+                  <input type="file" accept="image/*,application/pdf" multiple onChange={handleFileChange} style={{ fontSize: 13 }} />
+                  {form.attachments.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                      {form.attachments.map((a, i) => <AttachmentChip key={i} file={a} />)}
+                    </div>
+                  )}
+                </Field>
+                <button type="submit" disabled={isSubmitting} style={{ background: BRAND.ubas, color: "#fff", border: "none", padding: "12px 22px", borderRadius: 12, fontWeight: 700, fontSize: 14.5, marginTop: 6, opacity: isSubmitting ? 0.6 : 1, cursor: isSubmitting ? "default" : "pointer" }}>
+                  {isSubmitting ? "Submitting…" : "Submit ticket"}
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {view === "faq" && <FAQPage onBack={() => setView("list")} />}
+
+        {(role !== "employee" || view === "list") && (
+          <>
+            {role !== "employee" && (
+              <div style={{ marginBottom: 18 }}>
+                <div className="heading" style={{ fontSize: 21, fontWeight: 700 }}>
+                  {role === "otk" ? "All tickets" : `${currentCompany} — team tickets`}
+                </div>
+                <div style={{ color: BRAND.textSecondary, fontSize: 14 }}>
+                  {role === "otk" ? "Every ticket assigned to your team, across companies." : "Everything your employees have raised, and how it's progressing."}
+                </div>
+              </div>
+            )}
+
+            {role === "otk" && (
+              <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+                <select value={filterCompany} onChange={e => setFilterCompany(e.target.value)} style={{ ...inputStyle(), width: "auto" }}>
+                  <option value="All">All companies</option>
+                  {COMPANIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ ...inputStyle(), width: "auto" }}>
+                  <option value="All">All statuses</option>
+                  {Object.keys(STATUS_STYLE).map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...inputStyle(), width: "auto" }}>
+                  <option value="newest">Sort: newest first</option>
+                  <option value="oldest">Sort: oldest first</option>
+                  <option value="status">Sort: by status</option>
+                </select>
+              </div>
+            )}
+
+            {role !== "otk" && (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+                <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...inputStyle(), width: "auto" }}>
+                  <option value="newest">Sort: newest first</option>
+                  <option value="oldest">Sort: oldest first</option>
+                  <option value="status">Sort: by status</option>
+                </select>
+              </div>
+            )}
+
+            {visibleTickets.length === 0 && (
+              <div style={{ background: "#fff", borderRadius: 16, padding: "40px 20px", textAlign: "center", border: "1px dashed #D8D5EE", position: "relative" }}>
+                <Leaf size={28} style={{ margin: "0 auto 10px", display: "block" }} />
+                <div className="heading" style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Nothing here yet</div>
+                <div style={{ color: BRAND.textSecondary, fontSize: 13.5 }}>
+                  {role === "employee" ? "Once you raise a ticket, you'll see it here." : "No tickets match these filters right now."}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {visibleTickets.map(t => {
+                const days = daysSinceResolved(t);
+                return (
+                  <div key={t.id} onClick={() => { setSelectedTicket(t); }} style={{ background: "#fff", border: "1px solid #ECEAF7", borderRadius: 16, padding: "16px 18px", cursor: "pointer", transition: "border-color .15s" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                      <div style={{ display: "flex", gap: 12 }}>
+                        <Avatar name={t.employeeName} />
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 14.5 }}>{t.nature} <span style={{ color: BRAND.textMuted, fontWeight: 500 }}>· {t.id}</span></div>
+                          <div style={{ color: BRAND.textSecondary, fontSize: 13, marginTop: 2 }}>
+                            {t.employeeName}{role !== "employee" ? ` · ${t.company}` : ""} · disputed {t.datesOfDispute.join(", ")}
+                          </div>
+                          <div style={{ color: BRAND.textMuted, fontSize: 12.5, marginTop: 6, maxWidth: 480 }}>{t.details.slice(0, 90)}{t.details.length > 90 ? "…" : ""}</div>
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                        <StatusBadge status={t.status} />
+                        {t.status === "Resolved" && role === "employee" && (
+                          <span style={{ fontSize: 11, color: BRAND.carrot }}>{days === 0 ? "resolved today" : `resolved ${days}d ago`} · auto-closes in {Math.max(7 - days, 0)}d</span>
+                        )}
+                        {role === "otk" && t.lastPushedAt && (
+                          <span style={{ fontSize: 11, color: "#1f7a0a" }}>✓ synced to TKFlow</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div style={{ maxWidth: 880, margin: "0 auto", padding: "20px 20px 28px", width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, borderTop: "1px solid #ECEAF7", boxSizing: "border-box" }}>
+        <span style={{ fontSize: 12, color: BRAND.textMuted }}>© 2026 Sprout Solutions</span>
+        <button onClick={() => { setView(view === "faq" ? "list" : "faq"); setSelectedTicket(null); }}
+          style={{ background: "none", border: "none", color: BRAND.ubas, fontWeight: 600, fontSize: 12.5, padding: 0 }}>
+          FAQs
+        </button>
+      </div>
+
+      {selectedTicket && (
+        <TicketDetail
+          ticket={tickets.find(t => t.id === selectedTicket.id) || selectedTicket}
+          role={role}
+          onClose={() => { setSelectedTicket(null); setCommentDraft(""); }}
+          onStatusChange={updateStatus}
+          onConfirmClose={confirmResolutionAndClose}
+          commentDraft={commentDraft}
+          setCommentDraft={setCommentDraft}
+          commentAttachments={commentAttachments}
+          setCommentAttachments={setCommentAttachments}
+          onPostComment={postComment}
+          daysSinceResolved={daysSinceResolved}
+          onOpenPayrollPrompt={(id) => setPayrollPromptTicketId(id)}
+        />
+      )}
+
+      {payrollPromptTicketId && role === "otk" && (
+        <PayrollInstructionsModal
+          ticket={tickets.find(t => t.id === payrollPromptTicketId)}
+          onSave={(data) => savePayrollInstructions(payrollPromptTicketId, data)}
+          onSkip={() => setPayrollPromptTicketId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: "#5F5E5A", marginBottom: 6 }}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function inputStyle(disabled) {
+  return {
+    width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #D8D5EE",
+    fontSize: 14, background: disabled ? "#F7F5F2" : "#fff", color: disabled ? "#8a8a9a" : "#1a1a2e",
+  };
+}
+
+function AttachmentChip({ file }) {
+  const chipStyle = { display: "flex", alignItems: "center", gap: 6, background: "#F1EFE8", borderRadius: 8, padding: "5px 10px", fontSize: 12.5 };
+  const inner = (
+    <>
+      <span>{file.type === "pdf" ? "📄" : "🖼️"}</span>
+      <span style={file.url ? { textDecoration: "underline", color: BRAND.ubas } : undefined}>{file.name}</span>
+    </>
+  );
+  // Only real, freshly-attached files (this session) have a usable url — older/seed
+  // attachments predate real file capture and just render as plain, non-clickable metadata.
+  return file.url ? (
+    <a href={file.url} target="_blank" rel="noopener noreferrer" style={{ ...chipStyle, textDecoration: "none", cursor: "pointer" }}>{inner}</a>
+  ) : (
+    <div style={chipStyle}>{inner}</div>
+  );
+}
+
+function TicketDetail({ ticket, role, onClose, onStatusChange, onConfirmClose, commentDraft, setCommentDraft, commentAttachments, setCommentAttachments, onPostComment, daysSinceResolved, onOpenPayrollPrompt }) {
+  const poc = POC_BY_COMPANY[ticket.company];
+  const days = daysSinceResolved(ticket);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(44,44,42,0.4)", display: "flex", justifyContent: "flex-end", zIndex: 60 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "min(520px, 100%)", background: BRAND.n1, height: "100%", overflowY: "auto", padding: "24px 26px", boxShadow: "-8px 0 24px rgba(0,0,0,0.08)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div>
+            <div style={{ fontSize: 12, color: BRAND.textMuted, fontWeight: 600 }}>{ticket.id}</div>
+            <div className="heading" style={{ fontSize: 19, fontWeight: 700 }}>{ticket.nature}</div>
+          </div>
+          <button onClick={onClose} style={{ border: "none", background: "#fff", borderRadius: 10, width: 32, height: 32, fontSize: 15 }}>✕</button>
+        </div>
+
+        <div style={{ background: "#fff", borderRadius: 14, padding: "16px 18px", marginBottom: 16, border: "1px solid #ECEAF7" }}>
+          <StatusBadge status={ticket.status} />
+          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 13 }}>
+            <div><div style={detailLabel}>Employee</div>{ticket.employeeName} ({ticket.employeeId})</div>
+            <div><div style={detailLabel}>Company</div>{ticket.company}</div>
+            <div><div style={detailLabel}>Date(s) of dispute</div>{ticket.datesOfDispute.join(", ")}</div>
+            <div><div style={detailLabel}>Submitted</div>{ticket.dateSubmitted}</div>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <div style={detailLabel}>Details</div>
+            <div style={{ fontSize: 13.5, lineHeight: 1.5 }}>{ticket.details}</div>
+          </div>
+          {ticket.attachments.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div style={detailLabel}>Attachments</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {ticket.attachments.map((a, i) => <AttachmentChip key={i} file={a} />)}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {role === "otk" && (
+          <div style={{ background: "#fff", borderRadius: 14, padding: "14px 18px", marginBottom: 16, border: "1px solid #ECEAF7" }}>
+            <div style={detailLabel}>Update status</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: ticket.lastPushedAt ? 10 : 0 }}>
+              {/* "Closed" is deliberately excluded here — per the FAQ, closing only happens
+                  via employee confirmation or the 7-day auto-close, never a direct OTK click.
+                  Letting OTK force-close bypassed that entirely. */}
+              {Object.keys(STATUS_STYLE).filter(s => s !== "Closed").map(s => (
+                <button key={s} onClick={() => onStatusChange(ticket.id, s)}
+                  style={{ padding: "7px 12px", borderRadius: 9, border: ticket.status === s ? `1.5px solid ${BRAND.ubas}` : "1px solid #D8D5EE", background: ticket.status === s ? BRAND.n5 : "#fff", fontSize: 12.5, fontWeight: 600 }}>
+                  {STATUS_STYLE[s].label}
+                </button>
+              ))}
+            </div>
+            {ticket.lastPushedAt && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#1f7a0a" }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: BRAND.greenApple, display: "inline-block" }} />
+                Pushed to TKFlow · {ticket.lastPushedAt}
+              </div>
+            )}
+          </div>
+        )}
+
+        {role === "otk" && ticket.status === "Closed" && (
+          <div style={{ background: ticket.payrollInstructions ? BRAND.n2 : "#fff", borderRadius: 14, padding: "14px 18px", marginBottom: 16, border: "1px solid #ECEAF7" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={detailLabel}>Payroll instructions</div>
+              <button onClick={() => onOpenPayrollPrompt(ticket.id)} style={{ background: "none", border: "none", color: BRAND.ubas, fontWeight: 600, fontSize: 12, padding: 0 }}>
+                {ticket.payrollInstructions ? "Edit" : "+ Add"}
+              </button>
+            </div>
+            {ticket.payrollInstructions ? (
+              ticket.payrollInstructions.applicable ? (
+                <div style={{ fontSize: 13, marginTop: 6 }}>
+                  <div><strong>{ticket.payrollInstructions.disputeType}</strong> · {ticket.payrollInstructions.number} {ticket.payrollInstructions.unit} · {ticket.payrollInstructions.additionDeduction}</div>
+                  <div style={{ color: BRAND.textSecondary, marginTop: 4 }}>{ticket.payrollInstructions.remarks}</div>
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: BRAND.textMuted, marginTop: 6 }}>Marked as not applicable to payroll.</div>
+              )
+            ) : (
+              <div style={{ fontSize: 13, color: BRAND.textMuted, marginTop: 6 }}>Not yet indicated — click "Add" to note if this needs to be pushed to TKFlow's disputes tab.</div>
+            )}
+          </div>
+        )}
+
+        {role === "employee" && ticket.status === "Resolved" && !ticket.employeeConfirmedResolved && (
+          <div style={{ background: BRAND.n4, borderRadius: 14, padding: "14px 18px", marginBottom: 16 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: BRAND.deepGreen, marginBottom: 4 }}>Marked as resolved</div>
+            <div style={{ fontSize: 12.5, color: "#1f5c0a", marginBottom: 10 }}>
+              Does this look good to you? If we don't hear back, this closes automatically in {Math.max(7 - (days || 0), 0)} day(s).
+            </div>
+            <button onClick={() => onConfirmClose(ticket.id)} style={{ background: BRAND.greenApple, color: "#fff", border: "none", padding: "9px 16px", borderRadius: 10, fontWeight: 700, fontSize: 13 }}>
+              Confirm and close
+            </button>
+          </div>
+        )}
+
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 10 }}>Conversation</div>
+          {ticket.thread.length === 0 && <div style={{ fontSize: 13, color: "#888780" }}>No messages yet.</div>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {ticket.thread.map((m, i) => (
+              <div key={i} style={{ display: "flex", gap: 10 }}>
+                <Avatar name={m.author} tone={m.role === "otk" ? BRAND.n4 : m.role === "poc" ? "#fff0e0" : BRAND.n5} textColor={m.role === "otk" ? "#1f7a0a" : m.role === "poc" ? "#a35700" : BRAND.ubas} />
+                <div style={{ background: "#fff", borderRadius: 12, padding: "9px 13px", flex: 1, border: "1px solid #ECEAF7" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: BRAND.textMuted, marginBottom: 3 }}>
+                    <span style={{ fontWeight: 700, color: BRAND.textPrimary }}>{m.author}</span>
+                    <span>{m.time}</span>
+                  </div>
+                  <div style={{ fontSize: 13, lineHeight: 1.5 }}>{m.text}</div>
+                  {m.attachments && m.attachments.length > 0 && (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                      {m.attachments.map((a, ai) => <AttachmentChip key={ai} file={a} />)}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ background: "#fff", borderRadius: 14, padding: 12, border: "1px solid #ECEAF7" }}>
+          <textarea rows={2} placeholder={`Write a reply… try @${poc.name.split(" ")[0]} to loop in the client POC`}
+            value={commentDraft} onChange={e => setCommentDraft(e.target.value)}
+            style={{ width: "100%", border: "none", resize: "none", fontSize: 13, outline: "none", fontFamily: "inherit" }} />
+          {commentAttachments.length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "6px 0" }}>
+              {commentAttachments.map((f, i) => <AttachmentChip key={i} file={{ name: f.name, type: f.type.includes("pdf") ? "pdf" : "image" }} />)}
+            </div>
+          )}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <label style={{ fontSize: 12.5, color: BRAND.ubas, fontWeight: 600, cursor: "pointer" }}>
+              + Attach file
+              <input type="file" accept="image/*,application/pdf" multiple style={{ display: "none" }}
+                onChange={e => setCommentAttachments(prev => [...prev, ...Array.from(e.target.files || [])])} />
+            </label>
+            <button onClick={() => onPostComment(ticket, commentAttachments)} style={{ background: BRAND.ubas, color: "#fff", border: "none", padding: "8px 16px", borderRadius: 9, fontWeight: 700, fontSize: 12.5 }}>Reply</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FAQPage({ onBack }) {
+  const [open, setOpen] = useState(null);
+  return (
+    <div>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: BRAND.ubas, fontWeight: 600, fontSize: 13, marginBottom: 14, padding: 0 }}>← Back to my tickets</button>
+      <div className="heading" style={{ fontSize: 21, fontWeight: 700, marginBottom: 4 }}>Frequently asked questions</div>
+      <div style={{ color: BRAND.textSecondary, fontSize: 14, marginBottom: 20 }}>A quick rundown before you raise a ticket.</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {FAQS.map((f, i) => (
+          <div key={i} style={{ background: "#fff", border: "1px solid #ECEAF7", borderRadius: 14, overflow: "hidden" }}>
+            <button onClick={() => setOpen(open === i ? null : i)}
+              style={{ width: "100%", textAlign: "left", background: "none", border: "none", padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, fontWeight: 600, color: BRAND.textPrimary }}>
+              {f.q}
+              <span style={{ color: BRAND.ubas, fontSize: 16 }}>{open === i ? "−" : "+"}</span>
+            </button>
+            {open === i && (
+              <div style={{ padding: "0 18px 16px", fontSize: 13.5, color: BRAND.textSecondary, lineHeight: 1.6 }}>{f.a}</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const OT_RD_ABSENT_OPTIONS = [
+  "Absent", "Undertime",
+  "Ord-OT", "Ord-ND", "Ord-ND-OT",
+  "RD", "RD-OT", "RD-ND", "RD-ND-OT",
+  "SH", "SH-OT", "SH-ND", "SH-ND-OT",
+  "LH", "LH-OT", "LH-ND", "LH-ND-OT",
+  "SH-RD", "SH-RD-OT", "SH-RD-ND", "SH-RD-ND-OT",
+  "LH-RD", "LH-RD-OT", "LH-RD-ND", "LH-RD-ND-OT",
+  "DH", "DH-OT", "DH-ND", "DH-ND-OT",
+  "DH-RD", "DH-RD-OT", "DH-RD-ND", "DH-RD-ND-OT",
+];
+
+function unitForDisputeType(type) {
+  if (type === "Absent") return "Days";
+  if (type === "Undertime") return "Mins";
+  return "Hrs";
+}
+
+function PayrollInstructionsModal({ ticket, onSave, onSkip }) {
+  const [applicable, setApplicable] = useState(true);
+  const [disputeType, setDisputeType] = useState("Absent");
+  const [number, setNumber] = useState("");
+  const [additionDeduction, setAdditionDeduction] = useState("Addition");
+  const [remarks, setRemarks] = useState("");
+  const unit = unitForDisputeType(disputeType);
+
+  function submit() {
+    onSave({
+      applicable,
+      ticketNo: ticket?.id,
+      employeeId: ticket?.employeeId,
+      employeeName: ticket?.employeeName,
+      disputeType,
+      number,
+      unit,
+      additionDeduction,
+      remarks,
+    });
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(26,26,46,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 80, padding: 20 }}>
+      <div style={{ background: "#fff", borderRadius: 18, padding: "24px 26px", width: "min(460px, 100%)", maxHeight: "90vh", overflowY: "auto" }}>
+        <div className="heading" style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>Payroll instructions for {ticket?.id}</div>
+        <div style={{ fontSize: 13, color: "#4a4a6a", marginBottom: 16 }}>
+          This ticket is now closed. Let us know if it needs to be noted for payroll — this pushes straight into TKFlow's disputes tab when it syncs.
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <button onClick={() => setApplicable(true)}
+            style={{ flex: 1, padding: "9px 12px", borderRadius: 10, border: applicable ? `1.5px solid ${BRAND.ubas}` : "1px solid #D8D5EE", background: applicable ? BRAND.n5 : "#fff", fontWeight: 600, fontSize: 13 }}>
+            Yes, applicable
+          </button>
+          <button onClick={() => setApplicable(false)}
+            style={{ flex: 1, padding: "9px 12px", borderRadius: 10, border: !applicable ? `1.5px solid ${BRAND.ubas}` : "1px solid #D8D5EE", background: !applicable ? BRAND.n5 : "#fff", fontWeight: 600, fontSize: 13 }}>
+            Not applicable
+          </button>
+        </div>
+
+        {applicable && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 4 }}>
+              <Field label="Ticket #"><input disabled value={ticket?.id || ""} style={inputStyle(true)} /></Field>
+              <Field label="Employee ID"><input disabled value={ticket?.employeeId || ""} style={inputStyle(true)} /></Field>
+            </div>
+            <Field label="Employee name"><input disabled value={ticket?.employeeName || ""} style={inputStyle(true)} /></Field>
+
+            <Field label="Dispute details (OT, RD, Absent, etc.)">
+              <select value={disputeType} onChange={e => setDisputeType(e.target.value)} style={inputStyle()}>
+                {OT_RD_ABSENT_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </Field>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <Field label="Number">
+                <input type="number" step="0.01" placeholder="e.g. 1.00" value={number} onChange={e => setNumber(e.target.value)} style={inputStyle()} />
+              </Field>
+              <Field label="Unit (auto)">
+                <input disabled value={unit} style={inputStyle(true)} />
+              </Field>
+            </div>
+
+            <Field label="Addition or deduction">
+              <div style={{ display: "flex", gap: 8 }}>
+                {["Addition", "Deduction"].map(o => (
+                  <button key={o} type="button" onClick={() => setAdditionDeduction(o)}
+                    style={{ flex: 1, padding: "9px 12px", borderRadius: 9, border: additionDeduction === o ? `1.5px solid ${BRAND.ubas}` : "1px solid #D8D5EE", background: additionDeduction === o ? BRAND.n5 : "#fff", fontWeight: 600, fontSize: 13 }}>
+                    {o}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            <Field label="Remarks">
+              <textarea rows={2} placeholder='e.g. "Payroll deduction due to absence in June 13. Requested for reversal."' value={remarks} onChange={e => setRemarks(e.target.value)} style={{ ...inputStyle(), resize: "vertical" }} />
+            </Field>
+          </>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16 }}>
+          <button onClick={onSkip} style={{ background: "none", border: "none", color: BRAND.textSecondary, fontWeight: 600, fontSize: 13 }}>Skip for now</button>
+          <button onClick={submit} style={{ background: BRAND.ubas, color: "#fff", border: "none", padding: "10px 20px", borderRadius: 10, fontWeight: 700, fontSize: 13.5 }}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const detailLabel = { fontSize: 11, textTransform: "uppercase", letterSpacing: 0.3, color: "#888780", marginBottom: 3, fontWeight: 700 };
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<OTKTicketing />);
+</script>
+</body>
+</html>
