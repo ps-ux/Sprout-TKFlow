@@ -1335,6 +1335,13 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
               <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#6b6b80;"><span style="width:10px;height:10px;border-radius:3px;background:#F4F4F8;border:1px solid #EBEBEF;display:inline-block;"></span>Weekend</span>
             </div>
           </div>
+          <!-- Shown instead of the upload row for Weekly-cadence clients -- _parseTKCalWb only
+               recognizes semi-monthly "1st"/"2nd" rows, so uploading here would silently
+               mis-parse a Weekly client's file. Toggled in renderTKCalendar(). -->
+          <div id="cal-weekly-notice" style="display:none;margin-bottom:14px;padding:10px 14px;background:#fff4e6;border:1px solid #ffd6a0;border-radius:12px;font-size:12px;color:#e67e00;">
+            <i class="ti ti-info-circle" style="font-size:13px;vertical-align:-2px;"></i>
+            Calendar upload isn't supported yet for Weekly-payout clients — use the manual Cut-off Schedule in Client Profile instead. Upload support is coming once there's a sample Weekly TK Calendar file to build the parser against.
+          </div>
           <!-- Calendar grid -->
           <div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow:hidden;margin-bottom:14px;">
             <div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));background:#F8F8FA;border-bottom:1px solid #EBEBEF;">
@@ -2157,8 +2164,8 @@ function renderGroupOverview(grpKey) {
     if (!c.cutoff) return null;
     var rawRange = parseCutoffRange(c.cutoff);
     if (!rawRange) return null;
-    var curRange = computeCurrentCutoffRange(rawRange);
-    var ordinal = curRange.startDay <= 1 ? '1st' : '2nd';
+    var curRange = computeCurrentCutoffRange(rawRange, c.payrollType);
+    var ordinal = cutoffPeriodOrdinal(curRange.startDay, c.payrollType);
     var label = ordinal + ' Payout \u00b7 ' + formatDateRangeLabel(curRange);
     return { subKey: sk, subName: c.name, label: label };
   }).filter(Boolean);
@@ -2322,8 +2329,8 @@ function renderGroupOverview(grpKey) {
     var currentCutoffLabel = '\u2014';
     var subRange = parseCutoffRange(c.cutoff);
     if (subRange) {
-      var subCurRange = computeCurrentCutoffRange(subRange);
-      var subOrdinal = subCurRange.startDay <= 1 ? '1st' : '2nd';
+      var subCurRange = computeCurrentCutoffRange(subRange, c.payrollType);
+      var subOrdinal = cutoffPeriodOrdinal(subCurRange.startDay, c.payrollType);
       currentCutoffLabel = subOrdinal + ' Payout \u00b7 ' + formatDateRangeLabel(subCurRange);
     } else if (c.cutoff) {
       currentCutoffLabel = c.cutoff; // fallback if the stored label isn't in a parseable date-range format
@@ -2866,10 +2873,22 @@ function renderWsTasksSections(key) {
     var ts = taskStatus[key] && taskStatus[key][t.taskKey];
     var stCls = ts ? (ts.st==="done"?"tst-done":ts.st==="skipped"?"tst-prog":"tst-pend") : t.st;
     var stLabel = ts ? (ts.st==="done"?"Done":ts.st==="skipped"?"Skipped":"Pending") : t.stl;
+    // Only shown once a task's been run more than once this cutoff -- setTaskStatus records
+    // every run (see window.taskRunHistory), not just the latest, so a second run within the
+    // same cutoff is visible here instead of silently looking identical to a single run.
+    var runs = (typeof getTaskRunHistory === 'function') ? getTaskRunHistory(key, t.taskKey) : [];
+    var runsBadge = '';
+    if (runs.length > 1) {
+      var runsTitle = runs.map(function(r, i) {
+        return 'Run ' + (i + 1) + ': ' + new Date(r.timestamp).toLocaleString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+      }).join(' • ');
+      runsBadge = '<span title="' + runsTitle + '" style="font-size:10px;color:#9898a6;background:#F4F4F8;border-radius:10px;padding:2px 7px;cursor:help;">' + runs.length + ' runs</span>';
+    }
     return "<div class=\"task-item\" style=\"cursor:pointer;\" onclick=\"openTaskRunner('" + (t.taskKey||"") + "','" + t.name + "')\">"
     + "<div class=\"task-ico " + t.ico + "\"><i class=\"ti " + t.icon + "\"></i></div>"
     + "<div class=\"task-name\">" + t.name + "</div>"
     + "<div style=\"display:flex;align-items:center;gap:8px;margin-left:auto;\">"
+    + runsBadge
     + "<span class=\"task-st " + stCls + "\">" + stLabel + "</span>"
     + "<span style=\"font-size:11px;color:#1679FA;font-weight:500;\">Run →</span>"
     + "</div></div>";
@@ -3143,50 +3162,7 @@ function closeWorkspace() {
       <div style="margin-bottom:16px;">
         <div class="field-label">Cut-off schedule</div>
         <div style="font-size:11px;color:#9898a6;margin-bottom:10px;">Starting values for Client Profile — if you upload a TK Calendar below (or later), the real calendar takes over automatically and these become the fallback for clients without one.</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div style="background:#F8F8FA;border-radius:14px;padding:12px 14px;">
-            <div style="font-size:12px;font-weight:600;color:#32CE13;margin-bottom:8px;">1st Payout</div>
-            <label class="field-label" style="font-size:10px;">Payout day of month</label>
-            <input class="modal-input" type="number" min="1" max="31" id="ac-payout1-day" placeholder="e.g. 13" style="width:100%;margin-bottom:8px;">
-            <label class="field-label" style="font-size:10px;">Attendance cut-off start</label>
-            <div style="display:flex;gap:6px;margin-bottom:8px;">
-              <input class="modal-input" type="number" min="1" max="31" id="ac-att1-start-day" placeholder="Day" style="width:64px;flex-shrink:0;">
-              <select class="modal-input" id="ac-att1-start-month" style="flex:1;">
-                <option value="prev">Previous month</option>
-                <option value="current" selected>Current month</option>
-              </select>
-            </div>
-            <label class="field-label" style="font-size:10px;">Attendance cut-off end</label>
-            <div style="display:flex;gap:6px;">
-              <input class="modal-input" type="number" min="1" max="31" id="ac-att1-end-day" placeholder="Day" style="width:64px;flex-shrink:0;">
-              <select class="modal-input" id="ac-att1-end-month" style="flex:1;">
-                <option value="prev">Previous month</option>
-                <option value="current" selected>Current month</option>
-              </select>
-            </div>
-          </div>
-          <div style="background:#F8F8FA;border-radius:14px;padding:12px 14px;">
-            <div style="font-size:12px;font-weight:600;color:#32CE13;margin-bottom:8px;">2nd Payout</div>
-            <label class="field-label" style="font-size:10px;">Payout day of month</label>
-            <input class="modal-input" type="number" min="1" max="31" id="ac-payout2-day" placeholder="e.g. 28" style="width:100%;margin-bottom:8px;">
-            <label class="field-label" style="font-size:10px;">Attendance cut-off start</label>
-            <div style="display:flex;gap:6px;margin-bottom:8px;">
-              <input class="modal-input" type="number" min="1" max="31" id="ac-att2-start-day" placeholder="Day" style="width:64px;flex-shrink:0;">
-              <select class="modal-input" id="ac-att2-start-month" style="flex:1;">
-                <option value="prev">Previous month</option>
-                <option value="current" selected>Current month</option>
-              </select>
-            </div>
-            <label class="field-label" style="font-size:10px;">Attendance cut-off end</label>
-            <div style="display:flex;gap:6px;">
-              <input class="modal-input" type="number" min="1" max="31" id="ac-att2-end-day" placeholder="Day" style="width:64px;flex-shrink:0;">
-              <select class="modal-input" id="ac-att2-end-month" style="flex:1;">
-                <option value="prev">Previous month</option>
-                <option value="current" selected>Current month</option>
-              </select>
-            </div>
-          </div>
-        </div>
+        <div id="ac-cutoff-fields-container" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;"><!-- Rendered by renderCutoffFields() based on the selected payroll type --></div>
         <div style="font-size:11px;color:#9898a6;margin-top:8px;"><i class="ti ti-info-circle" style="font-size:12px;vertical-align:-2px;"></i> Payout day automatically moves to the nearest earlier working day if it lands on a weekend or PH holiday.</div>
       </div>
 
@@ -3211,6 +3187,12 @@ function closeWorkspace() {
           <div style="font-size:11px;color:#9898a6;margin-top:2px;">.xlsx or .xls</div>
         </div>
         <input type="file" id="ac-cal-input" accept=".xlsx,.xls" style="display:none;" onchange="acHandleCalFile(this)">
+        <!-- Shown instead of the dropzone above when Weekly is selected -- toggled in
+             selectPayroll(). Same parser limitation as the workspace Calendar tab. -->
+        <div id="ac-cal-weekly-notice" style="display:none;margin-top:8px;padding:10px 14px;background:#fff4e6;border:1px solid #ffd6a0;border-radius:12px;font-size:11px;color:#e67e00;">
+          <i class="ti ti-info-circle" style="font-size:12px;vertical-align:-2px;"></i>
+          Calendar upload isn't supported yet for Weekly-payout clients — the Cut-off schedule fields above will be the source of truth instead.
+        </div>
       </div>
 
       <div style="margin-bottom:16px;">
@@ -4141,14 +4123,9 @@ function openAddClient() {
   window._acPendingCalFile = null;
   var calLabel = document.getElementById('ac-cal-label');
   if (calLabel) calLabel.textContent = 'Click to upload calendar file';
-  ['ac-payout1-day','ac-att1-start-day','ac-att1-end-day','ac-payout2-day','ac-att2-start-day','ac-att2-end-day'].forEach(function(id) {
-    var el = document.getElementById(id);
-    if (el) el.value = '';
-  });
-  ['ac-att1-start-month','ac-att1-end-month','ac-att2-start-month','ac-att2-end-month'].forEach(function(id) {
-    var el = document.getElementById(id);
-    if (el) el.value = 'current';
-  });
+  // No need to manually clear ac-payout*/ac-att* fields here -- selectPayroll('semi') above
+  // already re-rendered #ac-cutoff-fields-container from scratch via renderCutoffFields(),
+  // so those fields start empty regardless of what the previous open left behind.
   var offsetSel = document.getElementById('ac-basic-offset');
   if (offsetSel) offsetSel.value = '0';
   goStep(1);
@@ -4192,9 +4169,58 @@ function addEntity() {
 
 function removeTag(el) { el.parentElement.remove(); }
 
+// Cadence helpers -- payrollType has existed as a field all along but was previously read
+// only once (to backfill old seed clients at load), with nothing branching on it. This is
+// the single source of truth for how many cutoff periods/month each payroll type has,
+// reused by the Add Client wizard, the rollover fallback, and the dashboard so a Weekly
+// client (4 periods/month) is handled consistently everywhere instead of just the wizard.
+function periodCountFor(payrollType) {
+  return { 'Monthly': 1, 'Semi-monthly': 2, 'Weekly': 4 }[payrollType] || 2;
+}
+function periodLabelsFor(payrollType) {
+  if (payrollType === 'Monthly') return ['Monthly Payout'];
+  if (payrollType === 'Weekly') return ['Week 1 Payout', 'Week 2 Payout', 'Week 3 Payout', 'Week 4 Payout'];
+  return ['1st Payout', '2nd Payout'];
+}
+
+// Renders however many cutoff-schedule blocks the given payroll type needs into
+// #ac-cutoff-fields-container -- replaces what used to be two static hardcoded blocks.
+// Field ids are suffixed by index (ac-payout1-day, ac-payout2-day, ac-payout3-day, ...) so
+// _saveClientConfirmed's reader below can loop over however many exist instead of assuming 2.
+function renderCutoffFields(payrollType) {
+  var container = document.getElementById('ac-cutoff-fields-container');
+  if (!container) return;
+  var labels = periodLabelsFor(payrollType);
+  container.innerHTML = labels.map(function(label, idx) {
+    var i = idx + 1;
+    return '<div style="background:#F8F8FA;border-radius:14px;padding:12px 14px;">'
+      + '<div style="font-size:12px;font-weight:600;color:#32CE13;margin-bottom:8px;">' + label + '</div>'
+      + '<label class="field-label" style="font-size:10px;">Payout day of month</label>'
+      + '<input class="modal-input" type="number" min="1" max="31" id="ac-payout' + i + '-day" placeholder="e.g. 13" style="width:100%;margin-bottom:8px;">'
+      + '<label class="field-label" style="font-size:10px;">Attendance cut-off start</label>'
+      + '<div style="display:flex;gap:6px;margin-bottom:8px;">'
+      + '<input class="modal-input" type="number" min="1" max="31" id="ac-att' + i + '-start-day" placeholder="Day" style="width:64px;flex-shrink:0;">'
+      + '<select class="modal-input" id="ac-att' + i + '-start-month" style="flex:1;"><option value="prev">Previous month</option><option value="current" selected>Current month</option></select>'
+      + '</div>'
+      + '<label class="field-label" style="font-size:10px;">Attendance cut-off end</label>'
+      + '<div style="display:flex;gap:6px;">'
+      + '<input class="modal-input" type="number" min="1" max="31" id="ac-att' + i + '-end-day" placeholder="Day" style="width:64px;flex-shrink:0;">'
+      + '<select class="modal-input" id="ac-att' + i + '-end-month" style="flex:1;"><option value="prev">Previous month</option><option value="current" selected>Current month</option></select>'
+      + '</div>'
+      + '</div>';
+  }).join('');
+}
+
 function selectPayroll(type) {
   ['semi','monthly','weekly'].forEach(t => document.getElementById('pay-' + t).classList.remove('selected'));
   document.getElementById('pay-' + type).classList.add('selected');
+  var payrollTypeMap = {'semi':'Semi-monthly', 'monthly':'Monthly', 'weekly':'Weekly'};
+  if (typeof renderCutoffFields === 'function') renderCutoffFields(payrollTypeMap[type] || 'Semi-monthly');
+  var isWeekly = type === 'weekly';
+  var dz = document.getElementById('ac-cal-dropzone');
+  var notice = document.getElementById('ac-cal-weekly-notice');
+  if (dz) dz.style.display = isWeekly ? 'none' : 'block';
+  if (notice) notice.style.display = isWeekly ? 'block' : 'none';
 }
 
 function selectSched(type) {
@@ -4423,21 +4449,20 @@ async function _saveClientConfirmed() {
     var monthScope = monthSel ? monthSel.value : 'current';
     return ordinalSuffix(day) + ' ' + (monthScope === 'prev' ? 'previous month' : 'current month');
   }
-  const acPayout1Day = acVal('ac-payout1-day');
-  const acAtt1Start = acAttText('ac-att1-start-day', 'ac-att1-start-month');
-  const acAtt1End = acAttText('ac-att1-end-day', 'ac-att1-end-month');
-  const acPayout2Day = acVal('ac-payout2-day');
-  const acAtt2Start = acAttText('ac-att2-start-day', 'ac-att2-start-month');
-  const acAtt2End = acAttText('ac-att2-end-day', 'ac-att2-end-month');
   const basicOffsetEl = document.getElementById('ac-basic-offset');
   const basicPayOffsetVal = basicOffsetEl ? parseInt(basicOffsetEl.value, 10) || 0 : 0;
+  // Reads however many cutoff blocks renderCutoffFields() rendered for this payroll type
+  // (2 for Semi-monthly, 1 for Monthly, 4 for Weekly) instead of two hardcoded reads.
   const newClientCutoffs = [];
-  if (acPayout1Day || acAtt1Start || acAtt1End) {
-    newClientCutoffs.push({ label: '1st Payout', payoutDay: acPayout1Day || '?', attStart: acAtt1Start, attEnd: acAtt1End, note: 'Set at client creation' });
-  }
-  if (acPayout2Day || acAtt2Start || acAtt2End) {
-    newClientCutoffs.push({ label: '2nd Payout', payoutDay: acPayout2Day || '?', attStart: acAtt2Start, attEnd: acAtt2End, note: 'Set at client creation' });
-  }
+  periodLabelsFor(payrollType).forEach(function(label, idx) {
+    var i = idx + 1;
+    var payoutDay = acVal('ac-payout' + i + '-day');
+    var attStart = acAttText('ac-att' + i + '-start-day', 'ac-att' + i + '-start-month');
+    var attEnd = acAttText('ac-att' + i + '-end-day', 'ac-att' + i + '-end-month');
+    if (payoutDay || attStart || attEnd) {
+      newClientCutoffs.push({ label: label, payoutDay: payoutDay || '?', attStart: attStart, attEnd: attEnd, note: 'Set at client creation' });
+    }
+  });
 
   // Read the two add-ons from Section III — "Via Client POC Email" is standard/always-on
   // (already covered by Section I's Validation of Disputes), so only these two toggles
@@ -4706,7 +4731,12 @@ async function _saveClientConfirmed() {
   // Apply the calendar uploaded during this flow (if any) — parse it into the new client's
   // own calendar store (not wherever the admin happened to be browsing before opening this
   // modal), and archive a copy into Policy Bank so past calendars stay reachable later.
-  if (window._acPendingCalFile) {
+  // Skipped for Weekly clients even if a file was selected before switching payroll types --
+  // _parseTKCalWb can't correctly parse a Weekly file (see the wizard's calendar-upload notice).
+  if (window._acPendingCalFile && payrollType === 'Weekly') {
+    if (typeof showToast === 'function') showToast('Client saved. The uploaded calendar was skipped -- not supported yet for Weekly clients.', '#e67e00');
+    window._acPendingCalFile = null;
+  } else if (window._acPendingCalFile) {
     var _prevWsGroup = window.currentWsGroup, _prevWsClient = window.currentWsClient;
     window.currentWsGroup = key;
     window.currentWsClient = subKeys[0];
@@ -7783,7 +7813,31 @@ function parseCutoffRange(cutoffStr) {
 }
 
 // Standard semi-monthly rollover: 1–15, then 16–end of month, then 1–15 of next month...
-function nextCutoffRange(range) {
+// Which ordinal/week label a range's startDay falls into, for the given payroll cadence --
+// shared by formatCutoffLabel and the inline banner/coverage labels below so there's one
+// definition of what "1st"/"2nd" vs "Week 1".."Week 4" means.
+function cutoffPeriodOrdinal(startDay, cadence) {
+  if (cadence === 'Weekly') {
+    return startDay <= 1 ? 'Week 1' : startDay <= 8 ? 'Week 2' : startDay <= 15 ? 'Week 3' : 'Week 4';
+  }
+  return startDay <= 1 ? '1st' : '2nd';
+}
+
+// A Weekly client (cadence === 'Weekly') rolls through 4 fixed day-of-month bands per month:
+// 1-7 / 8-14 / 15-21 / 22-end, mirroring the semi-monthly convention below rather than e.g.
+// ISO calendar weeks. Anything else (Semi-monthly, Monthly, cadence omitted) is unaffected.
+function nextCutoffRange(range, cadence) {
+  if (cadence === 'Weekly') {
+    if (range.startDay <= 1) return { mon: range.mon, yr: range.yr, startDay: 8, endDay: 14 };
+    if (range.startDay <= 8) return { mon: range.mon, yr: range.yr, startDay: 15, endDay: 21 };
+    if (range.startDay <= 15) {
+      var lastDay4 = new Date(range.yr, range.mon + 1, 0).getDate();
+      return { mon: range.mon, yr: range.yr, startDay: 22, endDay: lastDay4 };
+    }
+    var nmon4 = range.mon + 1, nyr4 = range.yr;
+    if (nmon4 > 11) { nmon4 = 0; nyr4++; }
+    return { mon: nmon4, yr: nyr4, startDay: 1, endDay: 7 };
+  }
   if (range.startDay <= 1) {
     var lastDay = new Date(range.yr, range.mon + 1, 0).getDate();
     return { mon: range.mon, yr: range.yr, startDay: 16, endDay: lastDay };
@@ -7793,25 +7847,36 @@ function nextCutoffRange(range) {
   return { mon: nmon, yr: nyr, startDay: 1, endDay: 15 };
 }
 
-function formatCutoffLabel(range) {
-  var ordinal = range.startDay <= 1 ? '1st' : '2nd';
-  return ordinal + ' Payout \u00b7 ' + CUTOFF_MONTH_NAMES[range.mon] + ' ' + range.startDay + '\u2013' + range.endDay;
+function formatCutoffLabel(range, cadence) {
+  return cutoffPeriodOrdinal(range.startDay, cadence) + ' Payout \u00b7 ' + CUTOFF_MONTH_NAMES[range.mon] + ' ' + range.startDay + '\u2013' + range.endDay;
 }
 
 // Advances (in memory, without prompting per-step) to the range that actually contains today
-function computeCurrentCutoffRange(range) {
+function computeCurrentCutoffRange(range, cadence) {
   var today = new Date(); today.setHours(0,0,0,0);
   var guard = 0;
   while (guard++ < 60) {
     var endDate = new Date(range.yr, range.mon, range.endDay);
     if (today <= endDate) break;
-    range = nextCutoffRange(range);
+    range = nextCutoffRange(range, cadence);
   }
   return range;
 }
 
-// Standard semi-monthly reverse-rollover: inverse of nextCutoffRange
-function prevCutoffRange(range) {
+// Standard semi-monthly reverse-rollover: inverse of nextCutoffRange. Weekly's inverse
+// mirrors nextCutoffRange's 4 fixed day-of-month bands.
+function prevCutoffRange(range, cadence) {
+  if (cadence === 'Weekly') {
+    if (range.startDay <= 1) {
+      var pmon4 = range.mon - 1, pyr4 = range.yr;
+      if (pmon4 < 0) { pmon4 = 11; pyr4--; }
+      var lastDay5 = new Date(pyr4, pmon4 + 1, 0).getDate();
+      return { mon: pmon4, yr: pyr4, startDay: 22, endDay: lastDay5 };
+    }
+    if (range.startDay <= 8) return { mon: range.mon, yr: range.yr, startDay: 1, endDay: 7 };
+    if (range.startDay <= 15) return { mon: range.mon, yr: range.yr, startDay: 8, endDay: 14 };
+    return { mon: range.mon, yr: range.yr, startDay: 15, endDay: 21 };
+  }
   if (range.startDay <= 1) {
     var pmon = range.mon - 1, pyr = range.yr;
     if (pmon < 0) { pmon = 11; pyr--; }
@@ -7900,13 +7965,14 @@ function generateCutoffOptions(clientKey) {
   if (!c || !c.cutoff) return [];
   var range = parseCutoffRange(c.cutoff);
   if (!range) return [];
-  var current = computeCurrentCutoffRange(range);
+  var cadence = c.payrollType;
+  var current = computeCurrentCutoffRange(range, cadence);
   var cursor = current;
-  for (var b = 0; b < 2; b++) cursor = prevCutoffRange(cursor);
+  for (var b = 0; b < 2; b++) cursor = prevCutoffRange(cursor, cadence);
   var opts = [];
   for (var i = 0; i < 5; i++) {
     opts.push(formatDateRangeLabel(cursor));
-    cursor = nextCutoffRange(cursor);
+    cursor = nextCutoffRange(cursor, cadence);
   }
   return opts;
 }
@@ -8084,7 +8150,8 @@ function checkCutoffRollover(key) {
     return;
   }
 
-  // Fallback — no calendar uploaded yet for this client, use generic semi-monthly math
+  // Fallback — no calendar uploaded yet for this client, use generic cadence-aware math
+  // (semi-monthly by default, weekly bands for a Weekly-cadence client)
   if (!clientObj.cutoff) return;
   var range = parseCutoffRange(clientObj.cutoff);
   if (!range) return;
@@ -8092,14 +8159,14 @@ function checkCutoffRollover(key) {
   var endDate = new Date(range.yr, range.mon, range.endDay);
   if (today <= endDate) return; // still within the current period — nothing to do
 
-  var currentRange = computeCurrentCutoffRange(range);
+  var currentRange = computeCurrentCutoffRange(range, clientObj.payrollType);
   var dedupeKey = key + '_' + currentRange.yr + '-' + currentRange.mon + '-' + currentRange.endDay;
   if (!window._cutoffPromptDismissed) window._cutoffPromptDismissed = {};
   if (window._cutoffPromptDismissed[dedupeKey]) return; // already asked about this exact period this session
   window._cutoffPromptDismissed[dedupeKey] = true;
 
   var oldLabel = clientObj.cutoff;
-  var newLabel = formatCutoffLabel(currentRange);
+  var newLabel = formatCutoffLabel(currentRange, clientObj.payrollType);
   appConfirm(
     'Cut-off has ended',
     clientObj.name + '\u2019s cutoff (' + oldLabel + ') has ended.\n\n' +
@@ -8112,6 +8179,14 @@ function checkCutoffRollover(key) {
 function getTaskStatus(taskKey) {
   var ck = window.currentWsClient || window._wsClient || '';
   return (taskStatus[ck] && taskStatus[ck][taskKey]) || {st:'pending'};
+}
+
+// Every run recorded for this task in the client's CURRENT cutoff (see setTaskStatus) --
+// [] if it's never been run this cutoff, one entry for the common single-run case.
+function getTaskRunHistory(clientKey, taskKey) {
+  var c = clients[clientKey];
+  var cutoffLabel = (c && c.cutoff) || 'Unlabeled period';
+  return (window.taskRunHistory && window.taskRunHistory[clientKey] && window.taskRunHistory[clientKey][cutoffLabel] && window.taskRunHistory[clientKey][cutoffLabel][taskKey]) || [];
 }
 
 // ── Processing history (per client) ─────────────────────────────────────────
@@ -8180,6 +8255,19 @@ function setTaskStatus(taskKey, st, reason) {
   targets.forEach(function(k) {
     if (!taskStatus[k]) taskStatus[k] = {};
     taskStatus[k][taskKey] = {st:st, reason:reason||'', timestamp: new Date().toISOString()};
+
+    // Per-run history -- taskStatus above is a single overwritten "current" flag with no
+    // record of earlier runs in the same cutoff, so running a task twice used to leave no
+    // trace of the first run. This appends instead. Keyed by cutoff label (not just client)
+    // so a rollover naturally starts a fresh history bucket without needing to wipe anything;
+    // kept in-memory only, matching taskStatus itself (neither persists to Supabase today).
+    var _cutoffLabel = (clients[k] && clients[k].cutoff) || 'Unlabeled period';
+    if (!window.taskRunHistory) window.taskRunHistory = {};
+    if (!window.taskRunHistory[k]) window.taskRunHistory[k] = {};
+    if (!window.taskRunHistory[k][_cutoffLabel]) window.taskRunHistory[k][_cutoffLabel] = {};
+    if (!window.taskRunHistory[k][_cutoffLabel][taskKey]) window.taskRunHistory[k][_cutoffLabel][taskKey] = [];
+    window.taskRunHistory[k][_cutoffLabel][taskKey].push({ st: st, reason: reason || '', timestamp: new Date().toISOString() });
+
     logTaskProgress(k);
     // Log open→done duration for the "Avg processing time" metric — only fires for whichever
     // client actually had this task open (that's the one with a recorded open time); other
@@ -20764,6 +20852,15 @@ function renderTKCalendar() {
   // you'd since switched to, since nothing re-synced it on render.
   var fnEl = document.getElementById('cal-file-name');
   if (fnEl) { fnEl.textContent = store.calFileName || ''; fnEl.title = store.calFileName || ''; }
+
+  // Weekly-cadence clients can't use calendar upload yet -- swap the upload row for a notice
+  // instead of letting _parseTKCalWb silently mis-parse a Weekly file as semi-monthly.
+  var _curClient = clients[window.currentWsClient];
+  var _isWeeklyClient = !!(_curClient && _curClient.payrollType === 'Weekly');
+  var _dropZone = document.getElementById('cal-drop-zone');
+  var _weeklyNotice = document.getElementById('cal-weekly-notice');
+  if (_dropZone) _dropZone.style.display = _isWeeklyClient ? 'none' : 'flex';
+  if (_weeklyNotice) _weeklyNotice.style.display = _isWeeklyClient ? 'block' : 'none';
 
   var today = new Date();
   var hols  = _allHols();
