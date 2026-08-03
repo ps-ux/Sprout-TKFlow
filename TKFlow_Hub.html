@@ -553,6 +553,42 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
     });
   }
 
+  // USERS (the hardcoded team roster) only ever reflects whatever's literally written in this
+  // file -- it is never otherwise refreshed from Supabase. Every "who's the specialist for
+  // this client" display elsewhere in the app (Team page, Client Assignments, Member Metrics,
+  // the dashboard) reads USERS[uk].processClients/assignedClients/auditClients directly, not
+  // currentUser's own (correctly DB-backed) arrays. Without this, a specialist assignment made
+  // via Add Client/Client Assignments persists fine to user_company_relations and even shows
+  // correctly in the assigning user's own "My Clients" for the rest of that session, but
+  // reverts to the hardcoded seed the moment anyone reloads -- looking exactly like the
+  // assignment was silently dropped. `users.short_key` exists specifically to map a Supabase
+  // Auth account back to its USERS[] key for this reconciliation.
+  async function loadUserRelationsFromSupabase() {
+    var usersRes = await supabaseClient.from('users').select('id, short_key').not('short_key', 'is', null);
+    var relsRes = await supabaseClient
+      .from('user_company_relations')
+      .select('user_id, relation_type, companies(short_key)');
+    if (usersRes.error || relsRes.error) {
+      console.warn('Failed to load user_company_relations for team roster', usersRes.error, relsRes.error);
+      return;
+    }
+    var shortKeyByUid = {};
+    (usersRes.data || []).forEach(function(u) { if (u.short_key) shortKeyByUid[u.id] = u.short_key; });
+
+    Object.keys(USERS).forEach(function(uk) {
+      USERS[uk].assignedClients = [];
+      USERS[uk].processClients = [];
+      USERS[uk].auditClients = [];
+    });
+
+    (relsRes.data || []).forEach(function(r) {
+      var uk = shortKeyByUid[r.user_id];
+      if (!uk || !USERS[uk] || !r.companies) return;
+      var listName = r.relation_type === 'assigned' ? 'assignedClients' : r.relation_type === 'processing' ? 'processClients' : 'auditClients';
+      if (USERS[uk][listName].indexOf(r.companies.short_key) === -1) USERS[uk][listName].push(r.companies.short_key);
+    });
+  }
+
   async function loadCurrentUserFromSession(session) {
     var uid = session.user.id;
     var profileRes = await supabaseClient.from('users').select('*').eq('id', uid).maybeSingle();
@@ -588,6 +624,7 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       auditClients: byType.audit
     };
     await loadCompaniesFromSupabase();
+    await loadUserRelationsFromSupabase();
     if (typeof refreshUserUI === 'function') refreshUserUI();
     if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
     if (typeof renderDashSchedule === 'function') renderDashSchedule();
@@ -4007,8 +4044,11 @@ function renderAssignRows() {
     var isLast = idx === keys.length - 1;
     // Defaults to checked for whoever is actually creating this client — the common case is
     // "I'm making this for myself" — but stays a normal checkbox they can untick if they're
-    // setting the client up on behalf of a different team member instead.
-    var isSelf = currentUser && uk === Object.keys(USERS).find(function(k){ return USERS[k] === currentUser; });
+    // setting the client up on behalf of a different team member instead. Matched by email,
+    // not object identity — since real Supabase Auth login landed, currentUser is a fresh
+    // object built from the DB profile, never a reference into USERS, so `USERS[k] ===
+    // currentUser` was always false and this never actually pre-checked anyone.
+    var isSelf = currentUser && u.email === currentUser.email;
     return '<div class="assign-row" data-user-key="' + uk + '" style="display:grid;grid-template-columns:' + (AUDITOR_ROLE_ENABLED ? '1fr 1fr 1fr' : '1fr 1fr') + ';' + (isLast ? 'border-bottom:none;' : '') + '">'
       + '<div class="assign-member"><div class="cap-av ' + avCls + '" style="width:30px;height:30px;font-size:10px;">' + u.initials + '</div>'
       + '<div><div style="font-size:13px;font-weight:500;color:#1a1a2e;">' + u.name + '</div><div style="font-size:11px;color:#9898a6;">' + u.role + '</div></div></div>'
