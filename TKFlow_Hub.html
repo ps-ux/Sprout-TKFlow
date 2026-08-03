@@ -528,6 +528,29 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       existingGroup.subNames = {};
       subs.forEach(function(c){ existingGroup.subNames[c.short_key] = c.name; });
     });
+
+    // A client with no group_id is still, by app convention, its own
+    // single-member "group" -- the sidebar and workspace navigation read
+    // from clientGroups, not clients, directly (see _saveClientConfirmed).
+    // There's no company_groups row for these (only real multi-entity
+    // groups get one), so without this, a standalone client created after
+    // the initial seed loses its self-group entry on the next refresh and
+    // its whole workspace context breaks.
+    (companiesRes.data || []).forEach(function(c) {
+      if (c.group_id) return;
+      if (!clientGroups[c.short_key]) {
+        clientGroups[c.short_key] = {
+          name: c.name,
+          av: c.short_key.slice(0, 3),
+          avClass: (clients[c.short_key] && clients[c.short_key].avClass) || 'av-g',
+          subs: [c.short_key],
+          subNames: {}
+        };
+      }
+      clientGroups[c.short_key].name = c.name;
+      clientGroups[c.short_key].subs = [c.short_key];
+      clientGroups[c.short_key].subNames[c.short_key] = c.name;
+    });
   }
 
   async function loadCurrentUserFromSession(session) {
