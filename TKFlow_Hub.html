@@ -4408,7 +4408,11 @@ async function _saveClientConfirmed() {
   // (Paula and Arianne's checkboxes were being silently attributed to each other).
   const assignRows = document.querySelectorAll('.assign-row');
   const newAssigned = [];
-  const subKeysForAccess = entityTags.length ? entityTags : [key];
+  // Same set as `subKeys` below (main client/first entity plus any additional entity tags) --
+  // kept in sync manually since this is read before `subKeys` is computed further down.
+  const subKeysForAccess = entityTags.length
+    ? [key].concat(entityTags.filter(function(t){ return t !== key; }))
+    : [key];
   assignRows.forEach((row) => {
     const mk = row.getAttribute('data-user-key');
     if (!mk || !USERS[mk]) return;
@@ -4451,12 +4455,13 @@ async function _saveClientConfirmed() {
   const avatarColors = ['av-g','av-b','av-o','av-p'];
   const usedColors = Object.keys(clients).length;
   const avCls = avatarColors[usedColors % avatarColors.length];
-  // For umbrella clients, the "first subcompany" (named via Client name, keyed via Short
-  // code) must always be included alongside any additional entity tags — previously entity
-  // tags completely replaced the default single-key sub, which would silently drop the
-  // first real entity the moment a second one was tagged.
+  // The main client/first entity (named via Client name, keyed via Short code) must always
+  // be included alongside any additional entity tags, umbrella or not — entity tags are just
+  // additional entities under the same client, not a replacement for the one typed in step 1.
+  // Previously this only applied when "umbrella" was checked, so a non-umbrella client with
+  // entity tags added (e.g. Clark, Philippines) silently dropped the main client name/code.
   const subKeys = entityTags.length
-    ? (isUmbrellaClient ? [key].concat(entityTags.filter(function(t){ return t !== key; })) : entityTags)
+    ? [key].concat(entityTags.filter(function(t){ return t !== key; }))
     : [key];
 
   function makeDefaultClientEntry(subLabel) {
