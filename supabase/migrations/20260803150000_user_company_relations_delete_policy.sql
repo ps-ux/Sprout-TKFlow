@@ -2,4 +2,5 @@
 -- actually clear the previous assignment in Supabase -- previously only insert/select were
 -- allowed on user_company_relations, so saveClientAssignment() was entirely in-memory and
 -- any reassignment made there silently reverted on the next reload.
+drop policy if exists "authenticated delete" on user_company_relations;
 create policy "authenticated delete" on user_company_relations for delete to authenticated using (true);
