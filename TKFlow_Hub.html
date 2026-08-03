@@ -4245,7 +4245,7 @@ function saveClient() {
   );
 }
 
-function _saveClientConfirmed() {
+async function _saveClientConfirmed() {
   // Read form values
   const nameInput = document.querySelector('#modal-step-1 .modal-input[placeholder*="Kuehne"]');
   const codeInput = document.querySelector('#modal-step-1 .modal-input[placeholder*="KNI"]');
@@ -4431,6 +4431,41 @@ function _saveClientConfirmed() {
       ],
       disputes: []
     };
+  }
+
+  // Persist to Supabase before touching any local state, so a failure (e.g. a
+  // duplicate short code) leaves nothing half-created in the UI.
+  var newGroupId = null;
+  if (subKeys.length > 1) {
+    var groupInsertRes = await supabaseClient
+      .from('company_groups')
+      .insert({ code: key, name: groupDisplayName })
+      .select()
+      .single();
+    if (groupInsertRes.error) {
+      if (typeof showToast === 'function') showToast('Could not save group: ' + groupInsertRes.error.message, '#c0392b');
+      return;
+    }
+    newGroupId = groupInsertRes.data.id;
+  }
+  var companyRows = subKeys.map(function(subKey) {
+    var entryName = (subKey === key) ? clientName : subKey;
+    return {
+      short_key: subKey,
+      group_id: newGroupId,
+      name: entryName,
+      status: 'active',
+      headcount: 0,
+      payroll_type: payrollType,
+      basic_pay_offset: basicPayOffsetVal,
+      task_config: { email_support: ticketingEnabled, leave_monitoring: leaveMonitoringEnabled, leave_credits_validation: lcvEnabled, validation: validationEnabled, variance: varianceEnabled, disputes_summary: disputesEnabled, newhires: newhiresEnabled, profile: profileEnabled, shift_management: shiftMgmtEnabled, holiday_setup: holidaySetupEnabled, payroll_id_sync: payrollIdSyncEnabled },
+      ticketing_mode: 'otk'
+    };
+  });
+  var companiesInsertRes = await supabaseClient.from('companies').insert(companyRows);
+  if (companiesInsertRes.error) {
+    if (typeof showToast === 'function') showToast('Could not save client: ' + companiesInsertRes.error.message, '#c0392b');
+    return;
   }
 
   subKeys.forEach(function(subKey) {
