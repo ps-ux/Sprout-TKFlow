@@ -597,50 +597,61 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
   }
 
   async function loadCurrentUserFromSession(session) {
-    var uid = session.user.id;
-    var profileRes = await supabaseClient.from('users').select('*').eq('id', uid).maybeSingle();
-    if (profileRes.error || !profileRes.data) {
-      loginError.textContent = 'No TKFlow profile found for this account yet.';
+    // Wrapped in try/catch so a genuine exception (network hiccup, a bad query) always
+    // falls back to the login form instead of leaving "Checking session..." stuck forever --
+    // this sequence is now 8 chained Supabase round-trips, any one of which throwing used
+    // to silently kill the promise chain with nothing to catch it.
+    try {
+      var uid = session.user.id;
+      var profileRes = await supabaseClient.from('users').select('*').eq('id', uid).maybeSingle();
+      if (profileRes.error || !profileRes.data) {
+        loginError.textContent = 'No TKFlow profile found for this account yet.';
+        loginError.style.display = 'block';
+        await supabaseClient.auth.signOut();
+        return false;
+      }
+      var profile = profileRes.data;
+      var relRes = await supabaseClient
+        .from('user_company_relations')
+        .select('relation_type, companies(short_key)')
+        .eq('user_id', uid);
+      var byType = { assigned: [], processing: [], audit: [] };
+      (relRes.data || []).forEach(function(r) {
+        if (r.companies && byType[r.relation_type]) byType[r.relation_type].push(r.companies.short_key);
+      });
+      currentUser = {
+        name: profile.name,
+        initials: profile.initials,
+        email: profile.email,
+        roleType: profile.role_type,
+        role: profile.role,
+        orgRole: profile.org_role,
+        canServiceView: profile.can_service_view,
+        canSeeAllDisputes: profile.can_see_all_disputes,
+        canManageAccess: profile.can_manage_access,
+        canAssign: profile.can_assign,
+        canArchive: profile.can_archive,
+        assignedClients: byType.assigned,
+        processClients: byType.processing,
+        auditClients: byType.audit
+      };
+      await loadCompaniesFromSupabase();
+      await loadUserRelationsFromSupabase();
+      // Both depend on clients/clientGroups (companyId/groupId) already being populated above.
+      await loadPolicyFilesFromSupabase();
+      await loadCalendarsFromSupabase();
+      if (typeof refreshUserUI === 'function') refreshUserUI();
+      if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
+      if (typeof renderDashSchedule === 'function') renderDashSchedule();
+      if (typeof filterClientGrid === 'function') filterClientGrid();
+      loginOverlay.style.display = 'none';
+      return true;
+    } catch (err) {
+      console.error('loadCurrentUserFromSession failed', err);
+      loginError.textContent = 'Something went wrong loading your account (' + (err && err.message ? err.message : 'unknown error') + '). Please try again.';
       loginError.style.display = 'block';
-      await supabaseClient.auth.signOut();
       return false;
     }
-    var profile = profileRes.data;
-    var relRes = await supabaseClient
-      .from('user_company_relations')
-      .select('relation_type, companies(short_key)')
-      .eq('user_id', uid);
-    var byType = { assigned: [], processing: [], audit: [] };
-    (relRes.data || []).forEach(function(r) {
-      if (r.companies && byType[r.relation_type]) byType[r.relation_type].push(r.companies.short_key);
-    });
-    currentUser = {
-      name: profile.name,
-      initials: profile.initials,
-      email: profile.email,
-      roleType: profile.role_type,
-      role: profile.role,
-      orgRole: profile.org_role,
-      canServiceView: profile.can_service_view,
-      canSeeAllDisputes: profile.can_see_all_disputes,
-      canManageAccess: profile.can_manage_access,
-      canAssign: profile.can_assign,
-      canArchive: profile.can_archive,
-      assignedClients: byType.assigned,
-      processClients: byType.processing,
-      auditClients: byType.audit
-    };
-    await loadCompaniesFromSupabase();
-    await loadUserRelationsFromSupabase();
-    // Both depend on clients/clientGroups (companyId/groupId) already being populated above.
-    await loadPolicyFilesFromSupabase();
-    await loadCalendarsFromSupabase();
-    if (typeof refreshUserUI === 'function') refreshUserUI();
-    if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
-    if (typeof renderDashSchedule === 'function') renderDashSchedule();
-    if (typeof filterClientGrid === 'function') filterClientGrid();
-    loginOverlay.style.display = 'none';
-    return true;
   }
 
   loginForm.addEventListener('submit', async function(e) {
@@ -668,6 +679,12 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
     if (!session) { showLoginForm(); return; }
     var ok = await loadCurrentUserFromSession(session);
     if (!ok) showLoginForm();
+  }).catch(function(err) {
+    // loadCurrentUserFromSession already catches its own errors -- this only guards against
+    // getSession() itself failing (e.g. a network error), so "Checking session..." can never
+    // hang with literally nothing to fall back to.
+    console.error('Session check failed', err);
+    showLoginForm();
   });
 })();
 </script>
