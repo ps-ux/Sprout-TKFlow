@@ -6,6 +6,12 @@
 <title>Sprout TKFlow</title>
 <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600&display=swap" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  const SUPABASE_URL = 'https://vsfxgptuiudbhkevyako.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzZnhncHR1aXVkYmhrZXZ5YWtvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU0NjM2MDQsImV4cCI6MjEwMTAzOTYwNH0.-52M-73RIzK6Z6yJpygK7039W86MLQsIJlDAemrL4S4';
+  const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+</script>
 <style>
 /* ── Toge Design System tokens ─────────────────────────────── */
 :root {
@@ -388,6 +394,93 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
 </script>
 </head>
 <body>
+<div id="login-overlay" style="position:fixed;inset:0;z-index:99999;background:#0A3E1D;display:flex;align-items:center;justify-content:center;font-family:Rubik,sans-serif;">
+  <div style="width:320px;max-width:90vw;background:#fff;border-radius:20px;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="font-size:20px;font-weight:600;color:#1a1a2e;margin-bottom:4px;">Sprout TKFlow</div>
+    <div style="font-size:13px;color:#6b6b7b;margin-bottom:24px;">Sign in with your Sprout email</div>
+    <form id="login-form">
+      <input id="login-email" type="email" required placeholder="you@sprout.ph" autocomplete="username"
+        style="width:100%;padding:11px 14px;border-radius:12px;border:1.5px solid #EBEBEF;font-size:13px;font-family:Rubik,sans-serif;margin-bottom:10px;box-sizing:border-box;outline:none;">
+      <input id="login-password" type="password" required placeholder="Password" autocomplete="current-password"
+        style="width:100%;padding:11px 14px;border-radius:12px;border:1.5px solid #EBEBEF;font-size:13px;font-family:Rubik,sans-serif;margin-bottom:14px;box-sizing:border-box;outline:none;">
+      <div id="login-error" style="display:none;color:#c0392b;font-size:12px;margin-bottom:10px;"></div>
+      <button type="submit" id="login-submit"
+        style="width:100%;padding:11px;border-radius:12px;border:none;background:#32CE13;color:#0A3E1D;font-weight:600;font-size:13px;font-family:Rubik,sans-serif;cursor:pointer;">Sign in</button>
+    </form>
+  </div>
+</div>
+<script>
+(function(){
+  var loginOverlay = document.getElementById('login-overlay');
+  var loginForm = document.getElementById('login-form');
+  var loginError = document.getElementById('login-error');
+  var loginSubmit = document.getElementById('login-submit');
+
+  async function loadCurrentUserFromSession(session) {
+    var uid = session.user.id;
+    var profileRes = await supabaseClient.from('users').select('*').eq('id', uid).maybeSingle();
+    if (profileRes.error || !profileRes.data) {
+      loginError.textContent = 'No TKFlow profile found for this account yet.';
+      loginError.style.display = 'block';
+      await supabaseClient.auth.signOut();
+      return false;
+    }
+    var profile = profileRes.data;
+    var relRes = await supabaseClient
+      .from('user_company_relations')
+      .select('relation_type, companies(short_key)')
+      .eq('user_id', uid);
+    var byType = { assigned: [], processing: [], audit: [] };
+    (relRes.data || []).forEach(function(r) {
+      if (r.companies && byType[r.relation_type]) byType[r.relation_type].push(r.companies.short_key);
+    });
+    currentUser = {
+      name: profile.name,
+      initials: profile.initials,
+      email: profile.email,
+      roleType: profile.role_type,
+      role: profile.role,
+      orgRole: profile.org_role,
+      canServiceView: profile.can_service_view,
+      canSeeAllDisputes: profile.can_see_all_disputes,
+      canManageAccess: profile.can_manage_access,
+      canAssign: profile.can_assign,
+      canArchive: profile.can_archive,
+      assignedClients: byType.assigned,
+      processClients: byType.processing,
+      auditClients: byType.audit
+    };
+    if (typeof refreshUserUI === 'function') refreshUserUI();
+    loginOverlay.style.display = 'none';
+    return true;
+  }
+
+  loginForm.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    loginError.style.display = 'none';
+    loginSubmit.disabled = true;
+    loginSubmit.textContent = 'Signing in...';
+    var email = document.getElementById('login-email').value.trim();
+    var password = document.getElementById('login-password').value;
+    var res = await supabaseClient.auth.signInWithPassword({ email: email, password: password });
+    if (res.error) {
+      loginError.textContent = res.error.message;
+      loginError.style.display = 'block';
+      loginSubmit.disabled = false;
+      loginSubmit.textContent = 'Sign in';
+      return;
+    }
+    await loadCurrentUserFromSession(res.data.session);
+    loginSubmit.disabled = false;
+    loginSubmit.textContent = 'Sign in';
+  });
+
+  supabaseClient.auth.getSession().then(function(result) {
+    var session = result.data.session;
+    if (session) loadCurrentUserFromSession(session);
+  });
+})();
+</script>
 <svg width="0" height="0" style="position:absolute;">
   <defs>
     <symbol id="tkf-asterisk" viewBox="0 0 276 298"><path d="M155.169 118.782L258.037 59.3909L275.471 89.5871L172.603 148.977L275.471 208.369L258.038 238.565L155.169 179.173V297.956H120.302V179.173L17.4336 238.565L0 208.369L102.867 148.977L0 89.5871L17.4336 59.3909L120.302 118.781V0H155.169V118.782Z" fill="#1679FA"/></symbol>
@@ -449,7 +542,7 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
     </script>
     
     <div class="sidebar-bottom" style="position:relative;flex-shrink:0;">
-      <div id="start-menu" style="display:none;position:absolute;bottom:64px;left:12px;right:12px;background:#0A3E1D;border:1px solid rgba(255,255,255,0.15);border-radius:14px;padding:8px;box-shadow:0 -8px 32px rgba(0,0,0,0.4);z-index:999;"><div style="padding:8px 10px 6px;"><div style="font-size:10px;font-weight:600;color:rgba(255,255,255,0.45);text-transform:uppercase;letter-spacing:0.7px;margin-bottom:6px;">Preview as</div><select id="user-switcher" onchange="switchUser(this.value)" style="width:100%;padding:8px 10px;border-radius:12px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.1);color:#fff;font-size:12px;font-family:Rubik,sans-serif;cursor:pointer;outline:none;"><option value="zona">Admin</option><option value="paula">Member</option></select></div><div style="height:1px;background:rgba(255,255,255,0.1);margin:6px 4px;"></div><div onclick="switchPage('settings');toggleStartMenu();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-settings" style="font-size:16px;width:18px;"></i>Settings</div><div id="dark-toggle" onclick="toggleDarkMode()" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-moon" id="dark-toggle-icon" style="font-size:16px;width:18px;"></i><span id="dark-toggle-label">Dark mode</span></div><div onclick="openSearch();toggleStartMenu();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-search" style="font-size:16px;width:18px;"></i>Search <span style="margin-left:auto;font-size:10px;color:rgba(255,255,255,0.4);">Ctrl+K</span></div><div style="height:1px;background:rgba(255,255,255,0.1);margin:6px 4px;"></div><div onclick="signOut();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:#ff8080;font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-logout" style="font-size:16px;width:18px;"></i>Sign out</div></div><div onclick="toggleStartMenu()" id="sidebar-user-block" style="display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;border-top:1px solid rgba(255,255,255,0.08);user-select:none;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='transparent'"><div class="user-avatar" id="sidebar-avatar">ZM</div><div style="flex:1;min-width:0;"><div class="user-name" id="sidebar-name">Zona Rocelle Merto</div><div class="user-role" id="sidebar-role">Admin</div></div><i class="ti ti-chevron-up" id="start-chevron" style="font-size:14px;color:rgba(255,255,255,0.5);transition:transform 0.2s;"></i></div>
+      <div id="start-menu" style="display:none;position:absolute;bottom:64px;left:12px;right:12px;background:#0A3E1D;border:1px solid rgba(255,255,255,0.15);border-radius:14px;padding:8px;box-shadow:0 -8px 32px rgba(0,0,0,0.4);z-index:999;"><div onclick="switchPage('settings');toggleStartMenu();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-settings" style="font-size:16px;width:18px;"></i>Settings</div><div id="dark-toggle" onclick="toggleDarkMode()" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-moon" id="dark-toggle-icon" style="font-size:16px;width:18px;"></i><span id="dark-toggle-label">Dark mode</span></div><div onclick="openSearch();toggleStartMenu();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-search" style="font-size:16px;width:18px;"></i>Search <span style="margin-left:auto;font-size:10px;color:rgba(255,255,255,0.4);">Ctrl+K</span></div><div style="height:1px;background:rgba(255,255,255,0.1);margin:6px 4px;"></div><div onclick="signOut();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:#ff8080;font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-logout" style="font-size:16px;width:18px;"></i>Sign out</div></div><div onclick="toggleStartMenu()" id="sidebar-user-block" style="display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;border-top:1px solid rgba(255,255,255,0.08);user-select:none;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='transparent'"><div class="user-avatar" id="sidebar-avatar">ZM</div><div style="flex:1;min-width:0;"><div class="user-name" id="sidebar-name">Zona Rocelle Merto</div><div class="user-role" id="sidebar-role">Admin</div></div><i class="ti ti-chevron-up" id="start-chevron" style="font-size:14px;color:rgba(255,255,255,0.5);transition:transform 0.2s;"></i></div>
     </div>
   </aside>
 
@@ -3671,17 +3764,18 @@ const USERS = {
 };
 let currentUser = USERS.zona;
 
-// Simulates signing out (no real auth yet — once Google sign-in is wired up,
-// this should actually terminate the session/redirect to a login screen).
 function signOut() {
   appConfirm('Sign out?', 'Sign out of TKFlow?', function() {
-    if (typeof showToast === 'function') showToast('Signed out \u2014 reloading...');
-    setTimeout(function(){ location.reload(); }, 600);
+    supabaseClient.auth.signOut().then(function(){ location.reload(); });
   }, { okLabel: 'Sign out' });
 }
 
 function switchUser(key) {
   currentUser = USERS[key];
+  refreshUserUI();
+}
+
+function refreshUserUI() {
   // Update sidebar user block
   document.getElementById('sidebar-avatar').textContent = currentUser.initials;
   document.getElementById('sidebar-name').textContent   = currentUser.name;
