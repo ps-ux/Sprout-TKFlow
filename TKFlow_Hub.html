@@ -20642,14 +20642,23 @@ async function _persistCalendar(scope, fileName, arrayBuffer, calPeriods, calHol
 
 function loadTKCalendarFile(input) {
   var file = input.files[0]; if (!file) return;
+  // Captured synchronously, before the async file read -- _calGet()/_calKey()/_calScope() all
+  // read window.currentWsGroup/currentWsClient live, so reading them only inside the async
+  // onload callback let switching to a different client's workspace between picking the file
+  // and the read completing silently attribute the calendar (and its Policy Bank archive
+  // copy) to whatever workspace happened to be open when the read finished, not the one open
+  // when the upload started. This is what caused a KNI upload to land under HDI.
+  var _uploadGroup = window.currentWsGroup;
+  var _uploadClient = window.currentWsClient;
   var reader = new FileReader();
   reader.onload = async function(e) {
+    var _liveGroup = window.currentWsGroup, _liveClient = window.currentWsClient;
+    window.currentWsGroup = _uploadGroup;
+    window.currentWsClient = _uploadClient;
     try {
       var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', raw:true});
       _parseTKCalWb(wb, file.name);
       _calGet().calFileName = file.name;
-      var fn = document.getElementById('cal-file-name');
-      if (fn) { fn.textContent = file.name; fn.title = file.name; }
 
       // Persist as the one active calendar for this scope -- replaces whatever was there
       // before, both in Storage and in the calendars table (see _persistCalendar).
@@ -20672,21 +20681,30 @@ function loadTKCalendarFile(input) {
         );
       }
 
-      renderTKCalendar();
-      // Refresh dashboard widgets so they pick up the newly uploaded calendar
-      if (typeof renderDashSchedule === 'function') renderDashSchedule();
-      if (typeof renderMiniCal === 'function') renderMiniCal();
-      // Also refresh Client Profile immediately — it's merged onto the same tab now and shows
-      // calendar-derived Cutoff Schedule / Basic Pay Cutoff data, which previously only
-      // updated once you navigated away and back.
-      if (typeof renderClientProfile === 'function') {
-        var _pkAfterUpload = (window.currentWsGroup && typeof clientGroups !== 'undefined' && clientGroups[window.currentWsGroup]) ? window.currentWsGroup : (window.currentWsClient || '');
-        if (_pkAfterUpload) renderClientProfile(_pkAfterUpload);
+      // Only refresh the on-screen calendar/dashboard/profile if the user is still looking
+      // at the workspace this upload was actually for -- if they've since navigated away,
+      // the data above was still saved correctly, but there's nothing here to redraw.
+      if (_liveGroup === _uploadGroup && _liveClient === _uploadClient) {
+        var fn = document.getElementById('cal-file-name');
+        if (fn) { fn.textContent = file.name; fn.title = file.name; }
+        renderTKCalendar();
+        if (typeof renderDashSchedule === 'function') renderDashSchedule();
+        if (typeof renderMiniCal === 'function') renderMiniCal();
+        // Also refresh Client Profile immediately — it's merged onto the same tab now and shows
+        // calendar-derived Cutoff Schedule / Basic Pay Cutoff data, which previously only
+        // updated once you navigated away and back.
+        if (typeof renderClientProfile === 'function') {
+          var _pkAfterUpload = (window.currentWsGroup && typeof clientGroups !== 'undefined' && clientGroups[window.currentWsGroup]) ? window.currentWsGroup : (window.currentWsClient || '');
+          if (_pkAfterUpload) renderClientProfile(_pkAfterUpload);
+        }
       }
       if (typeof showToast==='function') showToast('TK Calendar loaded — ' + _calGet().calPeriods.length + ' periods');
     } catch(ex) {
       if (typeof showToast==='function') showToast('Could not read calendar file','#e67e00');
       console.error(ex);
+    } finally {
+      window.currentWsGroup = _liveGroup;
+      window.currentWsClient = _liveClient;
     }
   };
   reader.readAsArrayBuffer(file);
