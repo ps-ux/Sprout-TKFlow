@@ -2675,6 +2675,14 @@ function openWorkspace(key, keepSwitcher) {
   // Clear task body cache when switching clients
   if (window.currentWsClient !== key) { _emailSave(); clearAllTaskCache(); }
   if (currentUser.roleType !== 'admin' && !currentUser.assignedClients.includes(key)) { showLockToast(); return; }
+  if (!clients[key]) {
+    // key resolved to something that isn't an actual client (e.g. a group
+    // code left over from an access-filtered empty subs list) -- fail
+    // loudly with a toast instead of crashing partway through this
+    // function and leaving whatever was on screen before stuck in place.
+    if (typeof showToast === 'function') showToast('That client could not be opened.', '#c0392b');
+    return;
+  }
   currentWsClient = key;
   // Always (re)detect which group this client belongs to, regardless of how openWorkspace
   // was called — several shortcuts (Archives restore, Client Assignments, Coverage Pass-Off's
@@ -4520,10 +4528,67 @@ async function _saveClientConfirmed() {
       ticketing_mode: 'otk'
     };
   });
-  var companiesInsertRes = await supabaseClient.from('companies').insert(companyRows);
+  var companiesInsertRes = await supabaseClient.from('companies').insert(companyRows).select();
   if (companiesInsertRes.error) {
     if (typeof showToast === 'function') showToast('Could not save client: ' + companiesInsertRes.error.message, '#c0392b');
     return;
+  }
+
+  // Persist which users can access these new companies -- without this,
+  // currentUser.assignedClients (loaded from user_company_relations) never
+  // includes them, and openGroupWorkspace's access filter silently empties
+  // out, crashing the workspace view. Only users who already have a real
+  // Supabase Auth account can be resolved here (matched by USERS[].email);
+  // anyone else keeps in-memory-only access until their account exists.
+  var companyIdByShortKey = {};
+  (companiesInsertRes.data || []).forEach(function(row) { companyIdByShortKey[row.short_key] = row.id; });
+
+  var accessByUserKey = {};
+  function grantAccess(uk, relType) {
+    subKeysForAccess.forEach(function(sk) {
+      if (!companyIdByShortKey[sk]) return;
+      if (!accessByUserKey[uk]) accessByUserKey[uk] = [];
+      accessByUserKey[uk].push({ company_id: companyIdByShortKey[sk], relation_type: relType });
+    });
+  }
+  Object.keys(USERS).forEach(function(uk) { if (USERS[uk].canAssign) grantAccess(uk, 'assigned'); });
+  newAssigned.forEach(function(a) {
+    if (a.isSpec) { grantAccess(a.mk, 'assigned'); grantAccess(a.mk, 'processing'); }
+    if (a.isAud) grantAccess(a.mk, 'audit');
+  });
+
+  var userKeysNeeded = Object.keys(accessByUserKey);
+  if (userKeysNeeded.length) {
+    var emailsNeeded = userKeysNeeded.map(function(uk){ return USERS[uk].email; });
+    var usersLookupRes = await supabaseClient.from('users').select('id, email').in('email', emailsNeeded);
+    var userIdByEmail = {};
+    (usersLookupRes.data || []).forEach(function(u) { userIdByEmail[u.email] = u.id; });
+
+    var relationRows = [];
+    userKeysNeeded.forEach(function(uk) {
+      var uid = userIdByEmail[USERS[uk].email];
+      if (!uid) return; // no real account yet -- stays in-memory only for this session
+      accessByUserKey[uk].forEach(function(rel) {
+        relationRows.push({ user_id: uid, company_id: rel.company_id, relation_type: rel.relation_type });
+      });
+      // Keep the *currently logged-in* user's session in sync immediately --
+      // currentUser is a separate object from USERS[uk] once real auth is in
+      // place, so this session wouldn't otherwise see its own new access
+      // until the next login.
+      if (currentUser && currentUser.email === USERS[uk].email) {
+        accessByUserKey[uk].forEach(function(rel) {
+          var sk = Object.keys(companyIdByShortKey).find(function(k){ return companyIdByShortKey[k] === rel.company_id; });
+          if (!sk) return;
+          var listName = rel.relation_type === 'assigned' ? 'assignedClients' : rel.relation_type === 'processing' ? 'processClients' : 'auditClients';
+          if (!currentUser[listName]) currentUser[listName] = [];
+          if (currentUser[listName].indexOf(sk) === -1) currentUser[listName].push(sk);
+        });
+      }
+    });
+    if (relationRows.length) {
+      var relResInsert = await supabaseClient.from('user_company_relations').insert(relationRows);
+      if (relResInsert.error) console.warn('Could not save user_company_relations', relResInsert.error);
+    }
   }
 
   subKeys.forEach(function(subKey) {
