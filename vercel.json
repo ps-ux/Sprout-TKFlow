@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/portal", "destination": "/otk-ticketing-portal.html" },
+    { "source": "/", "destination": "/TKFlow_Hub.html" }
+  ]
+}
