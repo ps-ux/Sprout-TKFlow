@@ -394,22 +394,42 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
 </script>
 </head>
 <body>
-<div id="login-overlay" style="position:fixed;inset:0;z-index:99999;background:#0A3E1D;display:flex;align-items:center;justify-content:center;font-family:Rubik,sans-serif;">
-  <div id="login-checking" style="color:rgba(255,255,255,0.6);font-size:13px;">Checking session&hellip;</div>
-  <div id="login-box" style="display:none;width:320px;max-width:90vw;background:#fff;border-radius:20px;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
-    <div style="font-size:20px;font-weight:600;color:#1a1a2e;margin-bottom:4px;">Sprout TKFlow</div>
-    <div style="font-size:13px;color:#6b6b7b;margin-bottom:24px;">Sign in with your Sprout email</div>
+<div id="login-overlay" style="position:fixed;inset:0;z-index:99999;background:var(--n-50);display:flex;align-items:center;justify-content:center;font-family:Rubik,sans-serif;overflow:hidden;">
+  <svg style="position:absolute;top:-40px;left:-40px;width:220px;height:238px;opacity:0.06;pointer-events:none;"><use href="#tkf-asterisk"/></svg>
+  <svg style="position:absolute;bottom:-60px;right:-30px;width:260px;height:281px;opacity:0.05;pointer-events:none;"><use href="#tkf-asterisk"/></svg>
+
+  <div id="login-checking" style="color:var(--text-muted);font-size:13px;display:flex;align-items:center;gap:8px;">
+    <i class="ti ti-loader-2" style="font-size:16px;animation:tkfSpin 0.8s linear infinite;"></i> Checking session&hellip;
+  </div>
+
+  <div id="login-box" style="display:none;position:relative;width:340px;max-width:90vw;background:#fff;border-radius:20px;padding:36px 32px;border:1px solid var(--n-200);box-shadow:0 20px 60px rgba(15,23,42,0.08);">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:22px;">
+      <div style="width:36px;height:36px;background:var(--kk-500);border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <i class="ti ti-clock-bolt" style="font-size:19px;color:#fff;"></i>
+      </div>
+      <div>
+        <div style="font-size:16px;font-weight:600;color:var(--text-primary);letter-spacing:-0.3px;">TKFlow</div>
+        <div style="font-size:10px;color:var(--text-muted);">OTK Hub &middot; MPS - Sprout Solutions</div>
+      </div>
+    </div>
+    <div style="display:inline-block;background:var(--kk-50);color:var(--kk-700);font-size:11px;font-weight:600;padding:4px 12px;border-radius:20px;border:1px solid var(--kk-200);margin-bottom:16px;">Payroll Ops Portal</div>
+    <div style="font-size:13px;color:var(--text-secondary);margin-bottom:20px;">Sign in with your Sprout email to continue.</div>
     <form id="login-form">
-      <input id="login-email" type="email" required placeholder="you@sprout.ph" autocomplete="username"
-        style="width:100%;padding:11px 14px;border-radius:12px;border:1.5px solid #EBEBEF;font-size:13px;font-family:Rubik,sans-serif;margin-bottom:10px;box-sizing:border-box;outline:none;">
-      <input id="login-password" type="password" required placeholder="Password" autocomplete="current-password"
-        style="width:100%;padding:11px 14px;border-radius:12px;border:1.5px solid #EBEBEF;font-size:13px;font-family:Rubik,sans-serif;margin-bottom:14px;box-sizing:border-box;outline:none;">
-      <div id="login-error" style="display:none;color:#c0392b;font-size:12px;margin-bottom:10px;"></div>
-      <button type="submit" id="login-submit"
-        style="width:100%;padding:11px;border-radius:12px;border:none;background:#32CE13;color:#0A3E1D;font-weight:600;font-size:13px;font-family:Rubik,sans-serif;cursor:pointer;">Sign in</button>
+      <input id="login-email" class="login-input" type="email" required placeholder="you@sprout.ph" autocomplete="username">
+      <input id="login-password" class="login-input" type="password" required placeholder="Password" autocomplete="current-password" style="margin-top:10px;">
+      <div id="login-error" style="display:none;color:var(--color-danger);font-size:12px;margin:10px 0 0;"></div>
+      <button type="submit" id="login-submit" class="login-btn" style="margin-top:16px;">Sign in</button>
     </form>
   </div>
 </div>
+<style>
+  .login-input{width:100%;padding:11px 14px;border-radius:12px;border:1.5px solid var(--n-200);font-size:13px;font-family:Rubik,sans-serif;box-sizing:border-box;outline:none;transition:border-color .12s,box-shadow .12s;}
+  .login-input:focus{border-color:var(--kk-500);box-shadow:0 0 0 3px rgba(50,206,19,0.15);}
+  .login-btn{width:100%;padding:11px;border-radius:12px;border:none;background:var(--kk-500);color:#fff;font-weight:600;font-size:13px;font-family:Rubik,sans-serif;cursor:pointer;transition:background .12s;}
+  .login-btn:hover{background:var(--kk-600);}
+  .login-btn:disabled{opacity:0.6;cursor:default;}
+  @keyframes tkfSpin{to{transform:rotate(360deg);}}
+</style>
 <script>
 (function(){
   var loginOverlay = document.getElementById('login-overlay');
