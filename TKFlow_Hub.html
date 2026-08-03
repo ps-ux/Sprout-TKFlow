@@ -505,6 +505,9 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       var group = c.group_id ? (groupsRes.data || []).find(function(g){ return g.id === c.group_id; }) : null;
       if (!clients[c.short_key]) clients[c.short_key] = {};
       var existing = clients[c.short_key];
+      // Real Supabase id, distinct from short_key -- Policy Bank/calendar persistence is
+      // keyed off this, not the short_key, since it's the actual FK companies.id.
+      existing.companyId = c.id;
       existing.name = c.name;
       existing.hc = c.headcount;
       existing.payrollType = c.payroll_type;
@@ -522,6 +525,10 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
     (groupsRes.data || []).forEach(function(g) {
       if (!clientGroups[g.code]) clientGroups[g.code] = { name: g.name, av: g.code, avClass: 'av-g', subs: [], subNames: {} };
       var existingGroup = clientGroups[g.code];
+      // Real company_groups.id -- calendars are shared per-group, so persistence needs this,
+      // not the group code. Deliberately absent on the synthetic self-groups below (no real
+      // company_groups row exists for those), so calendar scoping falls back to companyId.
+      existingGroup.groupId = g.id;
       existingGroup.name = g.name;
       var subs = (companiesRes.data || []).filter(function(c){ return c.group_id === g.id; });
       existingGroup.subs = subs.map(function(c){ return c.short_key; });
@@ -625,6 +632,9 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
     };
     await loadCompaniesFromSupabase();
     await loadUserRelationsFromSupabase();
+    // Both depend on clients/clientGroups (companyId/groupId) already being populated above.
+    await loadPolicyFilesFromSupabase();
+    await loadCalendarsFromSupabase();
     if (typeof refreshUserUI === 'function') refreshUserUI();
     if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
     if (typeof renderDashSchedule === 'function') renderDashSchedule();
@@ -4638,6 +4648,10 @@ async function _saveClientConfirmed() {
 
   subKeys.forEach(function(subKey) {
     clients[subKey] = makeDefaultClientEntry(subKey);
+    // Needed so Policy Bank uploads and calendar persistence (both keyed by the real
+    // Supabase companies.id, not the short_key) work immediately for a client created
+    // this session, without waiting for a reload through loadCompaniesFromSupabase().
+    clients[subKey].companyId = companyIdByShortKey[subKey];
   });
 
   clientGroups[key] = {
@@ -4645,6 +4659,10 @@ async function _saveClientConfirmed() {
     av: clientCode.slice(0,3),
     avClass: avCls,
     subs: subKeys,
+    // Same reasoning as companyId above, but for the company_groups row -- lets a
+    // just-created multi-entity client's calendar (shared across its subs) persist
+    // immediately instead of only after a reload.
+    groupId: newGroupId,
     profileMeta: {
       dateStarted: (document.getElementById('ac-date-started') || {}).value || '',
       status: 'Active',
@@ -4666,6 +4684,11 @@ async function _saveClientConfirmed() {
       var _acWb = XLSX.read(new Uint8Array(window._acPendingCalFile.buffer), {type:'array', raw:true});
       _parseTKCalWb(_acWb, window._acPendingCalFile.name);
       _calGet().calFileName = window._acPendingCalFile.name;
+
+      var _acScope = (typeof _calScope === 'function') ? _calScope() : null;
+      if (_acScope) {
+        await _persistCalendar(_acScope, window._acPendingCalFile.name, window._acPendingCalFile.buffer, _calGet().calPeriods, _calGet().calHolidays);
+      }
     } catch(e) {
       console.error('Calendar parse failed during client creation:', e);
       if (typeof showToast === 'function') showToast('Client saved, but the calendar file could not be read', '#e67e00');
@@ -4673,14 +4696,14 @@ async function _saveClientConfirmed() {
     window.currentWsGroup = _prevWsGroup;
     window.currentWsClient = _prevWsClient;
 
-    policyFiles.push({
-      clientKey: subKeys[0],
-      name: window._acPendingCalFile.name,
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      size: window._acPendingCalFile.buffer.byteLength,
-      content: arrayBufferToDataURL(window._acPendingCalFile.buffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
-      dateAdded: new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
-    });
+    var _acArchiveCompanyId = companyIdByShortKey[subKeys[0]];
+    if (_acArchiveCompanyId) {
+      await _archivePolicyFile(
+        _acArchiveCompanyId, subKeys[0],
+        new Blob([window._acPendingCalFile.buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+        window._acPendingCalFile.name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', window._acPendingCalFile.buffer.byteLength
+      );
+    }
     window._acPendingCalFile = null;
   }
 
@@ -15790,7 +15813,49 @@ if (localStorage.getItem('tkflow-dark') === '1') {
 }
 
 // ── Policy bank ─────────────────────────────────────────────────────────────
-const policyFiles = []; // {name, type, content, size, dateAdded}
+// Metadata only -- {id, companyId, clientKey, name, type, size, storagePath, dateAdded}.
+// The actual file bytes live in the 'policy-files' Supabase Storage bucket, fetched on
+// demand in openPolicyFile() rather than held in memory for every file at once. Hydrated
+// fresh from Supabase on every login via loadPolicyFilesFromSupabase() -- this array itself
+// is not authoritative, so a reload always reflects what's actually in the database.
+var policyFiles = [];
+
+async function loadPolicyFilesFromSupabase() {
+  var res = await supabaseClient.from('policy_files').select('*, companies(short_key)').order('created_at', { ascending: true });
+  if (res.error) { console.warn('Failed to load policy files', res.error); return; }
+  policyFiles = (res.data || []).map(function(row) {
+    return {
+      id: row.id,
+      companyId: row.company_id,
+      clientKey: row.companies ? row.companies.short_key : '',
+      name: row.name,
+      type: row.content_type,
+      size: row.size,
+      storagePath: row.storage_path,
+      dateAdded: new Date(row.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    };
+  });
+}
+
+// Uploads a file to Storage and records its metadata row -- shared by the Policy Bank
+// upload button and by calendar uploads, which archive a copy here as a historical record
+// distinct from the one "active" calendar tracked in the calendars table/_calStore.
+async function _archivePolicyFile(companyId, clientKey, blob, name, contentType, size) {
+  if (!companyId) { console.warn('Skipped archiving ' + name + ' -- no companyId for ' + clientKey); return; }
+  var path = companyId + '/' + Date.now() + '-' + name.replace(/[^\w.\-]+/g, '_');
+  var upRes = await supabaseClient.storage.from('policy-files').upload(path, blob, { contentType: contentType || undefined });
+  if (upRes.error) { console.warn('Policy file upload failed', upRes.error); if (typeof showToast === 'function') showToast('Upload failed: ' + upRes.error.message, '#c0392b'); return; }
+  var insRes = await supabaseClient.from('policy_files').insert({
+    company_id: companyId, name: name, content_type: contentType, size: size, storage_path: path
+  }).select().single();
+  if (insRes.error) { console.warn('Could not save policy file record', insRes.error); if (typeof showToast === 'function') showToast('Could not save file record: ' + insRes.error.message, '#c0392b'); return; }
+  policyFiles.push({
+    id: insRes.data.id, companyId: companyId, clientKey: clientKey,
+    name: name, type: contentType, size: size, storagePath: path,
+    dateAdded: new Date(insRes.data.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  });
+  if (typeof renderPolicyFiles === 'function') renderPolicyFiles();
+}
 
 function getFileIcon(name) {
   const ext = name.split('.').pop().toLowerCase();
@@ -15810,22 +15875,19 @@ function getFileColor(name) {
   return 'background:#F4F4F8;color:#6b6b80;';
 }
 
-function handlePolicyUpload(input) {
+async function handlePolicyUpload(input) {
   const files = Array.from(input.files);
-  files.forEach(file => {
-    const reader = new FileReader();
-    reader.onload = e => {
-      policyFiles.push({ clientKey: (window.currentWsClient || ''),
-        name: file.name, type: file.type, size: file.size,
-        content: e.target.result, dateAdded: new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
-      });
-      renderPolicyFiles();
-    };
-    // Read as text for text-based files, as dataURL for others
-    const ext = file.name.split('.').pop().toLowerCase();
-    if (['txt','csv'].includes(ext)) reader.readAsText(file);
-    else reader.readAsDataURL(file);
-  });
+  const clientKey = window.currentWsClient || '';
+  const client = clients[clientKey];
+  const companyId = client && client.companyId;
+  if (!companyId) {
+    if (typeof showToast === 'function') showToast('This client isn\'t fully synced yet — file uploads need a saved client', '#c0392b');
+    input.value = '';
+    return;
+  }
+  for (const file of files) {
+    await _archivePolicyFile(companyId, clientKey, file, file.name, file.type, file.size);
+  }
   input.value = '';
 }
 
@@ -15846,7 +15908,7 @@ function renderPolicyFiles() {
     list.innerHTML = '<div style="padding:40px;text-align:center;color:#9898a6;font-size:13px;"><i class="ti ti-files" style="font-size:28px;display:block;margin-bottom:8px;color:#d0d0dc"></i>' + (q ? 'No files match your search' : 'No documents uploaded yet') + '</div>';
     return;
   }
-  list.innerHTML = filtered.map((f, i) => '\n    <div class="policy-file-card" onclick="openPolicyFile(' + (policyFiles.indexOf(f)) + ')">\n      <div class="policy-file-icon" style="' + (getFileColor(f.name)) + '"><i class="ti ' + (getFileIcon(f.name)) + '"></i></div>\n      <div style="flex:1;min-width:0;">\n        <div style="font-size:13px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (f.name) + '</div>\n        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Added ' + (f.dateAdded) + ' · ' + ((f.size/1024).toFixed(1)) + ' KB</div>\n      </div>\n      <span style="font-size:11px;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;">' + (f.name.split('.').pop()) + '</span>\n      <button onclick="event.stopPropagation();policyFiles.splice(policyFiles.indexOf(f),1);renderPolicyFiles();" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-card);color:#9898a6;font-size:11px;cursor:pointer;">Remove</button>\n    </div>').join('');
+  list.innerHTML = filtered.map((f, i) => '\n    <div class="policy-file-card" onclick="openPolicyFile(' + (policyFiles.indexOf(f)) + ')">\n      <div class="policy-file-icon" style="' + (getFileColor(f.name)) + '"><i class="ti ' + (getFileIcon(f.name)) + '"></i></div>\n      <div style="flex:1;min-width:0;">\n        <div style="font-size:13px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (f.name) + '</div>\n        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Added ' + (f.dateAdded) + ' · ' + ((f.size/1024).toFixed(1)) + ' KB</div>\n      </div>\n      <span style="font-size:11px;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;">' + (f.name.split('.').pop()) + '</span>\n      <button onclick="event.stopPropagation();removePolicyFile(' + (policyFiles.indexOf(f)) + ');" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-card);color:#9898a6;font-size:11px;cursor:pointer;">Remove</button>\n    </div>').join('');
 }
 
 function filterPolicyFiles() {
@@ -15890,7 +15952,7 @@ function filterPolicyFiles() {
 
  renderPolicyFiles(); }
 
-function openPolicyFile(idx) {
+async function openPolicyFile(idx) {
   const f = policyFiles[idx];
   if (!f) return;
   const viewer = document.getElementById('policy-viewer');
@@ -15898,22 +15960,45 @@ function openPolicyFile(idx) {
   document.getElementById('viewer-filename').textContent = f.name;
   viewer.style.display = 'block';
   viewer.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  const ext = f.name.split('.').pop().toLowerCase();
-  if (['png','jpg','jpeg','gif','webp'].includes(ext)) {
-    content.innerHTML = '<img src="' + (f.content) + '" style="max-width:100%;border-radius:12px;">';
-    content.dataset.rawText = '';
-  } else if (ext === 'pdf') {
-    content.innerHTML = '<iframe src="' + (f.content) + '" style="width:100%;height:460px;border:none;border-radius:12px;"></iframe>';
-    content.dataset.rawText = '';
-  } else if (['txt','csv'].includes(ext)) {
-    content.dataset.rawText = f.content;
-    content.innerHTML = f.content;
-  } else {
-    content.dataset.rawText = f.name;
-    content.innerHTML = '<div style="text-align:center;padding:40px;color:#9898a6;">\n      <i class="ti ti-file" style="font-size:40px;display:block;margin-bottom:12px;color:#d0d0dc"></i>\n      <div style="font-size:14px;font-weight:500;color:var(--text-primary);margin-bottom:8px;">' + (f.name) + '</div>\n      <div style="font-size:12px;color:#9898a6;margin-bottom:16px;">Preview not available for this file type in the browser.</div>\n      <a href="' + (f.content) + '" download="' + (f.name) + '" style="padding:8px 18px;background:var(--ub-500);color:#fff;border-radius:12px;font-size:13px;font-weight:500;text-decoration:none;">Download to open</a>\n    </div>';
-  }
+  content.innerHTML = '<div style="text-align:center;padding:40px;color:#9898a6;">Loading…</div>';
   document.getElementById('viewer-search').value = '';
   document.getElementById('viewer-search-count').textContent = '';
+
+  const ext = f.name.split('.').pop().toLowerCase();
+  // Content lives in Storage, not in memory -- fetched on demand instead of kept per-file
+  // for every file at once. A signed URL (not a public one) since these are client documents.
+  const urlRes = await supabaseClient.storage.from('policy-files').createSignedUrl(f.storagePath, 3600);
+  if (urlRes.error || !urlRes.data) {
+    content.innerHTML = '<div style="text-align:center;padding:40px;color:#c0392b;">Could not load this file.</div>';
+    return;
+  }
+  const url = urlRes.data.signedUrl;
+  if (['png','jpg','jpeg','gif','webp'].includes(ext)) {
+    content.innerHTML = '<img src="' + (url) + '" style="max-width:100%;border-radius:12px;">';
+    content.dataset.rawText = '';
+  } else if (ext === 'pdf') {
+    content.innerHTML = '<iframe src="' + (url) + '" style="width:100%;height:460px;border:none;border-radius:12px;"></iframe>';
+    content.dataset.rawText = '';
+  } else if (['txt','csv'].includes(ext)) {
+    const dlRes = await supabaseClient.storage.from('policy-files').download(f.storagePath);
+    const text = dlRes.data ? await dlRes.data.text() : '';
+    content.dataset.rawText = text;
+    content.innerHTML = text;
+  } else {
+    content.dataset.rawText = f.name;
+    content.innerHTML = '<div style="text-align:center;padding:40px;color:#9898a6;">\n      <i class="ti ti-file" style="font-size:40px;display:block;margin-bottom:12px;color:#d0d0dc"></i>\n      <div style="font-size:14px;font-weight:500;color:var(--text-primary);margin-bottom:8px;">' + (f.name) + '</div>\n      <div style="font-size:12px;color:#9898a6;margin-bottom:16px;">Preview not available for this file type in the browser.</div>\n      <a href="' + (url) + '" download="' + (f.name) + '" style="padding:8px 18px;background:var(--ub-500);color:#fff;border-radius:12px;font-size:13px;font-weight:500;text-decoration:none;">Download to open</a>\n    </div>';
+  }
+}
+
+async function removePolicyFile(idx) {
+  const f = policyFiles[idx];
+  if (!f) return;
+  const delStorageRes = await supabaseClient.storage.from('policy-files').remove([f.storagePath]);
+  if (delStorageRes.error) console.warn('Could not remove file from storage', delStorageRes.error);
+  const delRowRes = await supabaseClient.from('policy_files').delete().eq('id', f.id);
+  if (delRowRes.error) { console.warn('Could not delete policy file record', delRowRes.error); if (typeof showToast === 'function') showToast('Could not remove file: ' + delRowRes.error.message, '#c0392b'); return; }
+  policyFiles.splice(idx, 1);
+  renderPolicyFiles();
 }
 
 function closeViewer() {
@@ -20278,6 +20363,21 @@ function _calGet() {
   return _calStore[k];
 }
 
+// Resolves _calKey()'s string (a clientGroups code, real or synthetic self-group) to the
+// actual Supabase row it should persist against -- a real company_groups.id for a true
+// multi-entity group, falling back to the single company's companies.id for a standalone
+// client (whose self-group code and client short_key are the same string but have no real
+// company_groups row, so .groupId is deliberately absent on those).
+function _calScope() {
+  var key = _calKey();
+  if (!key || key === '__default__') return null;
+  var grp = typeof clientGroups !== 'undefined' ? clientGroups[key] : null;
+  if (grp && grp.groupId) return { type: 'group', id: grp.groupId };
+  var cli = typeof clients !== 'undefined' ? clients[key] : null;
+  if (cli && cli.companyId) return { type: 'company', id: cli.companyId };
+  return null;
+}
+
 // Built-in PH holidays (2025 + 2026)
 var _PH_HOLS = {
   '2025-1-1':'New Year\'s Day','2025-4-17':'Maundy Thursday','2025-4-18':'Good Friday',
@@ -20303,10 +20403,55 @@ function _allHols() {
 }
 
 // ── File upload ───────────────────────────────────────────────────
+// Loads every persisted calendar into _calStore on login. Keyed back from Supabase's
+// scope_type/scope_id to whatever string _calKey() would compute for that scope today
+// (a clientGroups code or client short_key), using the companyId/groupId maps that
+// loadCompaniesFromSupabase() populates -- so this must run after that function.
+async function loadCalendarsFromSupabase() {
+  var res = await supabaseClient.from('calendars').select('*');
+  if (res.error) { console.warn('Failed to load calendars', res.error); return; }
+  var groupIdToCode = {};
+  Object.keys(clientGroups || {}).forEach(function(gk) { if (clientGroups[gk].groupId) groupIdToCode[clientGroups[gk].groupId] = gk; });
+  var companyIdToShortKey = {};
+  Object.keys(clients || {}).forEach(function(ck) { if (clients[ck].companyId) companyIdToShortKey[clients[ck].companyId] = ck; });
+
+  (res.data || []).forEach(function(row) {
+    var key = row.scope_type === 'group' ? groupIdToCode[row.scope_id] : companyIdToShortKey[row.scope_id];
+    if (!key) return;
+    _calStore[key] = {
+      calPeriods: row.cal_periods || [],
+      calHolidays: row.cal_holidays || {},
+      calFileName: row.file_name || ''
+    };
+  });
+}
+
+// Persists the now-active calendar for a scope (one row per company/group, upserted on
+// scope_type+scope_id) -- a reupload replaces both the Storage object and the row, so the
+// previous calendar for this scope stops being "the one followed". The historical copy in
+// Policy Bank (see _archivePolicyFile below) is a separate, deliberately-kept record.
+async function _persistCalendar(scope, fileName, arrayBuffer, calPeriods, calHolidays) {
+  var existingRes = await supabaseClient.from('calendars').select('storage_path').eq('scope_type', scope.type).eq('scope_id', scope.id).maybeSingle();
+  if (existingRes.data && existingRes.data.storage_path) {
+    var rmRes = await supabaseClient.storage.from('calendars').remove([existingRes.data.storage_path]);
+    if (rmRes.error) console.warn('Could not remove previous calendar file', rmRes.error);
+  }
+  var path = scope.type + '-' + scope.id + '/' + Date.now() + '-' + fileName.replace(/[^\w.\-]+/g, '_');
+  var upRes = await supabaseClient.storage.from('calendars').upload(path, new Blob([arrayBuffer]), {
+    contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  });
+  if (upRes.error) { console.warn('Calendar upload failed', upRes.error); if (typeof showToast === 'function') showToast('Calendar file could not be saved: ' + upRes.error.message, '#c0392b'); return; }
+  var upsertRes = await supabaseClient.from('calendars').upsert({
+    scope_type: scope.type, scope_id: scope.id, file_name: fileName, storage_path: path,
+    cal_periods: calPeriods, cal_holidays: calHolidays
+  }, { onConflict: 'scope_type,scope_id' });
+  if (upsertRes.error) { console.warn('Could not save calendar record', upsertRes.error); if (typeof showToast === 'function') showToast('Calendar could not be saved: ' + upsertRes.error.message, '#c0392b'); }
+}
+
 function loadTKCalendarFile(input) {
   var file = input.files[0]; if (!file) return;
   var reader = new FileReader();
-  reader.onload = function(e) {
+  reader.onload = async function(e) {
     try {
       var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', raw:true});
       _parseTKCalWb(wb, file.name);
@@ -20314,21 +20459,25 @@ function loadTKCalendarFile(input) {
       var fn = document.getElementById('cal-file-name');
       if (fn) { fn.textContent = file.name; fn.title = file.name; }
 
-      // Archive this upload into Policy Bank — so if a newer calendar replaces this one
-      // later, the previous version stays reachable for reference instead of just vanishing.
+      // Persist as the one active calendar for this scope -- replaces whatever was there
+      // before, both in Storage and in the calendars table (see _persistCalendar).
+      var _scope = (typeof _calScope === 'function') ? _calScope() : null;
+      if (_scope) {
+        await _persistCalendar(_scope, file.name, e.target.result, _calGet().calPeriods, _calGet().calHolidays);
+      }
+
+      // Archive this upload into Policy Bank as a separate historical record — so past
+      // calendar versions stay reachable for reference even after being replaced above.
       var _pkForArchive = (window.currentWsGroup && typeof clientGroups !== 'undefined' && clientGroups[window.currentWsGroup])
         ? (clientGroups[window.currentWsGroup].subs || [window.currentWsGroup])[0]
         : (window.currentWsClient || '');
-      if (typeof policyFiles !== 'undefined' && _pkForArchive) {
-        policyFiles.push({
-          clientKey: _pkForArchive,
-          name: file.name,
-          type: file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          size: file.size,
-          content: arrayBufferToDataURL(e.target.result, file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
-          dateAdded: new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
-        });
-        if (typeof renderPolicyFiles === 'function') renderPolicyFiles();
+      var _companyIdForArchive = _pkForArchive && clients[_pkForArchive] ? clients[_pkForArchive].companyId : null;
+      if (_companyIdForArchive) {
+        await _archivePolicyFile(
+          _companyIdForArchive, _pkForArchive,
+          new Blob([e.target.result], { type: file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+          file.name, file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', file.size
+        );
       }
 
       renderTKCalendar();
