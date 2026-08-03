@@ -395,7 +395,8 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
 </head>
 <body>
 <div id="login-overlay" style="position:fixed;inset:0;z-index:99999;background:#0A3E1D;display:flex;align-items:center;justify-content:center;font-family:Rubik,sans-serif;">
-  <div style="width:320px;max-width:90vw;background:#fff;border-radius:20px;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+  <div id="login-checking" style="color:rgba(255,255,255,0.6);font-size:13px;">Checking session&hellip;</div>
+  <div id="login-box" style="display:none;width:320px;max-width:90vw;background:#fff;border-radius:20px;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
     <div style="font-size:20px;font-weight:600;color:#1a1a2e;margin-bottom:4px;">Sprout TKFlow</div>
     <div style="font-size:13px;color:#6b6b7b;margin-bottom:24px;">Sign in with your Sprout email</div>
     <form id="login-form">
@@ -412,9 +413,16 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
 <script>
 (function(){
   var loginOverlay = document.getElementById('login-overlay');
+  var loginChecking = document.getElementById('login-checking');
+  var loginBox = document.getElementById('login-box');
   var loginForm = document.getElementById('login-form');
   var loginError = document.getElementById('login-error');
   var loginSubmit = document.getElementById('login-submit');
+
+  function showLoginForm() {
+    loginChecking.style.display = 'none';
+    loginBox.style.display = 'block';
+  }
 
   // Merges Supabase's companies/company_groups/company_pocs into the
   // existing clients/clientGroups objects. Only overwrites fields that
@@ -523,9 +531,11 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
     loginSubmit.textContent = 'Sign in';
   });
 
-  supabaseClient.auth.getSession().then(function(result) {
+  supabaseClient.auth.getSession().then(async function(result) {
     var session = result.data.session;
-    if (session) loadCurrentUserFromSession(session);
+    if (!session) { showLoginForm(); return; }
+    var ok = await loadCurrentUserFromSession(session);
+    if (!ok) showLoginForm();
   });
 })();
 </script>
