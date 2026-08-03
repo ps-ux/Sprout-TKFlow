@@ -5650,7 +5650,7 @@ function filterClientAssignments(q) {
 // Reassigns a client's Specialist/Auditor roles based on the checked boxes. Fully replaces
 // the previous assignment (rather than only adding), so passing a client off entirely — e.g.
 // removing yourself and giving it to someone else — is a single Save, not a two-step process.
-function saveClientAssignment(groupKey) {
+async function saveClientAssignment(groupKey) {
   var grp = clientGroups[groupKey];
   if (!grp) return;
   var subKeys = grp.subs || [groupKey];
@@ -5662,6 +5662,35 @@ function saveClientAssignment(groupKey) {
   // whether it actually changed and log it to processor history.
   var oldSpecs = Object.keys(USERS).filter(function(uk){ return subKeys.some(function(sk){ return (USERS[uk].processClients||[]).includes(sk); }); }).map(function(uk){ return USERS[uk].name; });
 
+  // Persist to Supabase: clear every existing relation for these companies, then insert
+  // fresh ones below from the checkboxes -- this used to be entirely in-memory (USERS[]
+  // only), so reassigning a client here silently reverted on the next reload. Companies
+  // without a real companyId (e.g. added via Add Subcompany, never wired to Supabase) fall
+  // back to the old in-memory-only behavior, same limitation as Add Client.
+  var companyIds = subKeys.map(function(sk){ return clients[sk] && clients[sk].companyId; }).filter(Boolean);
+  var uidByEmail = {};
+  if (companyIds.length) {
+    var delRes = await supabaseClient.from('user_company_relations').delete().in('company_id', companyIds);
+    if (delRes.error) console.warn('Could not clear previous assignments', delRes.error);
+    var usersLookupRes = await supabaseClient.from('users').select('id, email').in('email', Object.keys(USERS).map(function(uk){ return USERS[uk].email; }));
+    (usersLookupRes.data || []).forEach(function(u){ uidByEmail[u.email] = u.id; });
+  }
+  var relationRows = [];
+  function queueRelation(mk, relType) {
+    var uid = uidByEmail[USERS[mk].email];
+    if (!uid) return; // no real account yet -- stays in-memory only for this session
+    companyIds.forEach(function(cid) { relationRows.push({ user_id: uid, company_id: cid, relation_type: relType }); });
+  }
+  // Keeps currentUser's own session in sync immediately, mirroring Add Client -- currentUser
+  // is a separate object from USERS[uk] once real auth is in place.
+  function syncCurrentUser(mk, listName, sk, add) {
+    if (!currentUser || currentUser.email !== USERS[mk].email) return;
+    if (!currentUser[listName]) currentUser[listName] = [];
+    var idx = currentUser[listName].indexOf(sk);
+    if (add && idx === -1) currentUser[listName].push(sk);
+    if (!add && idx !== -1) currentUser[listName].splice(idx, 1);
+  }
+
   // Clear this client from every user's role arrays first, then rebuild from the checkboxes —
   // avoids leftover stale entries if someone was previously assigned and is now unchecked.
   // auditClients is deliberately left untouched while the Auditor role is disabled, so existing
@@ -5672,7 +5701,21 @@ function saveClientAssignment(groupKey) {
       u.processClients  = (u.processClients||[]).filter(function(x){ return x !== sk; });
       if (AUDITOR_ROLE_ENABLED) u.auditClients = (u.auditClients||[]).filter(function(x){ return x !== sk; });
       u.assignedClients = (u.assignedClients||[]).filter(function(x){ return x !== sk; });
+      syncCurrentUser(uk, 'processClients', sk, false);
+      if (AUDITOR_ROLE_ENABLED) syncCurrentUser(uk, 'auditClients', sk, false);
+      syncCurrentUser(uk, 'assignedClients', sk, false);
     });
+  });
+
+  // Admins (canAssign) must always be able to see every client, regardless of checkboxes --
+  // same rule Add Client applies.
+  Object.keys(USERS).forEach(function(uk) {
+    if (!USERS[uk].canAssign) return;
+    subKeys.forEach(function(sk) {
+      if (!USERS[uk].assignedClients.includes(sk)) USERS[uk].assignedClients.push(sk);
+      syncCurrentUser(uk, 'assignedClients', sk, true);
+    });
+    queueRelation(uk, 'assigned');
   });
 
   rows.forEach(function(row) {
@@ -5685,13 +5728,32 @@ function saveClientAssignment(groupKey) {
       if (isSpec) {
         if (!USERS[mk].processClients.includes(sk)) USERS[mk].processClients.push(sk);
         if (!USERS[mk].assignedClients.includes(sk)) USERS[mk].assignedClients.push(sk);
+        syncCurrentUser(mk, 'processClients', sk, true);
+        syncCurrentUser(mk, 'assignedClients', sk, true);
       }
       if (isAud) {
         if (!USERS[mk].auditClients.includes(sk)) USERS[mk].auditClients.push(sk);
         if (!USERS[mk].assignedClients.includes(sk)) USERS[mk].assignedClients.push(sk);
+        syncCurrentUser(mk, 'auditClients', sk, true);
+        syncCurrentUser(mk, 'assignedClients', sk, true);
       }
     });
+    if (isSpec) { queueRelation(mk, 'assigned'); queueRelation(mk, 'processing'); }
+    if (isAud)  { queueRelation(mk, 'assigned'); queueRelation(mk, 'audit'); }
   });
+
+  if (relationRows.length) {
+    // Dedup -- 'assigned' can be queued twice (once via canAssign, once via isSpec/isAud).
+    var seen = {};
+    relationRows = relationRows.filter(function(r) {
+      var k = r.user_id + '|' + r.company_id + '|' + r.relation_type;
+      if (seen[k]) return false;
+      seen[k] = true;
+      return true;
+    });
+    var insRes = await supabaseClient.from('user_company_relations').insert(relationRows);
+    if (insRes.error) { console.warn('Could not save assignment changes', insRes.error); if (typeof showToast === 'function') showToast('Could not save assignment changes: ' + insRes.error.message, '#c0392b'); }
+  }
 
   // Log the change to processor history if the Specialist actually changed — closes out
   // whoever it was before with today as their end date, and opens a new entry for whoever
