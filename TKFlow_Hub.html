@@ -9792,7 +9792,7 @@ function runVariance(opts) {
       var attR1 = VAR_KEEP.map(function(_,i){ return i+1; }).concat(['']);
       var attSheetData = [attR0, attR1, attHeaders].concat(attData.map(function(e){ return e.row; }));
       var wsAtt = XLSX.utils.aoa_to_sheet(attSheetData);
-      wsAtt['!cols'] = [12,22].concat(new Array(33).fill(9)).concat([20]).map(function(w){return{wch:w};});
+      wsAtt['!cols'] = autoFitCols(attSheetData);
       // Colors applied in varDownload via JSZip patch
       XLSX.utils.book_append_sheet(wb, wsAtt, attSheetName);
 
@@ -9800,8 +9800,9 @@ function runVariance(opts) {
       // computed above from the PayReg rates. ──
       var r0Amt = [attData.length, 0, 'Checking of HC (Attendance Variance)'].concat(new Array(32).fill(''));
       var r1Amt = ['',''].concat(MULTS.slice(2));
-      var wsAmt = XLSX.utils.aoa_to_sheet([r0Amt, r1Amt, VAR_KEEP.slice()].concat(amtData));
-      wsAmt['!cols'] = [12,22].concat(new Array(33).fill(9)).map(function(w){return{wch:w};});
+      var amtSheetData = [r0Amt, r1Amt, VAR_KEEP.slice()].concat(amtData);
+      var wsAmt = XLSX.utils.aoa_to_sheet(amtSheetData);
+      wsAmt['!cols'] = autoFitCols(amtSheetData);
       XLSX.utils.book_append_sheet(wb, wsAmt, amtSheetName);
 
       // PayReg sheet
