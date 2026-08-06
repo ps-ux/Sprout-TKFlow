@@ -637,10 +637,11 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       };
       await loadCompaniesFromSupabase();
       await loadUserRelationsFromSupabase();
-      // All three depend on clients/clientGroups (companyId/groupId) already being populated above.
+      // All four depend on clients/clientGroups (companyId/groupId) already being populated above.
       await loadPolicyFilesFromSupabase();
       await loadCalendarsFromSupabase();
       await loadDisputesFromSupabase();
+      await loadTaskStatusFromSupabase();
       if (typeof refreshUserUI === 'function') refreshUserUI();
       if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
       if (typeof renderDashSchedule === 'function') renderDashSchedule();
@@ -7799,6 +7800,37 @@ var taskBodyCache = {};
 // Global task status store: {clientKey: {taskKey: 'done'|'skipped'|'pending', skipReason:''}}
 var taskStatus = {};
 
+// Populates the real in-memory taskStatus from Supabase's task_runs table on boot --
+// called from loadCurrentUserFromSession()'s boot sequence, after clients[key].companyId
+// has been populated. Without this, marking a task Done/Skipped only ever lived in this
+// object, which resets to empty on every reload.
+async function loadTaskStatusFromSupabase() {
+  var res = await supabaseClient.from('task_runs').select('*');
+  if (res.error) { console.warn('Failed to load task status from Supabase', res.error); return; }
+  var companyIdToKey = {};
+  Object.keys(clients).forEach(function(k) {
+    if (clients[k] && clients[k].companyId) companyIdToKey[clients[k].companyId] = k;
+  });
+  (res.data || []).forEach(function(row) {
+    var k = companyIdToKey[row.company_id];
+    if (!k) return;
+    if (!taskStatus[k]) taskStatus[k] = {};
+    taskStatus[k][row.task_key] = { st: row.status, reason: row.reason || '', timestamp: row.updated_at };
+  });
+}
+
+// Fire-and-forget upsert -- the in-memory taskStatus write already happened synchronously
+// right before this is called, so nothing blocks on the network round-trip.
+function saveTaskRun(clientKey, taskKey, st, reason) {
+  var companyId = clients[clientKey] && clients[clientKey].companyId;
+  if (!companyId) return; // client not yet synced from Supabase -- nothing to persist against
+  supabaseClient.from('task_runs').upsert({
+    company_id: companyId, task_key: taskKey, status: st, reason: reason || '', updated_at: new Date().toISOString()
+  }, { onConflict: 'company_id,task_key' }).then(function(res) {
+    if (res.error) console.warn('Could not save task status for ' + clientKey + '/' + taskKey, res.error);
+  });
+}
+
 // ── Per-client task applicability (toggle switches in Client Profile) ──────
 // clients[key].taskConfig = { taskKey: true|false }. Absence of taskConfig, or
 // absence of a specific key within it, means "enabled" (backward compatible).
@@ -8303,6 +8335,7 @@ function setTaskStatus(taskKey, st, reason) {
   targets.forEach(function(k) {
     if (!taskStatus[k]) taskStatus[k] = {};
     taskStatus[k][taskKey] = {st:st, reason:reason||'', timestamp: new Date().toISOString()};
+    saveTaskRun(k, taskKey, st, reason);
 
     // Per-run history -- taskStatus above is a single overwritten "current" flag with no
     // record of earlier runs in the same cutoff, so running a task twice used to leave no
@@ -8477,6 +8510,7 @@ function finalizeBatchTaskIfApplicable(taskKey, st, reason) {
   doneGroups.forEach(function(g) {
     if (!taskStatus[g.clientKey]) taskStatus[g.clientKey] = {};
     taskStatus[g.clientKey][taskKey] = { st: st, reason: reason || '', timestamp: new Date().toISOString() };
+    saveTaskRun(g.clientKey, taskKey, st, reason);
     logTaskProgress(g.clientKey);
     // Same open→done duration logging as setTaskStatus() — batch tasks (Variance,
     // Validation, Disputes Summary) finalize through here instead, so without this they'd
