@@ -9750,14 +9750,6 @@ function runVariance(opts) {
         if (out.length > 31) out = out.slice(0, 31);
         return out || 'Sheet';
       }
-      function q(sheetName) { return "'" + sheetName.replace(/'/g, "''") + "'"; }
-
-      // Set a cell to a live formula while keeping a cached display value
-      function setFormula(ws, r0, c0, formula, cachedVal) {
-        var addr = XLSX.utils.encode_cell({r:r0, c:c0});
-        ws[addr] = {t:'n', f: formula, v: (typeof cachedVal === 'number' ? cachedVal : 0)};
-      }
-
       var origSheetName = sanitizeSheetName('Orig ' + payout);
       var acoSheetName   = 'ACO';
       var attSheetName   = 'Attendance';
@@ -9768,7 +9760,9 @@ function runVariance(opts) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(makeAttSheet(orig.rows)), origSheetName);
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(makeAttSheet(aco.rows)),  acoSheetName);
 
-      // ── Attendance sheet — live formulas (Orig/ACO looked up by ID, not by row position) ──
+      // ── Attendance sheet — static values only (no formulas), so the file is a fixed
+      // report rather than a reusable calculation template. Values are the same diffs
+      // already computed above in JS; aoa_to_sheet writes them as plain numbers.
       // Attendance gets one extra column vs Orig/ACO/Amt: "Flag", noting employees missing
       // from one of the two source files so their diff numbers aren't mistaken for real variances.
       var attHeaders = VAR_KEEP.concat(['Flag']);
@@ -9777,57 +9771,15 @@ function runVariance(opts) {
       var attSheetData = [attR0, attR1, attHeaders].concat(attData.map(function(e){ return e.row; }));
       var wsAtt = XLSX.utils.aoa_to_sheet(attSheetData);
       wsAtt['!cols'] = [12,22].concat(new Array(33).fill(9)).concat([20]).map(function(w){return{wch:w};});
-
-      function timeExpr(cellExpr) {
-        return '(VALUE(LEFT(' + cellExpr + ',FIND(":",' + cellExpr + ')-1))+VALUE(MID(' + cellExpr + ',FIND(":",' + cellExpr + ')+1,2))/60)';
-      }
-      function vlk(sheetQ, idCell, colIdx1, fallback) {
-        return 'IFERROR(VLOOKUP(' + idCell + ',' + sheetQ + '!$A:$AI,' + colIdx1 + ',FALSE),' + fallback + ')';
-      }
-
-      attData.forEach(function(emp, ri) {
-        var r0 = 3 + ri; // 0-indexed sheet row (Excel row 4+ri)
-        var idCell = '$A' + (r0 + 1);
-        for (var ci = 2; ci < 35; ci++) {
-          var colIdx1 = ci + 1; // 1-based column for VLOOKUP col_index_num
-          var origRef = vlk(q(origSheetName), idCell, colIdx1, (ci <= 3 ? '0' : '"00:00"'));
-          var acoRef  = vlk(q(acoSheetName),  idCell, colIdx1, (ci <= 3 ? '0' : '"00:00"'));
-          var formula;
-          if (ci <= 3) { // Days Absent, Undertime: plain numbers, Orig - ACO
-            formula = 'ROUND(VALUE(' + origRef + ')-VALUE(' + acoRef + '),2)';
-          } else { // OT/ND/RD/etc: HH:MM text, ACO - Orig
-            formula = 'ROUND(' + timeExpr(acoRef) + '-' + timeExpr(origRef) + ',2)';
-          }
-          setFormula(wsAtt, r0, ci, formula, emp.row[ci]);
-        }
-      });
       // Colors applied in varDownload via JSZip patch
       XLSX.utils.book_append_sheet(wb, wsAtt, attSheetName);
 
-      // ── Amt sheet — live formulas mirroring the reference template's VLOOKUP logic ──
+      // ── Amt sheet — static values only (no formulas); amtData was already fully
+      // computed above from the PayReg rates. ──
       var r0Amt = [attData.length, 0, 'Checking of HC (Attendance Variance)'].concat(new Array(32).fill(''));
       var r1Amt = ['',''].concat(MULTS.slice(2));
       var wsAmt = XLSX.utils.aoa_to_sheet([r0Amt, r1Amt, VAR_KEEP.slice()].concat(amtData));
       wsAmt['!cols'] = [12,22].concat(new Array(33).fill(9)).map(function(w){return{wch:w};});
-
-      if (payreg) {
-        var payregQ = q(payregSheetName);
-        var attQ    = q(attSheetName);
-        attData.forEach(function(emp, ri) {
-          var r0 = 3 + ri;
-          var excelRow = r0 + 1;
-          var idCell = '$A' + excelRow;
-          var rateBase = '(' + vlk(payregQ, idCell, 12, '0') + '/' + vlk(payregQ, idCell, 11, '1') + '*12)';
-          for (var ci = 2; ci < 35; ci++) {
-            var colLetter = XLSX.utils.encode_col(ci);
-            var multCell = colLetter + '$2';
-            var attLookup = vlk(attQ, idCell, ci + 1, '0');
-            var rate = ci === 2 ? rateBase : (ci === 3 ? '(' + rateBase + '/8/60)' : '(' + rateBase + '/8)');
-            var formula = 'IF(' + idCell + '="","",IFERROR(ROUND(' + rate + '*' + multCell + '*' + attLookup + ',2),0))';
-            setFormula(wsAmt, r0, ci, formula, amtData[ri][ci]);
-          }
-        });
-      }
       XLSX.utils.book_append_sheet(wb, wsAmt, amtSheetName);
 
       // PayReg sheet
