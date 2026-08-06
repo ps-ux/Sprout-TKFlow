@@ -10998,6 +10998,15 @@ function tkDownloadOutput() {
     return;
   }
   var clientKey = (typeof currentWsClient !== 'undefined' ? currentWsClient : null) || window._wsClient || 'Client';
+  // Captured synchronously, right now, rather than inside the .then() far below — this
+  // function's own zip-patching chain is async, and tkDownloadAllGroups() calls
+  // tkSwitchGroup(next) for the NEXT subcompany only ~600ms after kicking this one off.
+  // Reading tkActiveGroupIdx/tkBatchGroups lazily inside the async chain risked reading
+  // whichever subcompany had been switched to by the time the promise settled, not the
+  // one this download actually started for — producing correct file contents (raw/window._tkRaw
+  // is also captured synchronously) but the wrong filename.
+  var tkSubNameAtCallTime = (typeof tkActiveGroupIdx !== 'undefined' && tkActiveGroupIdx >= 0 && tkBatchGroups[tkActiveGroupIdx])
+    ? (tkBatchGroups[tkActiveGroupIdx].clientKey || tkBatchGroups[tkActiveGroupIdx].name || '') : '';
 
   function clean(v) { return String(v==null?'':v).trim(); }
 
@@ -11719,7 +11728,7 @@ function tkDownloadOutput() {
       });
     });
   }).then(function(patched) {
-    var subName = (tkActiveGroupIdx >= 0 && tkBatchGroups[tkActiveGroupIdx]) ? (tkBatchGroups[tkActiveGroupIdx].clientKey || tkBatchGroups[tkActiveGroupIdx].name || '') : '';
+    var subName = tkSubNameAtCallTime;
     // Standardized filename pattern: Client_Report Name_Payout Period — this was previously
     // missing the payout period entirely, unlike every other task's export.
     var _tkPayoutForName = '';
@@ -12111,8 +12120,14 @@ function runValidation(opts) {
     var shiftRange = parseShiftRange(shiftStr);
     var bioRange = parseBiologRange(biologsStr);
 
+    var hasValidTotalHrs = totalHrs !== undefined && totalHrs !== null && totalHrs !== '' && !isNaN(parseFloat(totalHrs));
+
     if (lateMins > 0) {
-      if (shiftRange && bioRange && bioRange.start !== null) {
+      // Only frame it as "logged in late" when the login actually is after shift start \u2014
+      // the Late figure comes straight from the source file and isn't guaranteed to line
+      // up with what our own shift/biolog parsing sees (e.g. a data quirk), so don't assert
+      // a direction that the parsed times don't actually support.
+      if (shiftRange && bioRange && bioRange.start !== null && (bioRange.start - shiftRange.start) > 0) {
         reasons.push('Logged in at ' + fmtClock(bioRange.start) + ', ' + lateMins + ' min after shift start (' + fmtClock(shiftRange.start) + ')');
       } else {
         reasons.push('Late ' + lateMins + ' min');
@@ -12121,14 +12136,21 @@ function runValidation(opts) {
     if (undertimeMins > 0) {
       if (isFlexi) {
         var reqHrs = 9;
-        if (totalHrs !== undefined && totalHrs !== null && totalHrs !== '' && !isNaN(parseFloat(totalHrs))) {
+        if (hasValidTotalHrs) {
           var shortHrs = (reqHrs - parseFloat(totalHrs)).toFixed(1);
           reasons.push('Worked ' + totalHrs + ' hrs \u2014 ' + shortHrs + ' hrs short of the required ' + reqHrs + ' hrs/day (Flexi)');
         } else {
           reasons.push('Undertime ' + undertimeMins + ' min (Flexi \u2014 below required ' + reqHrs + ' hrs/day)');
         }
-      } else if (shiftRange && bioRange && bioRange.end !== null) {
+      } else if (shiftRange && bioRange && bioRange.end !== null && (shiftRange.end - bioRange.end) > 0) {
+        // Only frame it as "logged out early" when the logout actually is before shift end \u2014
+        // an early-login/late-logout day can still land short on total hours (which include
+        // the required unpaid lunch) without the logout itself being early at all.
         reasons.push('Logged out at ' + fmtClock(bioRange.end) + ', ' + undertimeMins + ' min before shift end (' + fmtClock(shiftRange.end) + ')');
+      } else if (hasValidTotalHrs) {
+        // Logout (and login) times don't explain the shortfall \u2014 the real reason is total
+        // hours worked came in under the required 8 hrs work + 1 hr unpaid lunch.
+        reasons.push('Worked ' + totalHrs + ' hrs \u2014 ' + undertimeMins + ' min short of the required 9 hrs/day (8 hrs work + 1 hr unpaid lunch)');
       } else {
         reasons.push('Undertime ' + undertimeMins + ' min');
       }
