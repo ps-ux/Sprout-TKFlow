@@ -11413,7 +11413,7 @@ function tkDownloadOutput() {
       if (ev.flagType === 'late_undertime') {
         type = (ev.lateMins>0 && ev.undertimeMins>0) ? 'Late + Undertime' : (ev.lateMins>0 ? 'Late' : 'Undertime');
         num = (ev.lateMins>0 && ev.undertimeMins>0) ? (ev.lateMins + ' / ' + ev.undertimeMins) : (ev.lateMins>0 ? ev.lateMins : ev.undertimeMins);
-        remark = ''; // Type + No. already say everything needed
+        remark = ev.remark || ''; // same text shown (and editable) in the preview
       } else {
         type = ev.isHalfDay ? 'Half Day Absent' : 'Absent';
         num = ev.isHalfDay ? 0.5 : 1;
