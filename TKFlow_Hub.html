@@ -12148,11 +12148,12 @@ function runValidation(opts) {
         // the required unpaid lunch) without the logout itself being early at all.
         reasons.push('Logged out at ' + fmtClock(bioRange.end) + ', ' + undertimeMins + ' min before shift end (' + fmtClock(shiftRange.end) + ')');
       } else if (hasValidTotalHrs) {
-        // Logout (and login) times don't explain the shortfall \u2014 the real reason is total
-        // hours worked came in under the required work hours per day. undertimeMins comes
-        // straight from the attendance report's own Undertime column, not a recomputed value,
-        // so it always matches what the report itself says.
-        reasons.push('Worked ' + totalHrs + ' hrs \u2014 ' + undertimeMins + ' min short of the required work hours per day');
+        // Logout (and login) times don't explain the shortfall \u2014 the real reason is the
+        // logged span came in under the required work hours per day. Calling it "worked"
+        // hours would be misleading since that span includes the unpaid lunch break, not
+        // just working time. undertimeMins comes straight from the attendance report's own
+        // Undertime column, not a recomputed value, so it always matches what the report says.
+        reasons.push('Biologs duration ' + totalHrs + ' hrs \u2014 ' + undertimeMins + ' min short of the required work hours per day');
       } else {
         reasons.push('Undertime ' + undertimeMins + ' min');
       }
