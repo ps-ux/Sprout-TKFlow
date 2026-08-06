@@ -10459,6 +10459,157 @@ const tkReviewRows = [
 var tkBatchGroups = [];   // [{name, tkReviewRows:[], tkSummaryEmployees:[], _tkRaw:null, status:'pending'|'processing'|'done'|'error', errorMsg:''}]
 var tkActiveGroupIdx = -1;
 
+// ── Validation review-state persistence (task_review_state + validation-uploads bucket) ──
+// Without this, an accidental reload mid-review lost both the review progress (checked
+// rows, edited remarks) AND required re-uploading the 3 source files, since tkDownloadOutput()
+// patches the ORIGINAL files' own bytes to build the final output -- it can't be rebuilt from
+// tkReviewRows data alone.
+
+function tkUploadValidationFile(companyId, slot, arrayBuffer) {
+  var path = companyId + '/' + slot + '.xlsx';
+  return supabaseClient.storage.from('validation-uploads').upload(path, new Blob([arrayBuffer]), { upsert: true }).then(function(res) {
+    if (res.error) throw res.error;
+    return path;
+  });
+}
+
+function tkDownloadValidationFile(path) {
+  return supabaseClient.storage.from('validation-uploads').download(path).then(function(res) {
+    if (res.error) throw res.error;
+    return res.data.arrayBuffer();
+  });
+}
+
+// Called once, right when a group finishes processing (see runValidationBatch's onDone).
+// Captures tkReviewRows/_tkRaw synchronously, before any await -- tkReviewRows is a single
+// shared array every group in a batch reuses, and runValidationBatch resets it (and
+// window._tkRaw) at the start of processing the NEXT group; reading either lazily after an
+// await here would risk saving the wrong group's data (the same class of race fixed earlier
+// this session in tkDownloadOutput's filename).
+async function tkSaveFullSnapshot(clientKey) {
+  var companyId = clients[clientKey] && clients[clientKey].companyId;
+  if (!companyId) return;
+  var reviewRowsSnapshot = tkReviewRows.slice();
+  var summaryEmployeesSnapshot = (window.tkSummaryEmployees || []).slice();
+  var raw = window._tkRaw || {};
+  var attBuf = raw.attBuf, acBuf = raw.acBuf, bioBuf = raw.bioBuf;
+
+  var attPath = null, acPath = null, bioPath = null;
+  try {
+    if (attBuf) attPath = await tkUploadValidationFile(companyId, 'att', attBuf);
+    if (acBuf)  acPath  = await tkUploadValidationFile(companyId, 'ac',  acBuf);
+    if (bioBuf) bioPath = await tkUploadValidationFile(companyId, 'bio', bioBuf);
+  } catch (e) {
+    console.warn('Could not upload Validation source files for ' + clientKey, e);
+  }
+  var res = await supabaseClient.from('task_review_state').upsert({
+    company_id: companyId, task_key: 'validation',
+    data: { tkReviewRows: reviewRowsSnapshot, tkSummaryEmployees: summaryEmployeesSnapshot },
+    att_storage_path: attPath, ac_storage_path: acPath, bio_storage_path: bioPath,
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'company_id,task_key' });
+  if (res.error) console.warn('Could not save Validation review state for ' + clientKey, res.error);
+}
+
+// Debounced per-edit save (checkbox toggles, remark edits, add/remove employee all funnel
+// through renderTKReview) -- one timer per companyId so editing one subcompany then quickly
+// switching to another doesn't cancel the first one's pending save. Doesn't touch the
+// storage paths (files don't change during review), only the reviewed row data.
+var _tkReviewSaveTimers = {};
+function tkScheduleReviewSave() {
+  var activeG = (typeof tkActiveGroupIdx !== 'undefined' && tkActiveGroupIdx >= 0) ? tkBatchGroups[tkActiveGroupIdx] : null;
+  var clientKey = activeG && activeG.clientKey;
+  if (!clientKey) return;
+  var companyId = clients[clientKey] && clients[clientKey].companyId;
+  if (!companyId) return;
+  // Captured synchronously now, not inside the timeout -- same race-avoidance reasoning as
+  // tkSaveFullSnapshot above.
+  var reviewRowsSnapshot = tkReviewRows.slice();
+  var summaryEmployeesSnapshot = (window.tkSummaryEmployees || []).slice();
+  if (_tkReviewSaveTimers[companyId]) clearTimeout(_tkReviewSaveTimers[companyId]);
+  _tkReviewSaveTimers[companyId] = setTimeout(function() {
+    delete _tkReviewSaveTimers[companyId];
+    supabaseClient.from('task_review_state').upsert({
+      company_id: companyId, task_key: 'validation',
+      data: { tkReviewRows: reviewRowsSnapshot, tkSummaryEmployees: summaryEmployeesSnapshot },
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'company_id,task_key' }).then(function(res) {
+      if (res.error) console.warn('Could not save Validation review progress for ' + clientKey, res.error);
+    });
+  }, 1000);
+}
+
+// Converts ISO date strings back into real Date objects for the specific fields that hold
+// them (evidence[].dateObj, allDetailedRows[].dateObj, _summaryDates[]) -- JSON already
+// turned these into ISO strings automatically on the way to Supabase (Date.toJSON()); this
+// reverses it so the rest of the app's Date-object methods (.getMonth(), .getDate(), ...)
+// keep working on restored data exactly as they do on freshly-parsed data.
+function tkReviveReviewState(data) {
+  var rows = (data.tkReviewRows || []).map(function(r) {
+    r.evidence = (r.evidence || []).map(function(ev) {
+      if (ev.dateObj) ev.dateObj = new Date(ev.dateObj);
+      return ev;
+    });
+    r.allDetailedRows = (r.allDetailedRows || []).map(function(dr) {
+      if (dr.dateObj) dr.dateObj = new Date(dr.dateObj);
+      return dr;
+    });
+    r._summaryDates = (r._summaryDates || []).map(function(d) { return new Date(d); });
+    return r;
+  });
+  return { tkReviewRows: rows, tkSummaryEmployees: data.tkSummaryEmployees || [] };
+}
+
+// If Supabase has a saved Validation session for this subcompany (from before a reload wiped
+// tkBatchGroups), restores it -- files included, so nothing needs re-uploading. Only restores
+// into a group that hasn't already been processed in THIS session (status still 'pending'),
+// so it never clobbers active work, and re-checks after each await in case the group moved on
+// (different subcompany picked, or a fresh upload started) while this was in flight.
+async function tkTryRestoreFromSupabase(gi) {
+  var g = tkBatchGroups[gi];
+  if (!g || !g.clientKey || g.status !== 'pending') return;
+  var clientKeyAtStart = g.clientKey;
+  var companyId = clients[clientKeyAtStart] && clients[clientKeyAtStart].companyId;
+  if (!companyId) return;
+
+  var res = await supabaseClient.from('task_review_state').select('*')
+    .eq('company_id', companyId).eq('task_key', 'validation').maybeSingle();
+  if (res.error) { console.warn('Could not check for a saved Validation session for ' + clientKeyAtStart, res.error); return; }
+  if (!res.data) return;
+
+  g = tkBatchGroups[gi];
+  if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending') return;
+
+  var row = res.data;
+  var attBuf = null, acBuf = null, bioBuf = null;
+  try {
+    if (row.att_storage_path) attBuf = await tkDownloadValidationFile(row.att_storage_path);
+    if (row.ac_storage_path)  acBuf  = await tkDownloadValidationFile(row.ac_storage_path);
+    if (row.bio_storage_path) bioBuf = await tkDownloadValidationFile(row.bio_storage_path);
+  } catch (e) {
+    console.warn('Could not download saved Validation source files for ' + clientKeyAtStart, e);
+  }
+
+  g = tkBatchGroups[gi];
+  if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending') return;
+
+  var revived = tkReviveReviewState(row.data || {});
+  g.tkReviewRows = revived.tkReviewRows;
+  g.tkSummaryEmployees = revived.tkSummaryEmployees;
+  g._tkRaw = {
+    attWb: attBuf ? XLSX.read(new Uint8Array(attBuf), {type:'array'}) : null,
+    acWb:  acBuf  ? XLSX.read(new Uint8Array(acBuf),  {type:'array'}) : null,
+    bioWb: bioBuf ? XLSX.read(new Uint8Array(bioBuf), {type:'array'}) : null,
+    attBuf: attBuf, acBuf: acBuf, bioBuf: bioBuf
+  };
+  g.status = 'done';
+  if (typeof renderTKBatchList === 'function') renderTKBatchList();
+  if (gi === tkActiveGroupIdx || (tkActiveGroupIdx < 0 && gi === 0)) {
+    tkSwitchGroup(gi);
+  }
+  if (typeof showToast === 'function') showToast('Restored your previous Validation progress for ' + (g.name || g.clientKey));
+}
+
 function buildValidationRunner(body) {
   document.getElementById('task-modal-sub').textContent = 'Upload files per subcompany, then process all at once';
   var wsKeyTk = (window.currentWsGroup || window.currentWsClient || '');
@@ -10473,6 +10624,12 @@ function buildValidationRunner(body) {
     tkBatchGroups = [{ name: _defaultKeyTk ? (clients[_defaultKeyTk].name||_defaultKeyTk) : 'Subcompany 1', clientKey: _defaultKeyTk, tkReviewRows: [], tkSummaryEmployees: [], _tkRaw: null, status: 'pending', errorMsg: '' }];
     tkActiveGroupIdx = -1;
     window._tkWsKey = wsKeyTk;
+    // Reload wiped tkBatchGroups (that's what got us into this branch) -- check Supabase for
+    // a saved session for this subcompany so the review picks up where it left off, with no
+    // re-upload needed. Only fires when there's exactly one subcompany in scope (the common
+    // single-client-workspace case); the multi-subcompany case is covered by tkSetGroupClient
+    // below once a subcompany is actually picked.
+    if (_defaultKeyTk) tkTryRestoreFromSupabase(0);
   }
   // else: reopening the same workspace's already-processed results — keep tkBatchGroups as-is
 
@@ -10533,6 +10690,7 @@ function tkGroupCardHtml(g, gi) {
 function tkSetGroupClient(gi, key) {
   tkBatchGroups[gi].clientKey = key || null;
   tkBatchGroups[gi].name = key ? (clients[key].name || key) : ('Subcompany ' + (gi + 1));
+  if (key) tkTryRestoreFromSupabase(gi);
 }
 
 function tkRenderUploadGroups() {
@@ -10573,6 +10731,7 @@ function renderTKReview() {
   if (typeof tkActiveGroupIdx !== 'undefined' && tkActiveGroupIdx >= 0 && typeof tkBatchGroups !== 'undefined' && tkBatchGroups[tkActiveGroupIdx]) {
     tkBatchGroups[tkActiveGroupIdx].tkReviewRows = tkReviewRows.slice();
     if (typeof renderTKBatchList === 'function') renderTKBatchList();
+    if (typeof tkScheduleReviewSave === 'function') tkScheduleReviewSave();
   }
   var resultDiv = document.getElementById('tk-result');
   if (!resultDiv) return;
@@ -12014,6 +12173,7 @@ function runValidationBatch() {
         g._tkRaw = window._tkRaw;
         g.tkAbsentEmpFull = window.tkAbsentEmpFull; // needed so "+ Add" still works after switching back to this subcompany
         g.status = 'done';
+        tkSaveFullSnapshot(g.clientKey);
         // Headcount now moves with whatever this cut-off's Attendance Report actually says —
         // full roster count from the Summary sheet, not the old static/hardcoded number.
         if (typeof window._tkFullHeadcount === 'number' && clients[g.clientKey]) {
