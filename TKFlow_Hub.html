@@ -9997,6 +9997,11 @@ function runVarianceBatch() {
     if (btn) btn.innerHTML = '<i class="ti ti-loader"></i> Processing ' + (g.name || ('Subcompany ' + (gi+1))) + '\u2026';
     varCutoffs.length = 0; // varCutoffs is the shared "active" set runVariance operates on
     Array.prototype.push.apply(varCutoffs, g.cutoffs);
+    // Keep the active-group pointer in sync with what's actually in varCutoffs right now \u2014
+    // varDownload()'s filename logic reads this, and without it the download filename falls
+    // back to whatever the outer workspace happens to be (e.g. a different subcompany) instead
+    // of the one actually selected in this group's dropdown.
+    varActiveGroupIdx = gi;
     runVariance({
       silent: true,
       onDone: function() {
