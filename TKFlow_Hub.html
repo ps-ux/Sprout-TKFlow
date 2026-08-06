@@ -883,9 +883,9 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
         <div id="admin-members-panel" style="position:relative;display:none;">
           <div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;padding:16px;margin-bottom:14px;">
             <div style="font-size:13px;font-weight:600;color:#1a1a2e;margin-bottom:4px;">Member performance metrics</div>
-            <div style="font-size:11px;color:#9898a6;margin-bottom:12px;">Avg processing time = average, across every individual task this person has completed, of the time from opening that task to marking it Done/Skipped (not a whole-cutoff span). Open TAT breaches reflect currently-open breaches, not a historical monthly count (that log doesn't exist yet).</div>
+            <div style="font-size:11px;color:#9898a6;margin-bottom:12px;">Avg processing time = average, across every individual task this person has completed, of the time from opening that task to marking it Done/Skipped (not a whole-cutoff span). Open TAT overdue reflects currently-open overdue tickets, not a historical monthly count (that log doesn't exist yet).</div>
             <div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">
-              <thead><tr style="background:#F4F4F8;"><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;">Member</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;">Clients</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;">Avg processing time</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;">Open TAT breaches</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;">Status</th></tr></thead>
+              <thead><tr style="background:#F4F4F8;"><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;">Member</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;">Clients</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;">Avg processing time</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;">Open TAT overdue</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;">Status</th></tr></thead>
               <tbody id="member-metrics-tbody"></tbody>
             </table></div>
           </div>
@@ -5120,7 +5120,7 @@ function renderMiniCal() {
 }
 
 // Dismissed (manually removed) and read state persist for the session, keyed by a stable
-// per-notification id. Time-sensitive notifications (TAT breach/due-soon) cannot be dismissed
+// per-notification id. Time-sensitive notifications (TAT overdue/due-soon) cannot be dismissed
 // manually — they only disappear once the underlying ticket is actually closed, since they're
 // rebuilt fresh from allDisputes every render and that filter already excludes closed tickets.
 window.dismissedNotifs = window.dismissedNotifs || {};
@@ -5161,7 +5161,7 @@ function renderNotifCard() {
     });
   }
 
-  // TAT breaches/warnings — time-sensitive, not manually dismissible
+  // TAT overdue/warnings — time-sensitive, not manually dismissible
   var breached = [], dueSoon = [];
   allDisputes.forEach(function(d) {
     if ((currentUser.processClients||[]).indexOf(d.client) === -1) return;
@@ -5171,7 +5171,7 @@ function renderNotifCard() {
   });
 
   breached.forEach(function(d) {
-    notifs.push({id:'tat-breach-'+d.id, timeSensitive:true, icon:'ti-alarm', color:'#c0392b', bg:'#fff0f0', text:'TAT breached: ' + d.name, sub:d.client + ' · ' + d.id, action: function(){ openWorkspace(d.client); setTimeout(function(){ switchTab('ws-disputes'); }, 80); }});
+    notifs.push({id:'tat-breach-'+d.id, timeSensitive:true, icon:'ti-alarm', color:'#c0392b', bg:'#fff0f0', text:'TAT overdue: ' + d.name, sub:d.client + ' · ' + d.id, action: function(){ openWorkspace(d.client); setTimeout(function(){ switchTab('ws-disputes'); }, 80); }});
   });
   dueSoon.forEach(function(d) {
     notifs.push({id:'tat-duesoon-'+d.id, timeSensitive:true, icon:'ti-clock-exclamation', color:'#e67e00', bg:'#fff4e6', text:'Due soon: ' + d.name, sub:d.client + ' · reply before 6PM', action: function(){ openWorkspace(d.client); setTimeout(function(){ switchTab('ws-disputes'); }, 80); }});
@@ -5395,8 +5395,8 @@ function renderMemberMetrics() {
     return '~' + days.toFixed(1) + ' days';
   }
 
-  // Currently-open TAT breaches across this person's assigned clients — a live snapshot,
-  // not a historical monthly count (no log of past breaches exists to sum over time).
+  // Currently-open TAT overdue tickets across this person's assigned clients — a live snapshot,
+  // not a historical monthly count (no log of past overdue tickets exists to sum over time).
   function openBreachesFor(uk) {
     var subKeys = USERS[uk].processClients || [];
     if (typeof allDisputes === 'undefined') return 0;
@@ -6729,7 +6729,7 @@ function getTATLabel(emailTimeStr, status) {
     const over = Math.abs(msLeft);
     const h = Math.floor(over / 3600000);
     const m = Math.floor((over % 3600000) / 60000);
-    return 'Breached ' + (h) + 'h ' + (m) + 'm ago';
+    return 'Overdue by ' + (h) + 'h ' + (m) + 'm ago';
   }
   const h = Math.floor(msLeft / 3600000);
   const m = Math.floor((msLeft % 3600000) / 60000);
@@ -6753,7 +6753,7 @@ setInterval(refreshTATTimers, 60000);
 
 // Keeps every dispute's STORED tat/tatLabel fresh — refreshTATTimers() above only recomputes
 // DOM elements currently on screen with a data-tat binding; it never touches the underlying
-// data. That meant the Dashboard's breach count, the "All tickets" table, and the metrics
+// data. That meant the Dashboard's overdue count, the "All tickets" table, and the metrics
 // view's TAT compliance % could all be reading a tat value computed hours ago and never
 // updated since. This recomputes every dispute directly from its real basis time (emailTime
 // for manually-logged tickets, submittedAt/dateSubmitted for pushed ones), then re-renders
@@ -17123,7 +17123,7 @@ function cancelRemark(btn, original) {
 const allDisputes = [
   // KNI
   {id:'#2026-093', empNo:'EMP-0455', name:'Marasigan, Kevin', manager:'Ana Villareal', location:'Cebu Warehouse', shift:'Night Shift', payrollSchedule:'Semi-monthly', dateSubmitted:'May 14, 2026', entity:'Kuehne + Nagel Inc.', nature:'Missing Time Log', disputeDates:'May 13, 2026', fullDetails:'Missing IN log for May 13. Bio scan device offline that night per site supervisor. DTR attached.', dateAction:'', findings:'', recommendedResolution:'', payoutCutoff:'May 16-31', amount:'', updateOpen:'', otherRemarks:'', sub:'Missing IN Log \u00b7 May 13', client:'KNI', cutoff:'May 2nd', tat:'tat-yellow', tatLabel:'3h left', status:'dst-open', statusLabel:'Open'},
-  {id:'#2026-092', empNo:'EMP-0142', name:'Santos, Maria',     payrollSchedule:'Semi-monthly', dateSubmitted:'May 13, 2026', entity:'Kuehne + Nagel Inc.',         nature:'Leave / Absence Dispute',    disputeDates:'May 13, 2026', fullDetails:'Leave application not reflected in payroll. Filed COA and leave form on May 10, approved by manager on May 11.', dateAction:'',            findings:'',                                           recommendedResolution:'',                          payoutCutoff:'May 16-31', amount:'',             updateOpen:'',                         otherRemarks:'',        sub:'Leave Application \u00b7 May 13',         client:'KNI',   cutoff:'May 2nd',   tat:'tat-red',    tatLabel:'TAT breached', status:'dst-open',   statusLabel:'Open'},
+  {id:'#2026-092', empNo:'EMP-0142', name:'Santos, Maria',     payrollSchedule:'Semi-monthly', dateSubmitted:'May 13, 2026', entity:'Kuehne + Nagel Inc.',         nature:'Leave / Absence Dispute',    disputeDates:'May 13, 2026', fullDetails:'Leave application not reflected in payroll. Filed COA and leave form on May 10, approved by manager on May 11.', dateAction:'',            findings:'',                                           recommendedResolution:'',                          payoutCutoff:'May 16-31', amount:'',             updateOpen:'',                         otherRemarks:'',        sub:'Leave Application \u00b7 May 13',         client:'KNI',   cutoff:'May 2nd',   tat:'tat-red',    tatLabel:'TAT overdue', status:'dst-open',   statusLabel:'Open'},
   {id:'#2026-091', empNo:'EMP-0088', name:'Reyes, Alvin',      payrollSchedule:'Semi-monthly', dateSubmitted:'May 12, 2026', entity:'Kuehne + Nagel Inc.',         nature:'Missing Time Log',           disputeDates:'May 12, 2026', fullDetails:'Missing OUT log for May 12. Bio scan not captured due to device error. DTR attached.',                          dateAction:'',            findings:'DTR confirms 2 hrs OT worked past shift end.', recommendedResolution:'Add 2 hrs OT to May 2nd payout.', payoutCutoff:'May 16-31', amount:'+2 hrs OT',    piLines:[{code:'Ord-OT', number:2, addDed:'Addition', remarks:''}], updateOpen:'Awaiting HR confirmation', otherRemarks:'',        sub:'Missing OUT Log \u00b7 May 12',           client:'KNI',   cutoff:'May 2nd',   tat:'tat-yellow', tatLabel:'1h 20m left',  status:'dst-rev',    statusLabel:'In Progress'},
   {id:'#2026-088', empNo:'EMP-0031', name:'Dela Cruz, Jose',   payrollSchedule:'Semi-monthly', dateSubmitted:'May 10, 2026', entity:'Kuehne + Nagel Inc.',         nature:'Incorrect Time Log',         disputeDates:'May 10, 2026', fullDetails:'IN log recorded at 9:15 AM but actual clock-in was 8:00 AM. CCTV request submitted.',                          dateAction:'',            findings:'',                                           recommendedResolution:'',                          payoutCutoff:'May 16-31', amount:'',             updateOpen:'',                         otherRemarks:'',        sub:'Incorrect IN Log \u00b7 May 10',          client:'KNI',   cutoff:'May 1st',   tat:'tat-green',  tatLabel:'4h left',      status:'dst-open',   statusLabel:'Open'},
   {id:'#2026-083', empNo:'EMP-0077', name:'Acosta, Stephanie', payrollSchedule:'Semi-monthly', dateSubmitted:'May 6, 2026',  entity:'Kuehne + Nagel Inc.',         nature:'Half Day / Absence Dispute', disputeDates:'May 6, 2026',  fullDetails:'Half day filed but not reflected in payroll. Leave form attached.',                                              dateAction:'May 8, 2026', findings:'Half day leave confirmed approved on May 7.', recommendedResolution:'Include in Apr 2nd payout.', payoutCutoff:'Apr 16-30', amount:'+0.5 day',     updateOpen:'',                         otherRemarks:'Resolved', sub:'Half Day Dispute \u00b7 May 6',           client:'KNI',   cutoff:'Apr 2nd',   tat:'tat-grey',   tatLabel:'Resolved',     status:'dst-closed', statusLabel:'Closed'},
@@ -17132,7 +17132,7 @@ const allDisputes = [
   {id:'#2026-087', empNo:'EMP-0155', name:'Cerbo, Anna',       payrollSchedule:'Semi-monthly', dateSubmitted:'May 9, 2026',  entity:'Kuehne + Nagel LSSI',         nature:'Special Allowance Pending',  disputeDates:'May 9, 2026',  fullDetails:'SA application pending approval. Submitted May 8 with supporting docs.',                                         dateAction:'',            findings:'',                                           recommendedResolution:'',                          payoutCutoff:'May 16-31', amount:'',             updateOpen:'',                         otherRemarks:'',        sub:'SA Application Pending \u00b7 May 9',     client:'KNLSI', cutoff:'May 1st',   tat:'tat-green',  tatLabel:'5h left',      status:'dst-rev',    statusLabel:'In Progress'},
   {id:'#2026-084', empNo:'EMP-0099', name:'Bautista, Rey',     payrollSchedule:'Semi-monthly', dateSubmitted:'May 7, 2026',  entity:'Kuehne + Nagel LSSI',         nature:'Missing Time Log',           disputeDates:'May 7, 2026',  fullDetails:'Missing OUT log May 7. Manual DTR filed and endorsed.',                                                          dateAction:'May 9, 2026', findings:'DTR confirmed valid.',                       recommendedResolution:'Log corrected.',             payoutCutoff:'Apr 16-30', amount:'',             updateOpen:'',                         otherRemarks:'Resolved', sub:'Missing OUT Log \u00b7 May 7',            client:'KNLSI', cutoff:'Apr 2nd',   tat:'tat-grey',   tatLabel:'Resolved',     status:'dst-closed', statusLabel:'Closed'},
   // HDI
-  {id:'#2026-089', empNo:'EMP-0312', name:'Tan, Robert',       payrollSchedule:'Staggered',    dateSubmitted:'May 8, 2026',  entity:'HDI Global SE - Philippines', nature:'Overtime Dispute',           disputeDates:'May 8, 2026',  fullDetails:'OT hours for May 8 not reflected. OT form approved by supervisor on May 7.',                                    dateAction:'',            findings:'',                                           recommendedResolution:'',                          payoutCutoff:'May 16-31', amount:'+3hrs OT',     updateOpen:'',                         otherRemarks:'',        sub:'Overtime Dispute \u00b7 May 8',           client:'HDI_ADV',   cutoff:'May 1st',   tat:'tat-red',    tatLabel:'TAT breached', status:'dst-open',   statusLabel:'Open'},
+  {id:'#2026-089', empNo:'EMP-0312', name:'Tan, Robert',       payrollSchedule:'Staggered',    dateSubmitted:'May 8, 2026',  entity:'HDI Global SE - Philippines', nature:'Overtime Dispute',           disputeDates:'May 8, 2026',  fullDetails:'OT hours for May 8 not reflected. OT form approved by supervisor on May 7.',                                    dateAction:'',            findings:'',                                           recommendedResolution:'',                          payoutCutoff:'May 16-31', amount:'+3hrs OT',     updateOpen:'',                         otherRemarks:'',        sub:'Overtime Dispute \u00b7 May 8',           client:'HDI_ADV',   cutoff:'May 1st',   tat:'tat-red',    tatLabel:'TAT overdue', status:'dst-open',   statusLabel:'Open'},
   {id:'#2026-086', empNo:'EMP-0298', name:'Riego, Mark',       payrollSchedule:'Staggered',    dateSubmitted:'May 8, 2026',  entity:'HDI Global SE - Philippines', nature:'OUT Log Exceeded Threshold', disputeDates:'May 8, 2026',  fullDetails:'OUT log exceeded threshold by 45 mins. Employee claims system delay.',                                          dateAction:'',            findings:'',                                           recommendedResolution:'',                          payoutCutoff:'May 16-31', amount:'',             updateOpen:'',                         otherRemarks:'',        sub:'OUT Log Exceeded Threshold \u00b7 May 8', client:'HDI_ADV',   cutoff:'May 1st',   tat:'tat-yellow', tatLabel:'1h 40m left',  status:'dst-open',   statusLabel:'Open'},
   {id:'#2026-085', empNo:'EMP-0267', name:'Fernandez, Liza',   payrollSchedule:'Staggered',    dateSubmitted:'May 7, 2026',  entity:'HDI Global SE - Philippines', nature:'Leave / Absence Dispute',    disputeDates:'May 7, 2026',  fullDetails:'Leave application filed May 6, approved same day. Not reflected in payroll.',                                     dateAction:'May 9, 2026', findings:'Leave approved and confirmed by HR.',        recommendedResolution:'Include in next payout.',    payoutCutoff:'Apr 16-30', amount:'+1 day leave', updateOpen:'',                         otherRemarks:'Resolved', sub:'Leave Application \u00b7 May 7',          client:'HDI_ADV',   cutoff:'Apr 2nd',   tat:'tat-grey',   tatLabel:'Resolved',     status:'dst-closed', statusLabel:'Closed'}
 ];
@@ -17311,7 +17311,7 @@ function toggleClosedRows(closedGroupId, headerEl) {
           <select class="field-group" id="tkt-tat" style="width:100%;margin-top:4px;">
             <option value="tat-green">Within TAT</option>
             <option value="tat-yellow">Due soon</option>
-            <option value="tat-red">TAT breached</option>
+            <option value="tat-red">TAT overdue</option>
             <option value="tat-grey">Resolved</option>
           </select>
         </div>
@@ -17346,7 +17346,7 @@ function saveTicket() {
   if (!name || !sub) { alert('Employee name and description are required'); return; }
 
   const statusLabels = {'dst-open':'Open','dst-rev':'In Progress','dst-resolved':'Resolved','dst-closed':'Closed'};
-  const tatLabels    = {'tat-green':'Within TAT','tat-yellow':'Due soon','tat-red':'TAT breached','tat-grey':'Resolved'};
+  const tatLabels    = {'tat-green':'Within TAT','tat-yellow':'Due soon','tat-red':'TAT overdue','tat-grey':'Resolved'};
 
   const newTicket = {
     id: id || ('#' + (2026000 + allDisputes.length + 1)),
