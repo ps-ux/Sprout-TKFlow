@@ -9750,6 +9750,21 @@ function runVariance(opts) {
         if (out.length > 31) out = out.slice(0, 31);
         return out || 'Sheet';
       }
+
+      // Column widths sized to each column's own longest value (rather than a fixed guess),
+      // since PayReg/Orig/ACO layouts and employee-name lengths vary by company/file — a
+      // fixed width just re-creates the "too narrow, everything wraps" look on a different file.
+      function autoFitCols(rows) {
+        var widths = [];
+        rows.forEach(function(row) {
+          row.forEach(function(cell, i) {
+            var len = (cell === null || cell === undefined) ? 0 : String(cell).length;
+            if (!widths[i] || len > widths[i]) widths[i] = len;
+          });
+        });
+        return widths.map(function(w) { return {wch: Math.max(8, Math.min(45, (w||0) + 2))}; });
+      }
+
       var origSheetName = sanitizeSheetName('Orig ' + payout);
       var acoSheetName   = 'ACO';
       var attSheetName   = 'Attendance';
@@ -9757,8 +9772,15 @@ function runVariance(opts) {
       var payregSheetName = 'PayReg';
 
       // Orig and ACO sheets (raw filtered data — pasted as-is, no formulas, matches manual process)
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(makeAttSheet(orig.rows)), origSheetName);
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(makeAttSheet(aco.rows)),  acoSheetName);
+      var origSheetData = makeAttSheet(orig.rows);
+      var wsOrig = XLSX.utils.aoa_to_sheet(origSheetData);
+      wsOrig['!cols'] = autoFitCols(origSheetData);
+      XLSX.utils.book_append_sheet(wb, wsOrig, origSheetName);
+
+      var acoSheetData = makeAttSheet(aco.rows);
+      var wsAco = XLSX.utils.aoa_to_sheet(acoSheetData);
+      wsAco['!cols'] = autoFitCols(acoSheetData);
+      XLSX.utils.book_append_sheet(wb, wsAco, acoSheetName);
 
       // ── Attendance sheet — static values only (no formulas), so the file is a fixed
       // report rather than a reusable calculation template. Values are the same diffs
@@ -9784,7 +9806,9 @@ function runVariance(opts) {
 
       // PayReg sheet
       if (payreg) {
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(payreg.rows), payregSheetName);
+        var wsPayReg = XLSX.utils.aoa_to_sheet(payreg.rows);
+        wsPayReg['!cols'] = autoFitCols(payreg.rows);
+        XLSX.utils.book_append_sheet(wb, wsPayReg, payregSheetName);
       }
 
       // Store cell addresses needing color for download
