@@ -6132,6 +6132,12 @@ function setTicketingMode(subKeysCsv, mode) {
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk]) return;
     clients[sk].ticketingMode = mode;
+    supabaseClient.from('companies').update({ ticketing_mode: mode }).eq('short_key', sk).then(function(res) {
+      if (res.error) {
+        console.warn('Could not save ticketing mode for ' + sk, res.error);
+        if (typeof showToast === 'function') showToast('Could not save ticketing mode: ' + res.error.message, '#c0392b');
+      }
+    });
   });
   if (typeof renderClientProfile === 'function' && window.currentWsGroup) {
     renderClientProfile(window.currentWsGroup);
@@ -6144,10 +6150,24 @@ function setTicketingMode(subKeysCsv, mode) {
   if (typeof showToast === 'function') showToast('Ticketing tool set to: ' + (mode === 'own' ? 'Client\u2019s Own Tool' : 'Sprout OTK Support Portal'));
 }
 
+var _ticketingUrlSaveTimers = {};
 function setTicketingUrl(subKeysCsv, url) {
+  var trimmed = url.trim();
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk]) return;
-    clients[sk].ticketingUrl = url.trim();
+    clients[sk].ticketingUrl = trimmed;
+    // Debounced (fires on oninput, not blur) -- one timer per sub-key so a group edit
+    // doesn't cancel other sub-keys' pending saves.
+    if (_ticketingUrlSaveTimers[sk]) clearTimeout(_ticketingUrlSaveTimers[sk]);
+    _ticketingUrlSaveTimers[sk] = setTimeout(function() {
+      delete _ticketingUrlSaveTimers[sk];
+      supabaseClient.from('companies').update({ ticketing_url: trimmed }).eq('short_key', sk).then(function(res) {
+        if (res.error) {
+          console.warn('Could not save ticketing URL for ' + sk, res.error);
+          if (typeof showToast === 'function') showToast('Could not save ticketing URL: ' + res.error.message, '#c0392b');
+        }
+      });
+    }, 800);
   });
   if (typeof refreshWsDisputesBadgesAndList === 'function' && window.currentWsClient) {
     refreshWsDisputesBadgesAndList(window.currentWsClient);
