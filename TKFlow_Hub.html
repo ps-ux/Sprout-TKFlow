@@ -637,9 +637,10 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       };
       await loadCompaniesFromSupabase();
       await loadUserRelationsFromSupabase();
-      // Both depend on clients/clientGroups (companyId/groupId) already being populated above.
+      // All three depend on clients/clientGroups (companyId/groupId) already being populated above.
       await loadPolicyFilesFromSupabase();
       await loadCalendarsFromSupabase();
+      await loadDisputesFromSupabase();
       if (typeof refreshUserUI === 'function') refreshUserUI();
       if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
       if (typeof renderDashSchedule === 'function') renderDashSchedule();
@@ -17157,7 +17158,11 @@ function cancelRemark(btn, original) {
 // ── Missing functions patch ──────────────────────────────────────────────────
 
 // Data arrays
-const allDisputes = [
+// Renamed from allDisputes -- superseded by loadDisputesFromSupabase() (see the Supabase
+// bootstrap section), which populates the real, mutable `allDisputes` below from the
+// disputes table on load instead of this hardcoded seed. Kept here only for reference
+// during the transition; delete once Supabase-backed data is confirmed loading correctly.
+var _seedDisputesUnused = [
   // KNI
   {id:'#2026-093', empNo:'EMP-0455', name:'Marasigan, Kevin', manager:'Ana Villareal', location:'Cebu Warehouse', shift:'Night Shift', payrollSchedule:'Semi-monthly', dateSubmitted:'May 14, 2026', entity:'Kuehne + Nagel Inc.', nature:'Missing Time Log', disputeDates:'May 13, 2026', fullDetails:'Missing IN log for May 13. Bio scan device offline that night per site supervisor. DTR attached.', dateAction:'', findings:'', recommendedResolution:'', payoutCutoff:'May 16-31', amount:'', updateOpen:'', otherRemarks:'', sub:'Missing IN Log \u00b7 May 13', client:'KNI', cutoff:'May 2nd', tat:'tat-yellow', tatLabel:'3h left', status:'dst-open', statusLabel:'Open'},
   {id:'#2026-092', empNo:'EMP-0142', name:'Santos, Maria',     payrollSchedule:'Semi-monthly', dateSubmitted:'May 13, 2026', entity:'Kuehne + Nagel Inc.',         nature:'Leave / Absence Dispute',    disputeDates:'May 13, 2026', fullDetails:'Leave application not reflected in payroll. Filed COA and leave form on May 10, approved by manager on May 11.', dateAction:'',            findings:'',                                           recommendedResolution:'',                          payoutCutoff:'May 16-31', amount:'',             updateOpen:'',                         otherRemarks:'',        sub:'Leave Application \u00b7 May 13',         client:'KNI',   cutoff:'May 2nd',   tat:'tat-red',    tatLabel:'TAT overdue', status:'dst-open',   statusLabel:'Open'},
@@ -17173,6 +17178,12 @@ const allDisputes = [
   {id:'#2026-086', empNo:'EMP-0298', name:'Riego, Mark',       payrollSchedule:'Staggered',    dateSubmitted:'May 8, 2026',  entity:'HDI Global SE - Philippines', nature:'OUT Log Exceeded Threshold', disputeDates:'May 8, 2026',  fullDetails:'OUT log exceeded threshold by 45 mins. Employee claims system delay.',                                          dateAction:'',            findings:'',                                           recommendedResolution:'',                          payoutCutoff:'May 16-31', amount:'',             updateOpen:'',                         otherRemarks:'',        sub:'OUT Log Exceeded Threshold \u00b7 May 8', client:'HDI_ADV',   cutoff:'May 1st',   tat:'tat-yellow', tatLabel:'1h 40m left',  status:'dst-open',   statusLabel:'Open'},
   {id:'#2026-085', empNo:'EMP-0267', name:'Fernandez, Liza',   payrollSchedule:'Staggered',    dateSubmitted:'May 7, 2026',  entity:'HDI Global SE - Philippines', nature:'Leave / Absence Dispute',    disputeDates:'May 7, 2026',  fullDetails:'Leave application filed May 6, approved same day. Not reflected in payroll.',                                     dateAction:'May 9, 2026', findings:'Leave approved and confirmed by HR.',        recommendedResolution:'Include in next payout.',    payoutCutoff:'Apr 16-30', amount:'+1 day leave', updateOpen:'',                         otherRemarks:'Resolved', sub:'Leave Application \u00b7 May 7',          client:'HDI_ADV',   cutoff:'Apr 2nd',   tat:'tat-grey',   tatLabel:'Resolved',     status:'dst-closed', statusLabel:'Closed'}
 ];
+
+// The real, mutable dispute list the rest of the app reads/writes -- starts empty and gets
+// filled by loadDisputesFromSupabase() on boot. Every existing d.someField access throughout
+// the app keeps working unmodified, since dtmMapRowToDispute() below produces objects in
+// exactly the same shape as the old seed literal above.
+var allDisputes = [];
 
 const auditRows = [
   {id:'7039433',name:'Acosta, Stephanie',date:'2-Mar',remark:'No Logs; No Pending Application',status:'pending',comment:''},
@@ -17395,6 +17406,9 @@ function saveTicket() {
 
   allDisputes.unshift(newTicket);
   closeTicketModal();
+  supabaseClient.from('disputes').insert(Object.assign({ id: newTicket.id, source: 'manual' }, dtmBuildDisputeRow(newTicket))).then(function(res) {
+    if (res.error) dtmReportSaveError('Could not save new ticket ' + newTicket.id, res.error);
+  });
 
   // Re-render workspace disputes
   if (currentWsClient) openWorkspace(currentWsClient);
@@ -19633,6 +19647,7 @@ function openNewDisputeTicket(clientKey) {
     payrollSchedule: clientObj ? (clientObj.meta || '') : '',
     dateSubmitted: todayISO,
     emailTime: nowEmailTime,
+    submittedAt: today.toISOString(),
     entity: clientObj ? clientObj.name : clientKey,
     nature: '', disputeDates: '', fullDetails: '',
     dateAction: todayISO, findings: '', recommendedResolution: '',
@@ -19646,6 +19661,9 @@ function openNewDisputeTicket(clientKey) {
   allDisputes.unshift(stub);
   openDisputeTicket(stub.id, clientKey);
   if (typeof showToast === 'function') showToast('New ticket ' + stub.id + ' started \u2014 fill in the details');
+  supabaseClient.from('disputes').insert(Object.assign({ id: stub.id, source: 'manual' }, dtmBuildDisputeRow(stub))).then(function(res) {
+    if (res.error) dtmReportSaveError('Could not save new ticket ' + stub.id, res.error);
+  });
 }
 
 // Converts whatever's stored (ISO "2026-07-19", or older display-format strings like
@@ -19982,7 +20000,9 @@ function dtmSwitchTab(tab) {
 function dtmSaveField(field, value) {
   if (!dtmCurrentId) return;
   var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
-  if (d) d[field] = value;
+  if (!d) return;
+  d[field] = value;
+  dtmScheduleDisputeSave(dtmCurrentId);
 }
 
 // Fixed list of dispute-detail codes used in the Payroll Instructions table (matches the real KNI tracker)
@@ -20024,6 +20044,7 @@ function dtmAddPiLine() {
   if (!Array.isArray(d.piLines)) d.piLines = [];
   d.piLines.push({ code: '', number: '', addDed: 'Addition', remarks: '' });
   dtmRenderPiLines(d);
+  dtmSyncPiLines(dtmCurrentId);
 }
 
 function dtmUpdatePiLine(idx, field, value, skipRerender) {
@@ -20038,6 +20059,7 @@ function dtmUpdatePiLine(idx, field, value, skipRerender) {
   } else {
     dtmRenderPiLines(d);
   }
+  dtmSyncPiLines(dtmCurrentId);
 }
 
 function dtmRemovePiLine(idx) {
@@ -20045,6 +20067,7 @@ function dtmRemovePiLine(idx) {
   if (!d || !Array.isArray(d.piLines)) return;
   d.piLines.splice(idx, 1);
   dtmRenderPiLines(d);
+  dtmSyncPiLines(dtmCurrentId);
 }
 
 function dtmSaveAll() {
@@ -20060,6 +20083,7 @@ function dtmUpdateStatus(newStatus) {
   var labels = {'dst-open':'Open','dst-rev':'In Progress','dst-resolved':'Resolved','dst-closed':'Closed'};
   var oldLabel = d.statusLabel;
   d.status = newStatus; d.statusLabel = labels[newStatus];
+  dtmScheduleDisputeSave(dtmCurrentId);
   var cu = window.currentUser || currentUser;
   dtmAddLog(dtmCurrentId, {
     time: new Date().toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}),
@@ -20156,6 +20180,130 @@ function tatTimeFromDateSubmitted(dateStr) {
   return MONTHS[monthIdx] + ' ' + (+m[3]) + ', 9:00AM';
 }
 
+// ── Dispute persistence (Supabase disputes / dispute_logs / dispute_payroll_instructions) ──
+// dtmMapRowToDispute/dtmBuildDisputeRow are the two directions of one field mapping, kept
+// side by side so a schema change only needs updating in one place. dtmMapRowToDispute
+// produces objects in exactly the shape the rest of the app already expects (d.name, d.tat,
+// d.client, ...), so no other render code needs to change to consume Supabase-backed data.
+function dtmMapRowToDispute(row, companyIdToKey) {
+  var clientKey = row.company_id ? (companyIdToKey[row.company_id] || '') : '';
+  var disputeDates = Array.isArray(row.dispute_dates) ? row.dispute_dates.join(', ') : '';
+  var piLines = (row.dispute_payroll_instructions || []).map(function(l) {
+    return { code: l.code || '', number: l.number, addDed: l.add_ded || 'Addition', remarks: l.remarks || '' };
+  });
+  (row.dispute_logs || []).slice().sort(function(a, b) { return new Date(a.created_at) - new Date(b.created_at); }).forEach(function(l) {
+    if (!dtmLogs[row.id]) dtmLogs[row.id] = [];
+    dtmLogs[row.id].push({
+      time: new Date(l.created_at).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}),
+      author: l.author, note: l.message, type: l.type
+    });
+  });
+  return {
+    id: row.id, empNo: row.emp_no || '', name: row.emp_name || '', empEmail: row.emp_email || '',
+    manager: row.manager || '', location: row.location || '', shift: row.shift || '',
+    payrollSchedule: row.payroll_schedule || '', dateSubmitted: row.date_submitted || '',
+    submittedAt: row.submitted_at || null,
+    entity: row.entity || '', client: clientKey,
+    _unrecognizedClient: row.is_unrecognized_client ? row.entity : null,
+    nature: row.nature || '', disputeDates: disputeDates, fullDetails: row.full_details || '',
+    dateAction: row.date_action || '', findings: row.findings || '',
+    recommendedResolution: row.recommended_resolution || '', payoutCutoff: row.payout_cutoff || '',
+    amount: row.amount || '', updateOpen: row.update_open || '', otherRemarks: row.other_remarks || '',
+    cutoff: row.cutoff || '', tat: row.tat || 'tat-grey', tatLabel: row.tat_label || '',
+    status: row.status, statusLabel: TICKET_STATUS_LABELS[row.status] || row.status,
+    attendancePeriod: row.attendance_period || '', piPayout: row.pi_payout || '',
+    piLines: piLines,
+    sub: (row.nature || '') + (disputeDates ? ' · ' + disputeDates : '')
+  };
+}
+
+function dtmBuildDisputeRow(d) {
+  var companyId = (d.client && clients[d.client] && clients[d.client].companyId) || null;
+  return {
+    company_id: companyId,
+    emp_no: d.empNo || null, emp_name: d.name || null, emp_email: d.empEmail || null,
+    manager: d.manager || null, location: d.location || null, shift: d.shift || null,
+    payroll_schedule: d.payrollSchedule || null, date_submitted: d.dateSubmitted || null,
+    submitted_at: d.submittedAt || null,
+    entity: d._unrecognizedClient || d.entity || null,
+    nature: d.nature || null,
+    // Splits on every comma, which assumes each individual date is comma-free (true for the
+    // ISO "YYYY-MM-DD" values dtmAddDisputeDate's date picker and the ticketing webhook both
+    // produce). A legacy "May 12, 2026"-style display date would misparse into two entries --
+    // not reachable from any current write path, but noted here rather than left silent.
+    dispute_dates: (d.disputeDates || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean),
+    full_details: d.fullDetails || null, date_action: d.dateAction || null,
+    findings: d.findings || null, recommended_resolution: d.recommendedResolution || null,
+    payout_cutoff: d.payoutCutoff || null, amount: d.amount || null,
+    update_open: d.updateOpen || null, other_remarks: d.otherRemarks || null,
+    cutoff: d.cutoff || null, tat: d.tat || null, tat_label: d.tatLabel || null,
+    status: d.status || 'dst-open',
+    is_unrecognized_client: !!d._unrecognizedClient,
+    attendance_period: d.attendancePeriod || null, pi_payout: d.piPayout || null
+  };
+}
+
+// Fire-and-forget Supabase write, matching this codebase's existing convention (never throws,
+// never blocks the UI -- the in-memory mutation the caller already made is the real-time
+// source of truth; this just makes it durable).
+function dtmReportSaveError(context, error) {
+  console.warn(context, error);
+  if (typeof showToast === 'function') showToast(context + ': ' + error.message, '#c0392b');
+}
+
+var _dtmSaveTimers = {};
+function dtmScheduleDisputeSave(id) {
+  if (_dtmSaveTimers[id]) clearTimeout(_dtmSaveTimers[id]);
+  _dtmSaveTimers[id] = setTimeout(function() {
+    delete _dtmSaveTimers[id];
+    var d = allDisputes.find(function(x) { return x.id === id; });
+    if (!d) return;
+    supabaseClient.from('disputes').update(dtmBuildDisputeRow(d)).eq('id', id).then(function(res) {
+      if (res.error) dtmReportSaveError('Could not save ticket ' + id, res.error);
+    });
+  }, 800);
+}
+
+// Delete-all-then-reinsert rather than diffing individual lines -- simpler and safe given
+// today's low line-count-per-ticket pattern, and there's no stable per-line id to diff on.
+var _dtmPiSaveTimers = {};
+function dtmSyncPiLines(id) {
+  if (_dtmPiSaveTimers[id]) clearTimeout(_dtmPiSaveTimers[id]);
+  _dtmPiSaveTimers[id] = setTimeout(function() {
+    delete _dtmPiSaveTimers[id];
+    var d = allDisputes.find(function(x) { return x.id === id; });
+    if (!d) return;
+    supabaseClient.from('dispute_payroll_instructions').delete().eq('dispute_id', id).then(function(delRes) {
+      if (delRes.error) { dtmReportSaveError('Could not sync payroll-instruction lines for ' + id, delRes.error); return; }
+      var lines = (d.piLines || []).filter(function(l) { return l.code; });
+      if (!lines.length) return;
+      supabaseClient.from('dispute_payroll_instructions').insert(lines.map(function(l) {
+        return { dispute_id: id, code: l.code, number: l.number, unit: codeUnit(l.code, l.number), add_ded: l.addDed, remarks: l.remarks || '' };
+      })).then(function(insRes) {
+        if (insRes.error) dtmReportSaveError('Could not save payroll-instruction lines for ' + id, insRes.error);
+      });
+    });
+  }, 800);
+}
+
+// Populates the real, mutable `allDisputes` (declared near the old seed literal above) from
+// Supabase on boot -- called from loadCurrentUserFromSession()'s boot sequence, after
+// loadCompaniesFromSupabase() has populated clients[key].companyId.
+async function loadDisputesFromSupabase() {
+  var res = await supabaseClient.from('disputes')
+    .select('*, dispute_logs(*), dispute_payroll_instructions(*)')
+    .order('created_at', { ascending: false });
+  if (res.error) { console.warn('Failed to load disputes from Supabase', res.error); return; }
+  var companyIdToKey = {};
+  Object.keys(clients).forEach(function(k) {
+    if (clients[k] && clients[k].companyId) companyIdToKey[clients[k].companyId] = k;
+  });
+  var mapped = (res.data || []).map(function(row) { return dtmMapRowToDispute(row, companyIdToKey); });
+  allDisputes.length = 0;
+  Array.prototype.push.apply(allDisputes, mapped);
+  if (typeof recomputeAllDisputeTAT === 'function') recomputeAllDisputeTAT();
+}
+
 function receiveTicketUpdate(payload) {
   payload = payload || {};
   if (!payload.id) { console.warn('receiveTicketUpdate: payload missing id', payload); return; }
@@ -20198,12 +20346,15 @@ function receiveTicketUpdate(payload) {
     if (payload.dateSubmitted) existing.dateSubmitted = payload.dateSubmitted;
     if (payload.assignedTo) existing.processor = payload.assignedTo;
     if (payload.details) existing.fullDetails = payload.details;
+    if (payload.submittedAt) existing.submittedAt = payload.submittedAt;
+    var pushedNewPiLine = false;
     if (payload.payrollInstructions) {
       if (!Array.isArray(existing.piLines)) existing.piLines = [];
       existing.piLines.push({
         code: payload.payrollInstructions.code || '', number: payload.payrollInstructions.number || '',
         addDed: payload.payrollInstructions.addDed || 'Addition', remarks: payload.payrollInstructions.remarks || ''
       });
+      pushedNewPiLine = true;
     }
     if (oldLabel !== statusLabel && typeof dtmAddLog === 'function') {
       dtmAddLog(existing.id, {
@@ -20211,14 +20362,16 @@ function receiveTicketUpdate(payload) {
         author: 'Ticketing Tool', note: 'Status: ' + oldLabel + ' \u2192 ' + statusLabel, type: 'status'
       });
     }
+    dtmScheduleDisputeSave(existing.id);
+    if (pushedNewPiLine) dtmSyncPiLines(existing.id);
   } else {
-    allDisputes.push({
+    var newDispute = {
       id: payload.id,
       name: payload.employeeName || '', empNo: payload.employeeId || '', empEmail: payload.employeeEmail || '',
       client: unrecognizedClient ? '' : clientKey, entity: (clientObj && clientObj.name) || rawCompany,
       _unrecognizedClient: unrecognizedClient ? rawCompany : null,
       nature: payload.nature || '', disputeDates: disputeDatesStr,
-      dateSubmitted: payload.dateSubmitted || '', processor: payload.assignedTo || '',
+      dateSubmitted: payload.dateSubmitted || '', submittedAt: payload.submittedAt || null, processor: payload.assignedTo || '',
       cutoff: (clientObj && clientObj.cutoff) || '', payoutCutoff: (clientObj && clientObj.cutoff) || '',
       status: statusKey, statusLabel: statusLabel,
       tat: pushedTat, tatLabel: pushedTatLabel,
@@ -20229,6 +20382,11 @@ function receiveTicketUpdate(payload) {
       }] : [],
       sub: (payload.nature || '') + (disputeDatesStr ? ' \u00b7 ' + disputeDatesStr : ''),
       detail: (payload.nature || '') + (disputeDatesStr ? ' \u00b7 ' + disputeDatesStr : ''),
+    };
+    allDisputes.push(newDispute);
+    supabaseClient.from('disputes').insert(Object.assign({ id: newDispute.id, source: 'ticketing_tool' }, dtmBuildDisputeRow(newDispute))).then(function(res) {
+      if (res.error) { dtmReportSaveError('Could not save ticket ' + newDispute.id, res.error); return; }
+      if (newDispute.piLines.length) dtmSyncPiLines(newDispute.id);
     });
   }
 
@@ -20243,6 +20401,9 @@ window.receiveTicketUpdate = receiveTicketUpdate;
 function dtmAddLog(id, entry) {
   if (!dtmLogs[id]) dtmLogs[id] = [];
   dtmLogs[id].push(entry);
+  supabaseClient.from('dispute_logs').insert({
+    dispute_id: id, author: entry.author || '', message: entry.note || '', type: entry.type || null
+  }).then(function(res) { if (res.error) dtmReportSaveError('Could not save log for ' + id, res.error); });
 }
 
 function dtmRenderLog(id) {
