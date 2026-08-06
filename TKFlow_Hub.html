@@ -9578,14 +9578,30 @@ function runVariance(opts) {
     });
   }
 
+  // Some attendance exports (e.g. the WF "AttendanceTemplate" style) ship a hidden/veryHidden
+  // boilerplate sheet as SheetNames[0] with a real data sheet elsewhere. Auto-detect the actual
+  // data sheet + header row by content (has both "ID" and "Name" headers) rather than assuming
+  // sheet 0 / column A — this also makes column position (e.g. an inserted "Status" column A)
+  // irrelevant, since columns are matched by header name below regardless of which sheet/row wins.
+  function pickAttSheet(wb) {
+    var hiddenNames = {};
+    (wb.Workbook && wb.Workbook.Sheets || []).forEach(function(s) { if (s && s.Hidden) hiddenNames[s.name] = true; });
+    var order = wb.SheetNames.filter(function(n){ return !hiddenNames[n]; }).concat(wb.SheetNames.filter(function(n){ return hiddenNames[n]; }));
+    for (var si = 0; si < order.length; si++) {
+      var aoa = XLSX.utils.sheet_to_json(wb.Sheets[order[si]], {header:1, defval:''});
+      for (var ri = 0; ri < Math.min(aoa.length, 10); ri++) {
+        var row = aoa[ri].map(function(c){ return String(c).trim(); });
+        if (row.indexOf('ID') >= 0 && row.indexOf('Name') >= 0) return {raw: aoa, hdrIdx: ri};
+      }
+    }
+    var fallback = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
+    return {raw: fallback, hdrIdx: 0};
+  }
+
   function readAttSheet(wb) {
     if (!wb) return null;
-    var sheet = wb.Sheets[wb.SheetNames[0]];
-    var raw = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
-    var hdrIdx = 0;
-    for (var ri = 0; ri < Math.min(raw.length, 10); ri++) {
-      if (String(raw[ri][0]).trim() === 'ID') { hdrIdx = ri; break; }
-    }
+    var picked = pickAttSheet(wb);
+    var raw = picked.raw, hdrIdx = picked.hdrIdx;
     var srcHdr = raw[hdrIdx].map(function(c){ return String(c).trim(); });
     var colIdx = VAR_KEEP.map(function(k) { return srcHdr.indexOf(k); });
     var rows = [], empMap = {};
