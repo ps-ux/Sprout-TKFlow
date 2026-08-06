@@ -10102,6 +10102,22 @@ function varDownloadAllGroups() {
 }
 
 
+// Short (3+ letter) code for whichever subcompany is actually active in the Variance
+// Analysis tool right now (e.g. "ADV", "CGI") — falls back to the outer workspace's
+// client only when no batch group is active, and to the client's full name/key if it
+// has no short code set. Used for both the filename and the Disputes Tab sheet name so
+// they always reflect what's selected in this tool's own dropdown, not a stale/unrelated
+// workspace elsewhere in the app.
+function varActiveSubShortName() {
+  var gi = (typeof varActiveGroupIdx !== 'undefined') ? varActiveGroupIdx : -1;
+  var key = (gi >= 0 && varBatchGroups[gi] && varBatchGroups[gi].clientKey)
+    ? varBatchGroups[gi].clientKey
+    : ((typeof currentWsClient !== 'undefined' ? currentWsClient : null) || window._wsClient || null);
+  if (!key) return 'Client';
+  var c = clients[key];
+  return (c && (c.av || c.name)) || key;
+}
+
 function varDownload(coId) {
   var co = varCutoffs.find(function(c){ return c.id === coId; });
   if (!co || !co._varWb) return;
@@ -10138,9 +10154,7 @@ function varDownload(coId) {
     + '</styleSheet>';
 
   function doDownload(arrayBuf) {
-    var clientKey = (typeof currentWsClient !== 'undefined' ? currentWsClient : null) || window._wsClient || 'Client';
-    var subName = (typeof varActiveGroupIdx !== 'undefined' && varActiveGroupIdx >= 0 && varBatchGroups[varActiveGroupIdx]) ? (varBatchGroups[varActiveGroupIdx].clientKey || varBatchGroups[varActiveGroupIdx].name || '') : '';
-    var fname = ((subName || clientKey) + '_Attendance Variance Analysis_' + co._payout).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx';
+    var fname = (varActiveSubShortName() + '_Attendance Variance Analysis_' + co._payout).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx';
     var blob = new Blob([arrayBuf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
@@ -10255,8 +10269,7 @@ function varDisputesDownload(coId) {
     showToast(skippedFlagged + ' flagged employee(s) excluded \u2014 check the Attendance tab\'s Flag column', '#e67e00');
   }
 
-  var clientKey = (typeof currentWsClient !== 'undefined' ? currentWsClient : null) || window._wsClient || 'Client';
-  var sheetName = (clientKey + '_Disputes Tab').replace(/[:\\\/\?\*\[\]]/g, '-').slice(0,31);
+  var sheetName = (varActiveSubShortName() + '_Disputes Tab').replace(/[:\\\/\?\*\[\]]/g, '-').slice(0,31);
 
   function b64ToUint8Array(b64) {
     var bin = atob(b64);
@@ -10344,8 +10357,7 @@ function varDisputesDownload(coId) {
       return zip.generateAsync({type:'arraybuffer', compression:'DEFLATE'});
     });
   }).then(function(arrBuf) {
-    var subNameForFile = (typeof varActiveGroupIdx !== 'undefined' && varActiveGroupIdx >= 0 && varBatchGroups[varActiveGroupIdx]) ? (varBatchGroups[varActiveGroupIdx].clientKey || varBatchGroups[varActiveGroupIdx].name || '') : '';
-    var fname = ((subNameForFile || clientKey) + '_Disputes Tab_' + co._payout).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx';
+    var fname = (varActiveSubShortName() + '_Disputes Tab_' + co._payout).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx';
     var blob = new Blob([arrBuf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
