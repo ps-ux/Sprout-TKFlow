@@ -9571,8 +9571,22 @@ function runVariance(opts) {
       if (!file) { resolve(null); return; }
       var reader = new FileReader();
       reader.onload = function(e) {
-        try { resolve(XLSX.read(new Uint8Array(e.target.result), {type:'array', raw:true})); }
-        catch(ex) { resolve(null); }
+        var buf = new Uint8Array(e.target.result);
+        try { resolve(XLSX.read(buf, {type:'array', raw:true})); return; }
+        catch (ex) {
+          // Some exports (seen on a PayReg file) write a Zip64 local header on a tiny archive
+          // that SheetJS's own zip reader can't handle ("Array buffer allocation failed"), even
+          // though the file is perfectly valid. JSZip tolerates it fine — re-zip through it once
+          // and retry rather than silently dropping the file (which just made its sheet vanish
+          // from the output with no error).
+          if (typeof JSZip === 'undefined') { resolve(null); return; }
+          JSZip.loadAsync(buf).then(function(zip) { return zip.generateAsync({type:'array'}); })
+            .then(function(rezipped) {
+              try { resolve(XLSX.read(new Uint8Array(rezipped), {type:'array', raw:true})); }
+              catch (ex2) { resolve(null); }
+            })
+            .catch(function() { resolve(null); });
+        }
       };
       reader.readAsArrayBuffer(file);
     });
@@ -9625,10 +9639,22 @@ function runVariance(opts) {
     for (var ri = 0; ri < Math.min(raw.length, 5); ri++) {
       if (String(raw[ri][0]).trim() === 'Employee ID*') { hdrIdx = ri; break; }
     }
+    // Some PayReg exports (e.g. World's) have extra columns (Bank Account Number, Cost
+    // Center, etc.) before the rate columns, shifting "Gross/Day"/"Basic/Hr" off the
+    // hardcoded 15/16 positions. Find them by header text; fall back to the legacy fixed
+    // columns only if a file has no recognizable header (keeps old behavior for those).
+    var grossDayCol = -1, basicHrCol = -1;
+    (raw[hdrIdx] || []).forEach(function(h, i) {
+      var t = String(h).trim();
+      if (grossDayCol < 0 && /^Gross\s*\/?\s*Day/i.test(t)) grossDayCol = i;
+      if (basicHrCol < 0 && /^Basic\s*\/?\s*Hr/i.test(t)) basicHrCol = i;
+    });
+    if (grossDayCol < 0) grossDayCol = 15;
+    if (basicHrCol < 0) basicHrCol = 16;
     var empMap = {};
     for (var ri2 = hdrIdx+1; ri2 < raw.length; ri2++) {
       var id = String(raw[ri2][0] || '').trim();
-      if (id) empMap[id] = {grossDay: toNum(raw[ri2][15]), basicHr: toNum(raw[ri2][16])};
+      if (id) empMap[id] = {grossDay: toNum(raw[ri2][grossDayCol]), basicHr: toNum(raw[ri2][basicHrCol])};
     }
     return {rows:out, empMap:empMap};
   }
