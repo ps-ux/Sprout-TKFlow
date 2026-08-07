@@ -13450,8 +13450,19 @@ function renderTaskSubPicker(taskKey) {
   var grp = grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey];
   if (!grp) return '';
   var subs = grp.subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
+  if (!subs.length) return '';
+  // Sync window.currentWsClient/_wsClient to this picker's own resolved default -- without
+  // this, it was only ever DISPLAYED as the selected option, never actually assigned, so
+  // basicPayOffset-dependent auto-fills in the same runner (New Hires/Payroll Instructions/
+  // Profile Updates all read window.currentWsClient directly, immediately after this
+  // function runs) could silently compute against whatever client was left over from a
+  // previously open workspace -- a stale value here reads a completely unrelated company's
+  // Basic Pay cut-off offset, making it look like changing it in Client Profile does nothing
+  // no matter what you set, since it was never being read for the right client at all.
+  var current = (window.currentWsClient && subs.indexOf(window.currentWsClient) >= 0) ? window.currentWsClient : subs[0];
+  window.currentWsClient = current;
+  window._wsClient = current;
   if (subs.length <= 1) return '';
-  var current = window.currentWsClient || subs[0];
   var options = subs.map(function(k) {
     return '<option value="' + k + '"' + (k === current ? ' selected' : '') + '>' + (clients[k].name || k) + '</option>';
   }).join('');
