@@ -40,7 +40,8 @@ body { font-family: 'Rubik', sans-serif; background: #F7F5F2; color: var(--text-
 .hub { display: flex; height: 100vh; overflow: hidden; }
 
 /* Sidebar */
-.sidebar { width: 220px; min-width:220px; height:100vh; overflow-y:auto; background: #ffffff; border-right: 1px solid var(--n-200); flex-shrink: 0; display: flex; flex-direction: column; position: relative; }
+.sidebar { width: 220px; min-width:220px; height:100vh; overflow:hidden; background: #ffffff; border-right: 1px solid var(--n-200); flex-shrink: 0; display: flex; flex-direction: column; position: relative; }
+.sidebar-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .sidebar-logo { padding: 20px 18px 16px; border-bottom: 1px solid var(--n-200); display: flex; align-items: center; gap: 10px; }
 .logo-icon { width: 32px; height: 32px; background: var(--kk-500); border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .logo-icon i { font-size: 17px; color: #fff; }
@@ -721,6 +722,7 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
         <div class="logo-sub" style="margin-top:1px;">MPS - Sprout Solutions</div>
       </div>
     </div>
+    <div class="sidebar-scroll">
     <div class="nav-section">
       <div class="nav-item active" id="nav-dashboard" onclick="switchPage('dashboard')"><i class="ti ti-layout-dashboard"></i> Dashboard</div>
       <div class="nav-item" id="nav-admin" onclick="switchPage('admin')"><i class="ti ti-shield-check"></i> Admin <span class="nav-badge" id="nav-admin-badge" style="background:#e67e00;color:#fff;">Admin</span></div>
@@ -743,13 +745,18 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
         <i class="ti ti-plus" style="font-size:13px;width:20px;text-align:center;flex-shrink:0;"></i>
         <span>Add client</span>
       </div>
-      <svg style="position:absolute;top:355px;left:24px;width:28px;height:28px;pointer-events:none;z-index:0;opacity:0.55;"><use href="#tkf-flower-asterisk"/></svg>
-      <svg style="position:absolute;top:415px;right:20px;width:38px;height:10px;pointer-events:none;z-index:0;opacity:0.5;"><use href="#tkf-curve"/></svg>
-      <svg style="position:absolute;top:470px;left:30px;width:22px;height:24px;pointer-events:none;z-index:0;opacity:0.55;"><use href="#tkf-asterisk"/></svg>
-      <svg style="position:absolute;top:535px;right:18px;width:26px;height:26px;pointer-events:none;z-index:0;opacity:0.5;"><use href="#tkf-group-circle"/></svg>
-      <svg style="position:absolute;top:600px;left:22px;width:24px;height:23.7px;pointer-events:none;z-index:0;opacity:0.55;"><use href="#tkf-plant"/></svg>
-      <svg style="position:absolute;top:665px;right:22px;width:24px;height:24px;pointer-events:none;z-index:0;opacity:0.5;"><use href="#tkf-star"/></svg>
     </div>
+    </div>
+    <!-- Decorative doodles -- siblings of .sidebar-scroll (not inside it), positioned relative
+         to .sidebar itself and clipped by its overflow:hidden, so they never contribute to the
+         client list's scrollable height and force an unwanted scrollbar on shorter viewports
+         regardless of how many clients are actually in the list (see .sidebar-scroll above). -->
+    <svg style="position:absolute;top:355px;left:24px;width:28px;height:28px;pointer-events:none;z-index:0;opacity:0.55;"><use href="#tkf-flower-asterisk"/></svg>
+    <svg style="position:absolute;top:415px;right:20px;width:38px;height:10px;pointer-events:none;z-index:0;opacity:0.5;"><use href="#tkf-curve"/></svg>
+    <svg style="position:absolute;top:470px;left:30px;width:22px;height:24px;pointer-events:none;z-index:0;opacity:0.55;"><use href="#tkf-asterisk"/></svg>
+    <svg style="position:absolute;top:535px;right:18px;width:26px;height:26px;pointer-events:none;z-index:0;opacity:0.5;"><use href="#tkf-group-circle"/></svg>
+    <svg style="position:absolute;top:600px;left:22px;width:24px;height:23.7px;pointer-events:none;z-index:0;opacity:0.55;"><use href="#tkf-plant"/></svg>
+    <svg style="position:absolute;top:665px;right:22px;width:24px;height:24px;pointer-events:none;z-index:0;opacity:0.5;"><use href="#tkf-star"/></svg>
     <script>
     // Wire sidebar group links as soon as DOM is ready
     document.addEventListener("DOMContentLoaded", function() {
@@ -759,7 +766,7 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       if (hdi) hdi.onclick = function(){ if(typeof openGroupWorkspace==="function") openGroupWorkspace("HDI"); };
     });
     </script>
-    
+
     <div class="sidebar-bottom" style="position:relative;flex-shrink:0;">
       <div id="start-menu" style="display:none;position:absolute;bottom:64px;left:12px;right:12px;background:#0A3E1D;border:1px solid rgba(255,255,255,0.15);border-radius:14px;padding:8px;box-shadow:0 -8px 32px rgba(0,0,0,0.4);z-index:999;"><div onclick="switchPage('settings');toggleStartMenu();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-settings" style="font-size:16px;width:18px;"></i>Settings</div><div id="dark-toggle" onclick="toggleDarkMode()" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-moon" id="dark-toggle-icon" style="font-size:16px;width:18px;"></i><span id="dark-toggle-label">Dark mode</span></div><div onclick="openSearch();toggleStartMenu();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-search" style="font-size:16px;width:18px;"></i>Search <span style="margin-left:auto;font-size:10px;color:rgba(255,255,255,0.4);">Ctrl+K</span></div><div style="height:1px;background:rgba(255,255,255,0.1);margin:6px 4px;"></div><div onclick="signOut();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:#ff8080;font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-logout" style="font-size:16px;width:18px;"></i>Sign out</div></div><div onclick="toggleStartMenu()" id="sidebar-user-block" style="display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;border-top:1px solid rgba(255,255,255,0.08);user-select:none;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='transparent'"><div class="user-avatar" id="sidebar-avatar">ZM</div><div style="flex:1;min-width:0;"><div class="user-name" id="sidebar-name">Zona Rocelle Merto</div><div class="user-role" id="sidebar-role">Admin</div></div><i class="ti ti-chevron-up" id="start-chevron" style="font-size:14px;color:rgba(255,255,255,0.5);transition:transform 0.2s;"></i></div>
     </div>
