@@ -643,12 +643,14 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       };
       await loadCompaniesFromSupabase();
       await loadUserRelationsFromSupabase();
-      // All five depend on clients/clientGroups (companyId/groupId) already being populated above.
+      // All seven depend on clients/clientGroups (companyId/groupId) already being populated above.
       await loadPolicyFilesFromSupabase();
       await loadCalendarsFromSupabase();
       await loadDisputesFromSupabase();
       await loadTaskStatusFromSupabase();
       await loadArchivedClientsFromSupabase();
+      await loadTaskRunHistoryFromSupabase();
+      await loadCutoffProcessingFromSupabase();
       if (typeof refreshUserUI === 'function') refreshUserUI();
       if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
       if (typeof renderDashSchedule === 'function') renderDashSchedule();
@@ -7896,6 +7898,75 @@ function saveTaskRun(clientKey, taskKey, st, reason) {
   });
 }
 
+// Append-only, unlike saveTaskRun's upsert -- two runs of the same task in the same cutoff
+// are two rows, matching window.taskRunHistory's in-memory shape (an array per task per
+// cutoff, not a single overwritten "current" flag).
+function saveTaskRunHistory(clientKey, taskKey, cutoffLabel, st, reason) {
+  var companyId = clients[clientKey] && clients[clientKey].companyId;
+  if (!companyId) return;
+  supabaseClient.from('task_run_history').insert({
+    company_id: companyId, task_key: taskKey, cutoff_label: cutoffLabel, status: st, reason: reason || ''
+  }).then(function(res) {
+    if (res.error) console.warn('Could not save task run history for ' + clientKey + '/' + taskKey, res.error);
+  });
+}
+
+// Populates window.taskRunHistory from Supabase on boot, grouping rows into the same
+// {clientKey: {cutoffLabel: {taskKey: [{st, reason, timestamp}, ...]}}} shape setTaskStatus
+// already builds in memory, ordered oldest-first per group to match push() append order.
+async function loadTaskRunHistoryFromSupabase() {
+  var res = await supabaseClient.from('task_run_history').select('*').order('run_at', { ascending: true });
+  if (res.error) { console.warn('Failed to load task run history from Supabase', res.error); return; }
+  var companyIdToKey = {};
+  Object.keys(clients).forEach(function(k) {
+    if (clients[k] && clients[k].companyId) companyIdToKey[clients[k].companyId] = k;
+  });
+  window.taskRunHistory = {};
+  (res.data || []).forEach(function(row) {
+    var k = companyIdToKey[row.company_id];
+    if (!k) return;
+    if (!window.taskRunHistory[k]) window.taskRunHistory[k] = {};
+    if (!window.taskRunHistory[k][row.cutoff_label]) window.taskRunHistory[k][row.cutoff_label] = {};
+    if (!window.taskRunHistory[k][row.cutoff_label][row.task_key]) window.taskRunHistory[k][row.cutoff_label][row.task_key] = [];
+    window.taskRunHistory[k][row.cutoff_label][row.task_key].push({ st: row.status, reason: row.reason || '', timestamp: row.run_at });
+  });
+}
+
+// Fire-and-forget upsert, matching groupProcessingHistory's per-(client, cutoff) entry shape
+// exactly so it round-trips without translation.
+function saveCutoffProcessing(clientKey, entry) {
+  var companyId = clients[clientKey] && clients[clientKey].companyId;
+  if (!companyId) return;
+  supabaseClient.from('client_cutoff_processing').upsert({
+    company_id: companyId, cutoff_label: entry.cutoffLabel,
+    started_at: entry.startedAt || null, finished_at: entry.finishedAt || null,
+    tasks_done: entry.tasksDone || 0, total_tasks: entry.totalTasks || 0
+  }, { onConflict: 'company_id,cutoff_label' }).then(function(res) {
+    if (res.error) console.warn('Could not save cutoff processing history for ' + clientKey, res.error);
+  });
+}
+
+// Populates window.groupProcessingHistory from Supabase on boot -- most-recent-first per
+// client, matching markTaskStarted's unshift() order.
+async function loadCutoffProcessingFromSupabase() {
+  var res = await supabaseClient.from('client_cutoff_processing').select('*').order('started_at', { ascending: false });
+  if (res.error) { console.warn('Failed to load cutoff processing history from Supabase', res.error); return; }
+  var companyIdToKey = {};
+  Object.keys(clients).forEach(function(k) {
+    if (clients[k] && clients[k].companyId) companyIdToKey[clients[k].companyId] = k;
+  });
+  window.groupProcessingHistory = {};
+  (res.data || []).forEach(function(row) {
+    var k = companyIdToKey[row.company_id];
+    if (!k) return;
+    if (!window.groupProcessingHistory[k]) window.groupProcessingHistory[k] = [];
+    window.groupProcessingHistory[k].push({
+      cutoffLabel: row.cutoff_label, startedAt: row.started_at, finishedAt: row.finished_at,
+      tasksDone: row.tasks_done, totalTasks: row.total_tasks
+    });
+  });
+}
+
 // ── Per-client task applicability (toggle switches in Client Profile) ──────
 // clients[key].taskConfig = { taskKey: true|false }. Absence of taskConfig, or
 // absence of a specific key within it, means "enabled" (backward compatible).
@@ -8364,6 +8435,7 @@ function markTaskStarted(clientKey) {
   // Safety net: if an entry somehow already exists without a start time, backfill it now
   // rather than leaving it null forever.
   if (!entry.startedAt) entry.startedAt = new Date().toISOString();
+  saveCutoffProcessing(clientKey, entry);
 }
 
 function logTaskProgress(clientKey) {
@@ -8390,6 +8462,7 @@ function logTaskProgress(clientKey) {
   if (allT.length && doneCount === allT.length && !entry.finishedAt) {
     entry.finishedAt = new Date().toISOString();
   }
+  saveCutoffProcessing(clientKey, entry);
 }
 
 function setTaskStatus(taskKey, st, reason) {
@@ -8411,14 +8484,14 @@ function setTaskStatus(taskKey, st, reason) {
     // Per-run history -- taskStatus above is a single overwritten "current" flag with no
     // record of earlier runs in the same cutoff, so running a task twice used to leave no
     // trace of the first run. This appends instead. Keyed by cutoff label (not just client)
-    // so a rollover naturally starts a fresh history bucket without needing to wipe anything;
-    // kept in-memory only, matching taskStatus itself (neither persists to Supabase today).
+    // so a rollover naturally starts a fresh history bucket without needing to wipe anything.
     var _cutoffLabel = (clients[k] && clients[k].cutoff) || 'Unlabeled period';
     if (!window.taskRunHistory) window.taskRunHistory = {};
     if (!window.taskRunHistory[k]) window.taskRunHistory[k] = {};
     if (!window.taskRunHistory[k][_cutoffLabel]) window.taskRunHistory[k][_cutoffLabel] = {};
     if (!window.taskRunHistory[k][_cutoffLabel][taskKey]) window.taskRunHistory[k][_cutoffLabel][taskKey] = [];
     window.taskRunHistory[k][_cutoffLabel][taskKey].push({ st: st, reason: reason || '', timestamp: new Date().toISOString() });
+    saveTaskRunHistory(k, taskKey, _cutoffLabel, st, reason);
 
     logTaskProgress(k);
     // Log open→done duration for the "Avg processing time" metric — only fires for whichever
