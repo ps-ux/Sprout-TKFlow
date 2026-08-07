@@ -2101,7 +2101,7 @@ function switchTab(tab) {
 function renderGroupOverview(grpKey) {
   var grp = clientGroups[grpKey];
   if (!grp) return;
-  var subs = grp.subs.filter(function(k){ return clients[k]; });
+  var subs = grp.subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
   var ovEl = document.getElementById('ws-overview');
   if (!ovEl) return;
 
@@ -2454,7 +2454,7 @@ function renderGroupOverview(grpKey) {
 function openGroupWorkspace(grpKey) {
   var grp = clientGroups[grpKey];
   var subs = grp
-    ? grp.subs.filter(function(k){ return clients[k] && currentUser.assignedClients.includes(k); })
+    ? grp.subs.filter(function(k){ return clients[k] && !clients[k]._churned && currentUser.assignedClients.includes(k); })
     : [grpKey];
 
   // Highlight sidebar
@@ -2522,7 +2522,7 @@ function switchWsCompany(subKey) {
   var grpKey = window.currentWsGroup;
   var grp = grpKey ? clientGroups[grpKey] : null;
   var subs = grp
-    ? grp.subs.filter(function(k){ return clients[k] && currentUser.assignedClients.includes(k); })
+    ? grp.subs.filter(function(k){ return clients[k] && !clients[k]._churned && currentUser.assignedClients.includes(k); })
     : [subKey];
 
   // Capture the currently active tab BEFORE switching
@@ -2561,7 +2561,7 @@ function switchWsCompany(subKey) {
 function switchWsCompany(subKey) {
   var grpKey = currentWsGroup;
   var grp = grpKey ? clientGroups[grpKey] : null;
-  var subs = grp ? grp.subs.filter(function(k){ return clients[k] && currentUser.assignedClients.includes(k); }) : [subKey];
+  var subs = grp ? grp.subs.filter(function(k){ return clients[k] && !clients[k]._churned && currentUser.assignedClients.includes(k); }) : [subKey];
   var avColors  = {'av-g':'#edfae8','av-b':'#e8f0fe','av-o':'#fff4e6','av-p':'#F5F3FF'};
   var txtColors = {'av-g':'#32CE13','av-b':'#1679FA','av-o':'#e67e00','av-p':'#16A34A'};
 
@@ -2907,7 +2907,7 @@ function renderWsTasksSections(key) {
   };
 
   var _grpForTasks = window.currentWsGroup && clientGroups[window.currentWsGroup];
-  var _subsForTasks = (_grpForTasks && _grpForTasks.subs) ? _grpForTasks.subs.filter(function(k){ return clients[k]; }) : [key];
+  var _subsForTasks = (_grpForTasks && _grpForTasks.subs) ? _grpForTasks.subs.filter(function(k){ return clients[k] && !clients[k]._churned; }) : [key];
   var _batchTaskKeys = ['variance', 'validation', 'disputes_summary', 'newhires', 'profile', 'payroll_instructions'];
   function aggregateOrTaskHTML(t) {
     if (_subsForTasks.length <= 1 || _batchTaskKeys.indexOf(t.taskKey) === -1) return taskHTML(t);
@@ -6297,7 +6297,7 @@ function renderClientProfile(key) {
   if (!el) return;
   var grpKey = window.currentWsGroup || null;
   var isGroup = grpKey && clientGroups[grpKey];
-  var subs = isGroup ? clientGroups[grpKey].subs.filter(function(k){ return clients[k]; }) : [key];
+  var subs = isGroup ? clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; }) : [key];
   if (!subs.length) { el.innerHTML = '<div style="padding:20px;color:#9898a6;">No client selected.</div>'; return; }
 
   var headerClient = isGroup ? clientGroups[grpKey] : clients[key];
@@ -6985,7 +6985,7 @@ function adHocOpenTailored(type) {
   var subSelect = document.getElementById('adhoc-tailored-sub');
   var defaultClientKey = window.currentWsClient || window._wsClient || '';
   if (grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey]) {
-    var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k]; });
+    var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
     subSelect.innerHTML = subs.map(function(k){ return '<option value="' + k + '">' + (clients[k].name||k) + '</option>'; }).join('');
     subGroup.style.display = 'block';
     defaultClientKey = subs.indexOf(defaultClientKey) >= 0 ? defaultClientKey : subs[0];
@@ -7060,7 +7060,7 @@ function openLogModal(presetType) {
   var subSelect = document.getElementById('log-subcompany');
   var defaultClientKey = window.currentWsClient || window._wsClient || '';
   if (grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey]) {
-    var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k]; });
+    var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
     subSelect.innerHTML = subs.map(function(k){ return '<option value="' + k + '">' + (clients[k].name||k) + '</option>'; }).join('');
     subGroup.style.display = 'block';
     subSelect.onchange = function(){ refreshLogCutoffOptions(subSelect.value); };
@@ -8445,7 +8445,7 @@ function setTaskStatus(taskKey, st, reason) {
   // payroll_instructions) apply to the whole group when marked done/skipped — there's no
   // per-sub state for these to track separately, unlike variance/validation/disputes_summary.
   var targets = (grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey])
-    ? clientGroups[grpKey].subs.filter(function(k){ return clients[k]; })
+    ? clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; })
     : [ck];
   if (!targets.length) targets = [ck];
 
@@ -8567,7 +8567,7 @@ function openTaskRunner(taskKey, taskName) {
     // logged when they're each finalized individually later.
     var grpKeyForOpen = window.currentWsGroup;
     if (grpKeyForOpen && typeof clientGroups !== 'undefined' && clientGroups[grpKeyForOpen]) {
-      clientGroups[grpKeyForOpen].subs.filter(function(k){ return clients[k]; }).forEach(function(k){ markTaskOpened(k, taskKey); });
+      clientGroups[grpKeyForOpen].subs.filter(function(k){ return clients[k] && !clients[k]._churned; }).forEach(function(k){ markTaskOpened(k, taskKey); });
     } else {
       markTaskOpened(ck, taskKey);
     }
@@ -9069,7 +9069,7 @@ async function varTryRestoreFromSupabase(gi) {
 
 function subOptionsForCurrentGroup() {
   var grp = window.currentWsGroup && clientGroups[window.currentWsGroup];
-  if (grp && grp.subs) return grp.subs.filter(function(k){ return clients[k]; });
+  if (grp && grp.subs) return grp.subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
   return window.currentWsClient && clients[window.currentWsClient] ? [window.currentWsClient] : [];
 }
 
@@ -13234,7 +13234,7 @@ function renderTaskSubPicker(taskKey) {
   var grpKey = window.currentWsGroup;
   var grp = grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey];
   if (!grp) return '';
-  var subs = grp.subs.filter(function(k){ return clients[k]; });
+  var subs = grp.subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
   if (subs.length <= 1) return '';
   var current = window.currentWsClient || subs[0];
   var options = subs.map(function(k) {
@@ -15349,7 +15349,7 @@ function buildDisputeSummaryRunner(body) {
   document.getElementById('task-modal-sub').textContent = 'Pull all open tickets, plus everything raised this cut-off, then finalize before generating';
 
   var grp = window.currentWsGroup && clientGroups[window.currentWsGroup];
-  var subs = (grp && grp.subs) ? grp.subs.filter(function(k){ return clients[k]; }) : (window.currentWsClient ? [window.currentWsClient] : []);
+  var subs = (grp && grp.subs) ? grp.subs.filter(function(k){ return clients[k] && !clients[k]._churned; }) : (window.currentWsClient ? [window.currentWsClient] : []);
 
   dsBatchGroups = subs.map(function(k) {
     return { clientKey: k, name: clients[k].name || k, status: 'pending', included: [], payroll: [] };
@@ -17093,7 +17093,7 @@ function openAuditFromDashboard() {
 function pocTargetSubKey() {
   var grpKey = window.currentWsGroup;
   if (grpKey && clientGroups[grpKey]) {
-    var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k]; });
+    var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
     return subs[0];
   }
   return window.currentWsClient;
@@ -20454,7 +20454,7 @@ function refreshWsDisputesBadgesAndList(key) {
     var grpKey = window.currentWsGroup;
     var isGroup = grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey];
     if (isGroup) {
-      var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k]; });
+      var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
       wsDispEl.innerHTML = subs.map(function(k) {
         var subDisp = allDisputes.filter(function(d){ return d.client === k; });
         return '<div style="margin-bottom:18px;">'
@@ -20484,7 +20484,7 @@ function refreshWsDisputesBadgesAndList(key) {
   if (logBtn) logBtn.style.display = manualActionsVisible ? 'flex' : 'none';
 
   var badgeClientKeys = (window.currentWsGroup && typeof clientGroups !== 'undefined' && clientGroups[window.currentWsGroup])
-    ? clientGroups[window.currentWsGroup].subs.filter(function(k){ return clients[k]; })
+    ? clientGroups[window.currentWsGroup].subs.filter(function(k){ return clients[k] && !clients[k]._churned; })
     : [key];
   var liveOpenDisp = allDisputes.filter(function(d){ return badgeClientKeys.indexOf(d.client) >= 0 && d.status !== 'dst-closed'; });
   var liveRevDisp = liveOpenDisp.filter(function(d){ return d.status === 'dst-rev'; });
@@ -21239,7 +21239,7 @@ function dtmExport() {
 function dsGroupSiblingKeys(clientKey) {
   var grpKey = clients[clientKey] && clients[clientKey].group;
   if (grpKey && clientGroups[grpKey]) {
-    return clientGroups[grpKey].subs.filter(function(k){ return clients[k]; });
+    return clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
   }
   return [clientKey];
 }
