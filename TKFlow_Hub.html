@@ -513,6 +513,11 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       existing.hc = c.headcount;
       existing.payrollType = c.payroll_type;
       existing.basicPayOffset = c.basic_pay_offset;
+      // Only overwrite when the DB actually has something saved -- cutoffs defaults to '[]'
+      // for every row that predates this column (nothing ever wrote it before), and several
+      // seed clients have real hardcoded cutoffs in this file that an unconditional overwrite
+      // would otherwise wipe out on every load.
+      if (c.cutoffs && c.cutoffs.length) existing.cutoffs = c.cutoffs;
       existing.taskConfig = c.task_config;
       existing.ticketingMode = c.ticketing_mode;
       existing.ticketingUrl = c.ticketing_url;
@@ -4719,6 +4724,7 @@ async function _saveClientConfirmed() {
       headcount: 0,
       payroll_type: payrollType,
       basic_pay_offset: basicPayOffsetVal,
+      cutoffs: newClientCutoffs,
       task_config: { email_support: ticketingEnabled, leave_monitoring: leaveMonitoringEnabled, leave_credits_validation: lcvEnabled, validation: validationEnabled, variance: varianceEnabled, disputes_summary: disputesEnabled, newhires: newhiresEnabled, profile: profileEnabled, shift_management: shiftMgmtEnabled, holiday_setup: holidaySetupEnabled, payroll_id_sync: payrollIdSyncEnabled },
       ticketing_mode: 'otk'
     };
@@ -6001,7 +6007,14 @@ async function saveClientAssignment(groupKey) {
 function setBasicPayOffset(subKeysCsv, val) {
   var offset = parseInt(val, 10) || 0;
   subKeysCsv.split(',').forEach(function(sk) {
-    if (clients[sk]) clients[sk].basicPayOffset = offset;
+    if (!clients[sk]) return;
+    clients[sk].basicPayOffset = offset;
+    var companyId = clients[sk].companyId;
+    if (companyId) {
+      supabaseClient.from('companies').update({ basic_pay_offset: offset }).eq('short_key', sk).then(function(res) {
+        if (res.error) { console.warn('Could not save basic pay offset for ' + sk, res.error); if (typeof showToast === 'function') showToast('Could not save basic pay offset: ' + res.error.message, '#c0392b'); }
+      });
+    }
   });
   if (typeof renderClientProfile === 'function' && window.currentWsGroup) {
     renderClientProfile(window.currentWsGroup);
@@ -6009,6 +6022,72 @@ function setBasicPayOffset(subKeysCsv, val) {
     renderClientProfile(window.currentWsClient);
   }
   if (typeof showToast === 'function') showToast('Basic Pay cut-off offset updated');
+}
+
+// Applies to every subcompany passed (comma-separated keys), matching setBasicPayOffset's
+// convention -- a group's subs usually share one payroll cadence.
+function setPayrollType(subKeysCsv, type) {
+  subKeysCsv.split(',').forEach(function(sk) {
+    if (!clients[sk]) return;
+    clients[sk].payrollType = type;
+    var companyId = clients[sk].companyId;
+    if (companyId) {
+      supabaseClient.from('companies').update({ payroll_type: type }).eq('short_key', sk).then(function(res) {
+        if (res.error) { console.warn('Could not save payroll type for ' + sk, res.error); if (typeof showToast === 'function') showToast('Could not save payroll type: ' + res.error.message, '#c0392b'); }
+      });
+    }
+  });
+  if (typeof renderClientProfile === 'function' && window.currentWsGroup) {
+    renderClientProfile(window.currentWsGroup);
+  } else if (typeof renderClientProfile === 'function' && window.currentWsClient) {
+    renderClientProfile(window.currentWsClient);
+  }
+  if (typeof showToast === 'function') showToast('Payroll type updated to ' + type);
+}
+
+// The cutoffs array is small and always read/written as a single unit, so edits debounce per
+// sub (not per field) before persisting the whole array -- matches the ticketing URL autosave
+// pattern elsewhere in this file.
+var _cutoffSaveTimers = {};
+function _persistClientCutoffs(sk) {
+  var companyId = clients[sk] && clients[sk].companyId;
+  if (!companyId) return;
+  if (_cutoffSaveTimers[sk]) clearTimeout(_cutoffSaveTimers[sk]);
+  _cutoffSaveTimers[sk] = setTimeout(function() {
+    delete _cutoffSaveTimers[sk];
+    supabaseClient.from('companies').update({ cutoffs: clients[sk].cutoffs || [] }).eq('short_key', sk).then(function(res) {
+      if (res.error) { console.warn('Could not save cut-off schedule for ' + sk, res.error); if (typeof showToast === 'function') showToast('Could not save cut-off schedule: ' + res.error.message, '#c0392b'); }
+    });
+  }, 600);
+}
+
+function setClientCutoffField(subKeysCsv, idx, field, value) {
+  subKeysCsv.split(',').forEach(function(sk) {
+    if (!clients[sk] || !clients[sk].cutoffs || !clients[sk].cutoffs[idx]) return;
+    clients[sk].cutoffs[idx][field] = value;
+    _persistClientCutoffs(sk);
+  });
+}
+
+function addClientCutoffRow(subKeysCsv) {
+  subKeysCsv.split(',').forEach(function(sk) {
+    if (!clients[sk]) return;
+    if (!clients[sk].cutoffs) clients[sk].cutoffs = [];
+    clients[sk].cutoffs.push({ label: 'New Payout', payoutDay: '', attStart: '', attEnd: '', note: '' });
+    _persistClientCutoffs(sk);
+  });
+  if (typeof renderClientProfile === 'function' && window.currentWsGroup) renderClientProfile(window.currentWsGroup);
+  else if (typeof renderClientProfile === 'function' && window.currentWsClient) renderClientProfile(window.currentWsClient);
+}
+
+function removeClientCutoffRow(subKeysCsv, idx) {
+  subKeysCsv.split(',').forEach(function(sk) {
+    if (!clients[sk] || !clients[sk].cutoffs) return;
+    clients[sk].cutoffs.splice(idx, 1);
+    _persistClientCutoffs(sk);
+  });
+  if (typeof renderClientProfile === 'function' && window.currentWsGroup) renderClientProfile(window.currentWsGroup);
+  else if (typeof renderClientProfile === 'function' && window.currentWsClient) renderClientProfile(window.currentWsClient);
 }
 
 // Turns Leave Credits Monitoring on/off for a client, immediately updating the workspace
@@ -6319,19 +6398,48 @@ function renderClientProfile(key) {
     }).join('') : '<div style="padding:12px 16px;color:#9898a6;font-size:12px;">No POCs on file</div>';
   }
 
-  function cutoffsHtmlFor(cutoffs) {
-    return cutoffs.length ? cutoffs.map(function(co) {
+  // subKeysCsv, when passed, switches this from a read-only display into an editable form
+  // (calendar-derived cutoffs stay read-only -- they come from the uploaded file, so editing
+  // them here wouldn't do anything). attStart/attEnd are already free-form formatted text
+  // (e.g. "23rd previous month", built by the Add Client wizard's acAttText helper), so plain
+  // text inputs match how this data has always been entered, no structured day/month picker
+  // needed.
+  function cutoffsHtmlFor(cutoffs, subKeysCsv) {
+    var editable = !!subKeysCsv;
+    function fld(idx, field, val, placeholder, extraStyle) {
+      return '<input type="text" value="' + String(val||'').replace(/"/g,'&quot;') + '" placeholder="' + (placeholder||'') + '" '
+        + 'onblur="setClientCutoffField(\'' + subKeysCsv + '\',' + idx + ',\'' + field + '\',this.value)" '
+        + 'style="width:100%;padding:5px 8px;border:1px solid #EBEBEF;border-radius:8px;font-size:12px;font-family:Rubik,sans-serif;box-sizing:border-box;' + (extraStyle||'') + '">';
+    }
+    var rowsHtml = cutoffs.map(function(co, idx) {
+      var labelHtml = editable
+        ? fld(idx, 'label', co.label, 'Period label', 'font-weight:600;color:#32CE13;')
+        : '<div style="font-size:12px;font-weight:600;color:#32CE13;margin-bottom:8px;">' + co.label + '</div>';
+      var removeBtn = editable
+        ? '<button onclick="removeClientCutoffRow(\'' + subKeysCsv + '\',' + idx + ')" title="Remove this cut-off period" style="background:none;border:none;color:#9898a6;cursor:pointer;font-size:13px;padding:0;margin-left:8px;flex-shrink:0;"><i class="ti ti-trash"></i></button>'
+        : '';
+      var payoutHtml = editable
+        ? fld(idx, 'payoutDay', co.payoutDay, 'e.g. 13')
+        : '<div style="font-size:13px;color:#1a1a2e;">' + co.payoutDay + 'th of the month</div>';
+      var attHtml = editable
+        ? '<div style="display:flex;gap:6px;align-items:center;">' + fld(idx, 'attStart', co.attStart, 'e.g. 23rd previous month') + '<span style="color:#9898a6;flex-shrink:0;">\u2013</span>' + fld(idx, 'attEnd', co.attEnd, 'e.g. 8th current month') + '</div>'
+        : '<div style="font-size:13px;color:#1a1a2e;">' + co.attStart + ' \u2013 ' + co.attEnd + '</div>';
+      var noteHtml = editable
+        ? fld(idx, 'note', co.note, 'Note', 'margin-top:6px;color:#9898a6;font-size:11px;')
+        : '<div style="font-size:11px;color:#9898a6;margin-top:6px;">' + co.note + '</div>';
       return '<div style="background:#F4F4F8;border-radius:14px;padding:14px 16px;">'
-        + '<div style="font-size:12px;font-weight:600;color:#32CE13;margin-bottom:8px;">' + co.label + '</div>'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;' + (editable ? 'margin-bottom:8px;' : '') + '">' + labelHtml + removeBtn + '</div>'
         + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
-        + '<div><div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;margin-bottom:3px;">Payout Day</div>'
-        + '<div style="font-size:13px;color:#1a1a2e;">' + co.payoutDay + 'th of the month</div></div>'
-        + '<div><div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;margin-bottom:3px;">Attendance Cut-off</div>'
-        + '<div style="font-size:13px;color:#1a1a2e;">' + co.attStart + ' \u2013 ' + co.attEnd + '</div></div>'
+        + '<div><div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;margin-bottom:3px;">Payout Day</div>' + payoutHtml + '</div>'
+        + '<div><div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;margin-bottom:3px;">Attendance Cut-off</div>' + attHtml + '</div>'
         + '</div>'
-        + '<div style="font-size:11px;color:#9898a6;margin-top:6px;">' + co.note + '</div>'
+        + noteHtml
         + '</div>';
-    }).join('') : '<div style="color:#9898a6;font-size:12px;">No cut-off schedule on file</div>';
+    }).join('');
+    if (editable) {
+      return rowsHtml + '<button onclick="addClientCutoffRow(\'' + subKeysCsv + '\')" style="grid-column:1/-1;padding:10px;border:1.5px dashed #EBEBEF;border-radius:12px;background:none;color:#32CE13;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">+ Add cut-off period</button>';
+    }
+    return rowsHtml || '<div style="color:#9898a6;font-size:12px;">No cut-off schedule on file</div>';
   }
 
   // Pulls the current + upcoming cut-off periods directly from the client's uploaded TK
@@ -6421,21 +6529,35 @@ function renderClientProfile(key) {
   if (liveCutoffs) {
     cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(liveCutoffs) + '</div>';
   } else if (subs.length <= 1) {
-    cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(clients[subs[0]].cutoffs||[]) + '</div>';
+    cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(clients[subs[0]].cutoffs||[], subs[0]) + '</div>';
   } else {
     var firstCutoffs = clients[subs[0]].cutoffs || [];
     var cutoffsAllSame = subs.every(function(k){ return jsonEq(clients[k].cutoffs||[], firstCutoffs); });
     if (cutoffsAllSame) {
-      cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(firstCutoffs) + '</div>';
+      cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(firstCutoffs, subs.join(',')) + '</div>';
     } else {
       cutoffSection = subs.map(function(k) {
         return '<div style="margin-bottom:14px;">'
           + '<div style="font-size:11px;font-weight:600;color:#32CE13;margin-bottom:6px;">' + clients[k].name + '</div>'
-          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + cutoffsHtmlFor(clients[k].cutoffs||[]) + '</div>'
+          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + cutoffsHtmlFor(clients[k].cutoffs||[], k) + '</div>'
           + '</div>';
       }).join('');
     }
   }
+
+  // Payroll type drives cutoff-schedule field count/rollover math elsewhere in the app
+  // (periodCountFor/periodLabelsFor), but until now had no edit path at all once a client was
+  // created — only ever set once, at Add Client time.
+  var payrollTypeOptions = ['Semi-monthly', 'Monthly', 'Weekly'];
+  var currentPayrollType = clients[subs[0]].payrollType || 'Semi-monthly';
+  var payrollTypeAllSame = subs.every(function(k){ return (clients[k].payrollType || 'Semi-monthly') === currentPayrollType; });
+  var payrollTypeControl = '<div style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:12px 16px;margin-bottom:16px;">'
+    + '<div style="font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Payroll Type</div>'
+    + (payrollTypeAllSame ? '' : '<div style="font-size:11px;color:#e67e00;margin-bottom:8px;"><i class="ti ti-alert-triangle" style="font-size:11px;"></i> Subcompanies currently have different payroll types — changing this applies to all.</div>')
+    + '<select onchange="setPayrollType(\'' + subs.join(',') + '\', this.value)" style="padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;background:#fff;">'
+    + payrollTypeOptions.map(function(o){ return '<option value="' + o + '"' + (currentPayrollType === o ? ' selected' : '') + '>' + o + '</option>'; }).join('')
+    + '</select>'
+    + '</div>';
 
   // Lets clients where Basic Pay cut-off doesn't match Attendance cut-off be configured
   // explicitly — the calendar file only tracks Attendance cut-off directly, so anything that
@@ -6642,6 +6764,7 @@ function renderClientProfile(key) {
     + processorHistorySection
     // Cutoff schedule
     + '<div style="font-size:12px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Cut-off Schedule</div>'
+    + payrollTypeControl
     + cutoffSection
     + basicPayOffsetControl
     // Applicable tasks
