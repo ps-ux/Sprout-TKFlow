@@ -515,6 +515,11 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       existing.taskConfig = c.task_config;
       existing.ticketingMode = c.ticketing_mode;
       existing.ticketingUrl = c.ticketing_url;
+      // Churn state must round-trip through Supabase's companies.status column -- see
+      // _persistCompanyStatus() -- otherwise a reload always comes back with whatever the
+      // hardcoded seed/wizard default was (i.e. active), undoing any churn from before reload.
+      existing._churned = c.status === 'Churned';
+      if (existing._churned) existing.status = 'Churned';
       if (group) { existing.group = group.code; existing.groupName = group.name; }
       existing.pocs = (c.company_pocs || []).map(function(p) {
         return { name: p.name, role: p.role, phone: p.phone || '', email: p.email || '' };
@@ -645,6 +650,10 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       if (typeof refreshUserUI === 'function') refreshUserUI();
       if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
       if (typeof renderDashSchedule === 'function') renderDashSchedule();
+      // initHub() already ran renderMiniCal() once on DOMContentLoaded, before this chain
+      // (currentUser, _calStore) had real data -- re-render now so the workweek widget
+      // picks up the actual assigned clients and their uploaded calendars.
+      if (typeof renderMiniCal === 'function') renderMiniCal();
       if (typeof filterClientGrid === 'function') filterClientGrid();
       loginOverlay.style.display = 'none';
       return true;
@@ -5492,6 +5501,18 @@ function renderClientAssignments() {
   }).join('');
 }
 
+// Writes a client's lifecycle status (Churned/active) back to companies.status so it
+// survives a reload -- the in-memory clients[key]._churned flag alone used to revert to
+// active on every reload since nothing ever persisted it. Fire-and-forget, matching the
+// ticketing_mode/url update pattern elsewhere in this file.
+function _persistCompanyStatus(shortKeys, status) {
+  (Array.isArray(shortKeys) ? shortKeys : [shortKeys]).forEach(function(sk) {
+    supabaseClient.from('companies').update({ status: status }).eq('short_key', sk).then(function(res) {
+      if (res.error) console.warn('Failed to persist status for ' + sk, res.error);
+    });
+  });
+}
+
 // Churns a whole client group directly from the Admin > Client Assignments panel, without
 // needing to navigate into that client's own workspace first. Archives every subcompany in
 // the group individually, matching how the rest of the app tracks clients at the sub level.
@@ -5508,6 +5529,7 @@ function churnClientFromAssignments(groupKey) {
     clients[sk].status = 'Churned';
     clients[sk]._churned = true;
   });
+  _persistCompanyStatus(subs, 'Churned');
   addToArchives(groupKey, subs, today, reason || 'No reason given', '', false);
 
   if (typeof renderClientCards === 'function') renderClientCards();
@@ -5529,6 +5551,7 @@ function churnSubcompany(groupKey, subKey) {
 
   c.status = 'Churned';
   c._churned = true;
+  _persistCompanyStatus(subKey, 'Churned');
   addToArchives(groupKey, [subKey], today, reason || 'No reason given', '', true);
 
   if (typeof renderClientCards === 'function') renderClientCards();
@@ -17000,6 +17023,7 @@ function confirmChurn() {
   if (clientKey && clients[clientKey]) {
     clients[clientKey].status = 'Churned';
     clients[clientKey]._churned = true;
+    _persistCompanyStatus(clientKey, 'Churned');
   }
 
   // Close workspace and go back to dashboard
@@ -17189,6 +17213,7 @@ function restoreFromArchive(archiveIdx) {
     clients[sk]._churned = false;
     clients[sk].status = 'In progress';
   });
+  _persistCompanyStatus(a.subKeys, 'active');
   archivedClients.splice(archiveIdx, 1);
   renderClientCards();
   renderSidebarClients();
