@@ -6999,6 +6999,13 @@ function adHocSaveTailored() {
 
   var descParts = [];
   var empVal = '', beforeVal = '', afterVal = '';
+  // Captured separately (not just folded into descParts) so profilePullFromAdhocLogs() can
+  // read them directly off the card instead of regex-parsing the joined description text --
+  // fieldChanged drives Resigned/Salary Increase/Change in Personal Info routing, and
+  // effectiveDate is the date the change actually takes effect, distinct from dateRequested
+  // (when the log was submitted) which profilePullFromAdhocLogs() was wrongly using for both
+  // period-matching and the displayed "Date of Effectivity".
+  var fieldChangedVal = '', effectiveDateVal = '';
   fields.forEach(function(f) {
     var el = document.getElementById('adhoc-t-' + f.id);
     var val = el ? el.value.trim() : '';
@@ -7007,11 +7014,13 @@ function adHocSaveTailored() {
     else if (f.maps === 'before') beforeVal = val;
     else if (f.maps === 'after') afterVal = val;
     else if (f.maps === 'desc') descParts.push((f.descPrefix ? f.descPrefix + ': ' : '') + val);
+    if (f.id === 'field') fieldChangedVal = val;
+    if (f.id === 'effective') effectiveDateVal = val;
   });
 
   buildAndInsertAdhocCard({
     type: type, emp: empVal, desc: descParts.join(' \u2014 '), before: beforeVal, after: afterVal,
-    dateRequested: dateRequested, subKey: subKey,
+    dateRequested: dateRequested, subKey: subKey, fieldChanged: fieldChangedVal, effectiveDate: effectiveDateVal,
   });
   adHocCloseTailoredModal();
 }
@@ -7137,6 +7146,8 @@ function buildAndInsertAdhocCard(opts) {
   const subKey = opts.subKey || '';
   const isDispute = !!opts.isDispute;
   const remarks = opts.remarks || '';
+  const fieldChanged = opts.fieldChanged || '';
+  const effectiveDate = opts.effectiveDate || '';
 
   const typeColors = {
     'Shift Management':   'background:#DCFCE7;color:#16A34A;',
@@ -7156,6 +7167,8 @@ function buildAndInsertAdhocCard(opts) {
   if (subKey) card.setAttribute('data-subcompany', subKey);
   if (cutoffVal.trim()) card.setAttribute('data-cutoff', cutoffVal.trim());
   if (isDispute) card.setAttribute('data-is-dispute', 'true');
+  if (fieldChanged) card.setAttribute('data-field-changed', fieldChanged);
+  if (effectiveDate) card.setAttribute('data-effective-date', effectiveDate);
   const subBadge = subKey ? '<span style="font-size:10px;font-weight:600;background:#F4F4F8;color:#9898a6;padding:2px 8px;border-radius:20px;margin-left:6px;">' + ((clients[subKey]&&clients[subKey].name)||subKey) + '</span>' : '';
   const cutoffBadge = cutoffVal.trim() ? '<span style="font-size:10px;font-weight:600;background:#e8f0fe;color:#1679FA;padding:2px 8px;border-radius:20px;margin-left:6px;">' + cutoffVal.trim() + '</span>' : '';
   const disputeBadge = isDispute ? '<span style="font-size:10px;font-weight:600;background:#fff0f0;color:#c0392b;padding:2px 8px;border-radius:20px;margin-left:6px;"><i class="ti ti-ticket" style="font-size:10px;vertical-align:-1px;"></i> Dispute</span>' : '';
@@ -14831,9 +14844,9 @@ function parseSingleLogDate(str) {
 
 // Pulls "Profile Update"-type ad hoc log cards (for the currently selected subcompany AND
 // falling within the entered Attendance cut-off period) into the Profile Updates task's
-// tables — routes salary-looking before/after values into the Salary Increase section,
-// everything else into Change in Personal Info. Skips cards already pulled (marked via
-// data-profile-pulled) so re-clicking doesn't duplicate rows.
+// tables — routes resignations into Resigned/On Hold, salary-looking changes into Salary
+// Increase, everything else into Change in Personal Info. Skips cards already pulled (marked
+// via data-profile-pulled) so re-clicking doesn't duplicate rows.
 function profilePullFromAdhocLogs() {
   var listEl = document.getElementById('adhoc-log-list');
   if (!listEl) { if (typeof showToast==='function') showToast('No ad hoc logs found', '#e67e00'); return; }
@@ -14859,7 +14872,7 @@ function profilePullFromAdhocLogs() {
   });
 
   if (!window.profileData) window.profileData = {resigned:[], changes:[], salaryIncrease:[]};
-  var pulledChanges = 0, pulledSalary = 0, skippedOutOfPeriod = 0;
+  var pulledChanges = 0, pulledSalary = 0, pulledResigned = 0, skippedOutOfPeriod = 0;
 
   relevant.forEach(function(card) {
     if (card.getAttribute('data-profile-pulled') === 'true') return; // already imported
@@ -14868,23 +14881,33 @@ function profilePullFromAdhocLogs() {
     if (type !== 'Profile Update') return; // only pull profile-update-tagged logs
 
     var dateEl = card.querySelector('.adhoc-top > div[style*="color:#9898a6"]');
-    var effectivity = dateEl ? dateEl.textContent.trim() : '';
+    var requestedDate = dateEl ? dateEl.textContent.trim() : '';
 
+    // effectiveDateAttr is the date the change actually takes effect (set from the tailored
+    // Profile Update modal's own "Effective Date" field) -- distinct from requestedDate (when
+    // the log was submitted), which is all older logs had to go on. Prefer it for BOTH period
+    // matching and the displayed "Date of Effectivity" whenever it's present.
+    var effectiveDateAttr = card.getAttribute('data-effective-date');
     var explicitCutoff = card.getAttribute('data-cutoff');
     var periodLabelsSet = periods.map(function(p){ return p.label; });
-    var inAnyPeriod;
-    if (explicitCutoff) {
-      // Explicit tag on the log — exact match against either entered cut-off field
+    var inAnyPeriod, matchDate = null;
+    if (effectiveDateAttr) {
+      matchDate = new Date(effectiveDateAttr + 'T00:00:00');
+      inAnyPeriod = periods.some(function(p){ return matchDate >= p.start && matchDate <= p.end; });
+    } else if (explicitCutoff) {
+      // Explicit tag on the log -- exact match against either entered cut-off field
       inAnyPeriod = periodLabelsSet.indexOf(explicitCutoff) >= 0;
     } else {
-      // No explicit tag (older log) — fall back to matching by date falling within the range
-      var logDate = parseSingleLogDate(effectivity);
-      inAnyPeriod = logDate && periods.some(function(p){ return logDate >= p.start && logDate <= p.end; });
+      // No explicit tag or effective date (older log) -- fall back to matching by the date the
+      // log was requested falling within the range
+      matchDate = parseSingleLogDate(requestedDate);
+      inAnyPeriod = matchDate && periods.some(function(p){ return matchDate >= p.start && matchDate <= p.end; });
     }
     if (!inAnyPeriod) {
       skippedOutOfPeriod++;
-      return; // not applicable to either period — leave it for a future run
+      return; // not applicable to either period -- leave it for a future run
     }
+    var effectivity = matchDate ? matchDate.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : requestedDate;
 
     var nameEl = card.querySelector('.adhoc-name');
     var fullName = nameEl ? nameEl.textContent.split('\u2014')[0].trim() : '';
@@ -14894,10 +14917,26 @@ function profilePullFromAdhocLogs() {
     var before = changeVals[0] ? changeVals[0].textContent.trim() : '';
     var after = changeVals[1] ? changeVals[1].textContent.trim() : '';
 
-    // Salary-looking values (e.g. "PHP 28,000") go to Salary Increase; everything else to Change in Personal Info
-    var looksLikeSalary = /php|₱|\d[\d,]*\.\d{2}/i.test(before) || /php|₱|\d[\d,]*\.\d{2}/i.test(after);
+    // Field Changed (set from the tailored modal) is the reliable signal for routing when
+    // present -- e.g. "Employment Status" changing to "Resigned" was previously falling
+    // through to Change in Personal Info because nothing ever checked for resignations at
+    // all. Falls back to sniffing before/after text for logs without a Field Changed value
+    // (generic "Other Requests" log modal has no such field, only Before/After).
+    var fieldChanged = card.getAttribute('data-field-changed') || '';
+    var isResignation = /resign/i.test(fieldChanged) || /resign/i.test(after) || /resign/i.test(before);
+    // Salary-looking values (e.g. "PHP 28,000") go to Salary Increase; broadened to also
+    // catch plain integers (e.g. "5000" -> "100000") when Field Changed itself says salary/
+    // rate/pay, since the old regex required a currency symbol or decimal point and silently
+    // misrouted a plain-number salary change into Change in Personal Info instead.
+    var looksLikeSalary = /salary|rate|\bpay\b|compensation/i.test(fieldChanged)
+      || /php|₱|\d[\d,]*\.\d{2}/i.test(before) || /php|₱|\d[\d,]*\.\d{2}/i.test(after);
 
-    if (looksLikeSalary && (before || after)) {
+    if (isResignation) {
+      window.profileData.resigned.push({
+        empNo: '', fullName: fullName, lastDay: effectivity, remarks: remarks
+      });
+      pulledResigned++;
+    } else if (looksLikeSalary && (before || after)) {
       window.profileData.salaryIncrease.push({
         empNo: '', fullName: fullName, oldRate: before, newRate: after,
         effectivity: effectivity, type: 'Salary Increase', remarks: remarks
@@ -14913,7 +14952,7 @@ function profilePullFromAdhocLogs() {
     card.setAttribute('data-profile-pulled', 'true');
   });
 
-  var total = pulledChanges + pulledSalary;
+  var total = pulledChanges + pulledSalary + pulledResigned;
   if (!total) {
     var periodLabels = periods.map(function(p){ return p.label; }).join(' or ');
     var msg = skippedOutOfPeriod
