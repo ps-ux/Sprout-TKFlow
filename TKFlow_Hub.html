@@ -6681,7 +6681,13 @@ function renderClientProfile(key) {
     var matrixCols = '200px repeat(' + subs.length + ', 1fr)';
     var headerRow = '<div style="display:grid;grid-template-columns:' + matrixCols + ';background:#F8F8FA;border-bottom:1px solid #EBEBEF;">'
       + '<div style="padding:10px 14px;font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;">Task</div>'
-      + subs.map(function(k){ return '<div style="padding:10px 6px;font-size:11px;font-weight:600;color:#9898a6;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + clients[k].name + '">' + clients[k].name + '</div>'; }).join('')
+      + subs.map(function(k){
+          return '<div style="padding:10px 6px;font-size:11px;font-weight:600;color:#9898a6;text-align:center;">'
+            + '<div style="display:flex;align-items:center;justify-content:center;gap:5px;overflow:hidden;">'
+            + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + clients[k].name + '">' + clients[k].name + '</span>'
+            + '<i class="ti ti-copy" onclick="copyTaskConfigToOthers(\'' + k + '\',\'' + subs.join(',') + '\')" title="Copy ' + clients[k].name + '’s task setup to the other subcompanies" style="font-size:12px;color:#9898a6;cursor:pointer;flex-shrink:0;"></i>'
+            + '</div></div>';
+        }).join('')
       + '</div>';
 
     var bodyRows = taskDefs.map(function(t) {
@@ -8134,12 +8140,49 @@ function clientTasksDoneStr(clientKey) {
   return done + '/' + applicableKeys.length;
 }
 
+// Fire-and-forget -- the in-memory taskConfig write already happened synchronously above.
+function _persistTaskConfig(clientKey) {
+  var companyId = clients[clientKey] && clients[clientKey].companyId;
+  if (!companyId) return;
+  supabaseClient.from('companies').update({ task_config: clients[clientKey].taskConfig || {} }).eq('short_key', clientKey).then(function(res) {
+    if (res.error) { console.warn('Could not save task config for ' + clientKey, res.error); if (typeof showToast === 'function') showToast('Could not save task config: ' + res.error.message, '#c0392b'); }
+  });
+}
+
 function setTaskEnabled(clientKey, taskKey, enabled) {
   var c = clients[clientKey];
   if (!c) return;
   if (!c.taskConfig) c.taskConfig = {};
   c.taskConfig[taskKey] = !!enabled;
+  _persistTaskConfig(clientKey);
   refreshGroupOverviewIfActive();
+}
+
+// Copies one subcompany's whole Applicable Tasks setup onto the others in the group -- for
+// clients like HDI where every subcompany genuinely has the same scope, this avoids re-ticking
+// the same toggles one subcompany at a time. Only copies keys for tasks the target actually
+// has (its own tasks/tasks2/tasks3 arrays) -- a task that isn't in scope for a target sub at
+// all isn't something copying a flag onto it would meaningfully enable.
+function copyTaskConfigToOthers(sourceKey, allSubsCsv) {
+  var allSubs = allSubsCsv.split(',');
+  var sourceConfig = (clients[sourceKey] && clients[sourceKey].taskConfig) || {};
+  var targets = allSubs.filter(function(k){ return k !== sourceKey && clients[k]; });
+  if (!targets.length) return;
+  targets.forEach(function(k) {
+    var allTk = (clients[k].tasks||[]).concat(clients[k].tasks2||[]).concat(clients[k].tasks3||[]);
+    if (!clients[k].taskConfig) clients[k].taskConfig = {};
+    allTk.forEach(function(t) {
+      // Absence in sourceConfig means "enabled" per isTaskEnabled's own backward-compat rule,
+      // so copy that forward as an explicit true rather than leaving the target's own
+      // (possibly different) prior value in place.
+      clients[k].taskConfig[t.taskKey] = Object.prototype.hasOwnProperty.call(sourceConfig, t.taskKey) ? !!sourceConfig[t.taskKey] : true;
+    });
+    _persistTaskConfig(k);
+  });
+  if (typeof renderClientProfile === 'function' && window.currentWsGroup) renderClientProfile(window.currentWsGroup);
+  else if (typeof renderClientProfile === 'function' && window.currentWsClient) renderClientProfile(window.currentWsClient);
+  if (typeof refreshGroupOverviewIfActive === 'function') refreshGroupOverviewIfActive();
+  if (typeof showToast === 'function') showToast('Copied ' + ((clients[sourceKey] && clients[sourceKey].name) || sourceKey) + '’s task setup to ' + targets.length + ' other subcompan' + (targets.length > 1 ? 'ies' : 'y'));
 }
 
 function toggleTaskAndRefreshProfile(clientKey, taskKey, checked) {
