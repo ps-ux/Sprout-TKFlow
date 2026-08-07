@@ -4277,7 +4277,7 @@ function selectAsPayroll(type) {
   window._acAsPayrollType = type;
 }
 
-function saveSubcompany() {
+async function saveSubcompany() {
   var groupKey = window._acAddSubGroupKey;
   var grp = clientGroups[groupKey];
   if (!grp) return;
@@ -4303,6 +4303,81 @@ function saveSubcompany() {
     email_support: toggleOn('as-addon-ticketing-toggle'),
     leave_monitoring: toggleOn('as-addon-leave-toggle'),
   };
+
+  // Persist to Supabase before touching any local state, matching _saveClientConfirmed's
+  // reasoning -- a failure here (duplicate short code, network error) should leave nothing
+  // half-created in the UI.
+  //
+  // A standalone client's workspace (no entity tags added at Add Client time) has no real
+  // company_groups row -- clientGroups[groupKey] is a synthetic self-group built at load time
+  // (see loadCompaniesFromSupabase) with no .groupId. Adding a subcompany to it is really
+  // promoting it into a real 2-member group for the first time, so mint that row now and
+  // point the existing standalone company at it.
+  var newGroupId = grp.groupId || null;
+  if (!newGroupId) {
+    var groupInsertRes = await supabaseClient.from('company_groups').insert({ code: groupKey, name: grp.name }).select().single();
+    if (groupInsertRes.error) {
+      if (typeof showToast === 'function') showToast('Could not save subcompany: ' + groupInsertRes.error.message, '#c0392b');
+      return;
+    }
+    newGroupId = groupInsertRes.data.id;
+    var promoteRes = await supabaseClient.from('companies').update({ group_id: newGroupId }).eq('short_key', groupKey);
+    if (promoteRes.error) {
+      if (typeof showToast === 'function') showToast('Could not save subcompany: ' + promoteRes.error.message, '#c0392b');
+      return;
+    }
+  }
+
+  var companyInsertRes = await supabaseClient.from('companies').insert({
+    short_key: code, group_id: newGroupId, name: name, status: 'active', headcount: 0,
+    payroll_type: payrollType, basic_pay_offset: 0, task_config: taskConfig, ticketing_mode: 'otk'
+  }).select().single();
+  if (companyInsertRes.error) {
+    if (typeof showToast === 'function') showToast('Could not save subcompany: ' + companyInsertRes.error.message, '#c0392b');
+    return;
+  }
+  var newCompanyId = companyInsertRes.data.id;
+
+  // Same sibling-inheritance rule as below (in-memory), computed here against grp.subs
+  // BEFORE the new code is pushed onto it, so persisted access matches what the UI is about
+  // to show. Only users with a real Supabase Auth account (resolved via USERS[].email) can
+  // be resolved to a user_company_relations row; anyone else keeps in-memory-only access
+  // until their account exists, same limitation as Add Client.
+  var relationsToGrant = []; // [{uk, relation_type}]
+  Object.keys(USERS).forEach(function(uk) {
+    var u = USERS[uk];
+    var isSpecOfSibling = grp.subs.some(function(sk){ return (u.processClients||[]).indexOf(sk) >= 0; });
+    var isAudOfSibling  = grp.subs.some(function(sk){ return (u.auditClients||[]).indexOf(sk) >= 0; });
+    var isAssignedToSibling = grp.subs.some(function(sk){ return (u.assignedClients||[]).indexOf(sk) >= 0; });
+    if (isAssignedToSibling) relationsToGrant.push({ uk: uk, relation_type: 'assigned' });
+    if (isSpecOfSibling) { relationsToGrant.push({ uk: uk, relation_type: 'assigned' }); relationsToGrant.push({ uk: uk, relation_type: 'processing' }); }
+    if (isAudOfSibling)  relationsToGrant.push({ uk: uk, relation_type: 'audit' });
+  });
+  Object.keys(USERS).forEach(function(uk) {
+    if (USERS[uk].canAssign) relationsToGrant.push({ uk: uk, relation_type: 'assigned' });
+  });
+  if (relationsToGrant.length) {
+    var emailsNeeded = relationsToGrant.map(function(r){ return USERS[r.uk].email; }).filter(function(e,i,a){ return e && a.indexOf(e) === i; });
+    var usersLookupRes = await supabaseClient.from('users').select('id, email').in('email', emailsNeeded);
+    var userIdByEmail = {};
+    (usersLookupRes.data || []).forEach(function(u) { userIdByEmail[u.email] = u.id; });
+    var seenRel = {};
+    var relationRows = relationsToGrant.map(function(r) {
+      var uid = userIdByEmail[USERS[r.uk].email];
+      if (!uid) return null; // no real account yet -- stays in-memory only for this session
+      return { user_id: uid, company_id: newCompanyId, relation_type: r.relation_type };
+    }).filter(function(r) {
+      if (!r) return false;
+      var k = r.user_id + '|' + r.company_id + '|' + r.relation_type;
+      if (seenRel[k]) return false; // e.g. 'assigned' can be queued twice (canAssign auto-grant + specialist grant)
+      seenRel[k] = true;
+      return true;
+    });
+    if (relationRows.length) {
+      var relResInsert = await supabaseClient.from('user_company_relations').insert(relationRows);
+      if (relResInsert.error) { console.warn('Could not save user_company_relations for ' + code, relResInsert.error); if (typeof showToast === 'function') showToast('Subcompany saved, but specialist/access assignment failed to save: ' + relResInsert.error.message, '#c0392b'); }
+    }
+  }
 
   var avatarColors = ['av-g','av-b','av-o','av-p'];
   var usedColors = Object.keys(clients).length;
@@ -4338,12 +4413,17 @@ function saveSubcompany() {
     ],
     disputes: []
   };
+  // Needed so Policy Bank uploads and calendar persistence (both keyed by the real Supabase
+  // companies.id, not the short_key) work immediately, without waiting for a reload.
+  clients[code].companyId = newCompanyId;
+  if (!grp.groupId) grp.groupId = newGroupId; // group promoted above -- reflect it locally too
 
   grp.subs.push(code);
 
   // Inherit specialist/auditor/visibility from sibling subs automatically — the whole
   // point of "same specialist as its siblings" is that nobody has to remember to go
-  // reassign this manually after the fact.
+  // reassign this manually after the fact. Matches relationsToGrant above, computed before
+  // grp.subs.push(code) so the persisted rows and this in-memory pass agree.
   var siblingSubs = grp.subs.filter(function(sk){ return sk !== code; });
   Object.keys(USERS).forEach(function(uk) {
     var u = USERS[uk];
@@ -4359,6 +4439,19 @@ function saveSubcompany() {
     if (!USERS[uk].canAssign) return;
     if (USERS[uk].assignedClients.indexOf(code) === -1) USERS[uk].assignedClients.push(code);
   });
+  // Keep the *currently logged-in* user's session in sync immediately -- currentUser is a
+  // separate object from USERS[uk] once real auth is in place, so this session wouldn't
+  // otherwise see its own new access until the next login. Matches Add Client's same fix-up.
+  if (currentUser) {
+    ['assignedClients','processClients','auditClients'].forEach(function(listName) {
+      var uMatch = Object.keys(USERS).find(function(uk){ return USERS[uk].email === currentUser.email; });
+      if (!uMatch) return;
+      if ((USERS[uMatch][listName]||[]).indexOf(code) >= 0) {
+        if (!currentUser[listName]) currentUser[listName] = [];
+        if (currentUser[listName].indexOf(code) === -1) currentUser[listName].push(code);
+      }
+    });
+  }
 
   closeAddSubcompanyModal();
   if (typeof renderSidebarClients === 'function') renderSidebarClients();
