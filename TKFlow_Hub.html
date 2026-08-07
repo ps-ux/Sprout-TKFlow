@@ -1170,8 +1170,7 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
                 <div style="color:#9898a6;align-self:center;font-size:18px;">&#x2192;</div>
                 <div class="change-block"><div class="change-label">After</div><div class="change-val" style="color:#32CE13;">Flexi Per Day</div></div>
               </div>
-              <div class="adhoc-footer">
-                <div class="channel-tag email"><i class="ti ti-mail" style="font-size:11px;"></i> Email &middot; May 14, 10:23AM</div>
+              <div class="adhoc-footer" style="justify-content:flex-end;">
                 <div style="display:flex;align-items:center;gap:8px;">
                   <div style="font-size:11px;color:#32CE13;font-weight:500;">Completed &middot; May 14, 3:45PM</div>
                   <button onclick="editLog(this)" style="font-size:11px;color:#9898a6;background:none;border:1px solid #EBEBEF;border-radius:7px;padding:2px 8px;cursor:pointer;font-family:Rubik,sans-serif;">Edit</button>
@@ -1193,15 +1192,9 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
                 <div style="color:#9898a6;align-self:center;font-size:18px;">&#x2192;</div>
                 <div class="change-block"><div class="change-label">After</div><div class="change-val" style="color:#32CE13;">PHP 32,000</div></div>
               </div>
-              <div class="adhoc-footer">
-                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-                  <div class="channel-tag viber"><i class="ti ti-message-circle" style="font-size:11px;"></i> Viber &middot; May 15, 9:10AM</div>
-                  <div class="channel-tag email"><i class="ti ti-mail" style="font-size:11px;"></i> Email &middot; May 16, 2:05PM</div>
-                </div>
-                <div style="display:flex;align-items:center;gap:8px;">
-                  <div class="tat-badge yellow"><i class="ti ti-clock" style="font-size:11px;"></i> <span id="tat-adhoc-1">Computing...</span></div>
-                  <button onclick="editLog(this)" style="font-size:11px;color:#9898a6;background:none;border:1px solid #EBEBEF;border-radius:7px;padding:2px 8px;cursor:pointer;font-family:Rubik,sans-serif;">Edit</button>
-                </div>
+              <div class="adhoc-detail adhoc-remarks" style="margin-top:-4px;"><strong>Remarks:</strong> Received via Viber first, official request confirmed by email May 16.</div>
+              <div class="adhoc-footer" style="justify-content:flex-end;">
+                <button onclick="editLog(this)" style="font-size:11px;color:#9898a6;background:none;border:1px solid #EBEBEF;border-radius:7px;padding:2px 8px;cursor:pointer;font-family:Rubik,sans-serif;">Edit</button>
               </div>
             </div>
           </div>
@@ -3775,7 +3768,7 @@ function generateAdhocReport() {
     [clientName + ' — Ad Hoc Activity Log'],
     ['Generated: ' + new Date().toLocaleDateString('en-PH',{year:'numeric',month:'long',day:'numeric'})],
     [],
-    ['Date','Type','Status','Employee','Description','Change From','Change To','Channels']
+    ['Date','Type','Status','Employee','Description','Change From','Change To','Remarks']
   ];
 
   cards.forEach(function(card) {
@@ -3787,16 +3780,7 @@ function generateAdhocReport() {
     var nameEl   = card.querySelector('.adhoc-name');
     var descEl   = card.querySelector('.adhoc-detail');
     var changeVals = card.querySelectorAll('.change-val');
-    var channelTags = card.querySelectorAll('.channel-tag');
-
-    var channels = [];
-    channelTags.forEach(function(t){
-      // Strip the icon text, keep just the label
-      var clone = t.cloneNode(true);
-      var icon = clone.querySelector('i');
-      if (icon) icon.remove();
-      channels.push(clone.textContent.trim().replace(/^\s*·\s*/,'').trim());
-    });
+    var remarksEl = card.querySelector('.adhoc-remarks');
 
     rows.push([
       dateEl   ? dateEl.textContent.trim()    : '',
@@ -3806,7 +3790,7 @@ function generateAdhocReport() {
       descEl   ? descEl.textContent.trim()    : '',
       changeVals[0] ? changeVals[0].textContent.trim() : '',
       changeVals[1] ? changeVals[1].textContent.trim() : '',
-      channels.join(', ')
+      remarksEl ? remarksEl.textContent.trim().replace(/^Remarks:\s*/, '') : ''
     ]);
   });
 
@@ -6769,8 +6753,7 @@ function editLog(btn) {
   const nameEl   = card.querySelector('.adhoc-name');
   const beforeEl = card.querySelectorAll('.change-val')[0];
   const afterEl  = card.querySelectorAll('.change-val')[1];
-  const hasViber = card.querySelector('.channel-tag.viber');
-  const hasEmail = card.querySelector('.channel-tag.email');
+  const remarksEl = card.querySelector('.adhoc-remarks');
 
   if (typePill) {
     const sel = document.getElementById('log-type');
@@ -6786,10 +6769,7 @@ function editLog(btn) {
   if (descEl) document.getElementById('log-desc').value = descEl.textContent;
   if (beforeEl) document.getElementById('log-before').value = beforeEl.textContent;
   if (afterEl)  document.getElementById('log-after').value  = afterEl.textContent;
-
-  if (hasViber && hasEmail) selectChannel('both');
-  else if (hasViber) selectChannel('viber');
-  else selectChannel('email');
+  document.getElementById('log-remarks').value = remarksEl ? remarksEl.textContent.replace(/^Remarks:\s*/, '') : '';
 
   // Store reference to card being edited so save replaces it
   document.getElementById('log-modal')._editCard = card;
@@ -6930,7 +6910,6 @@ function recomputeAllDisputeTAT() {
 setInterval(recomputeAllDisputeTAT, 60000);
 
 // ── Log Task Modal ─────────────────────────────────────────────────────────
-let selectedChannel = 'email';
 
 // Genuinely tailored field sets per task type — distinct, purpose-built inputs (not just a
 // relabeled generic Before/After pair). Used by the lean adhoc-tailored-modal (Shift
@@ -7039,7 +7018,6 @@ function adHocSaveTailored() {
 
 function openLogModal(presetType) {
   document.getElementById('log-modal').style.display = 'flex';
-  selectChannel('email');
 
   var typeGroup = document.getElementById('log-type-group');
   var typePresetLabel = document.getElementById('log-type-preset-label');
@@ -7098,15 +7076,6 @@ function closeLogModal() {
   if (dateReqEl) dateReqEl.value = '';
 }
 
-function selectChannel(ch) {
-  selectedChannel = ch;
-  ['viber','email','both'].forEach(c => {
-    document.getElementById('chip-' + c).classList.toggle('selected', c === ch);
-  });
-  document.getElementById('viber-fields').style.display = (ch === 'viber' || ch === 'both') ? 'block' : 'none';
-  document.getElementById('email-fields').style.display = (ch === 'email' || ch === 'both') ? 'block' : 'none';
-  document.getElementById('tat-note').style.display = (ch === 'email' || ch === 'both') ? 'block' : 'none';
-}
 
 // ── Ad hoc log grouping by subcompany ───────────────────────────────────────
 // Cards are plain DOM nodes (no backing data array), so grouping means moving
@@ -7164,11 +7133,10 @@ function buildAndInsertAdhocCard(opts) {
   const before = opts.before || '\u2014';
   const after = opts.after || '\u2014';
   const dateRequested = opts.dateRequested || '';
-  const emailTime = opts.emailTime || '';
-  const viberTime = opts.viberTime || '';
   const cutoffVal = opts.cutoffVal || '';
   const subKey = opts.subKey || '';
   const isDispute = !!opts.isDispute;
+  const remarks = opts.remarks || '';
 
   const typeColors = {
     'Shift Management':   'background:#DCFCE7;color:#16A34A;',
@@ -7181,18 +7149,7 @@ function buildAndInsertAdhocCard(opts) {
   const now = new Date();
   const dateStr = dateRequested
     ? new Date(dateRequested + 'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
-    : emailTime
-    ? new Date(emailTime).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
     : now.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-  const tatClass = emailTime ? getTATClass(emailTime.replace('T',' ').replace(':','') , 'Open') : 'grey';
-  const tatLabel = emailTime ? getTATLabel(emailTime, 'Open') : 'No TAT';
-
-  const emailDisplayTime = emailTime
-    ? new Date(emailTime).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true})
-    : null;
-  const viberDisplayTime = viberTime
-    ? new Date(viberTime).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true})
-    : null;
 
   const card = document.createElement('div');
   card.className = 'adhoc-card';
@@ -7202,10 +7159,14 @@ function buildAndInsertAdhocCard(opts) {
   const subBadge = subKey ? '<span style="font-size:10px;font-weight:600;background:#F4F4F8;color:#9898a6;padding:2px 8px;border-radius:20px;margin-left:6px;">' + ((clients[subKey]&&clients[subKey].name)||subKey) + '</span>' : '';
   const cutoffBadge = cutoffVal.trim() ? '<span style="font-size:10px;font-weight:600;background:#e8f0fe;color:#1679FA;padding:2px 8px;border-radius:20px;margin-left:6px;">' + cutoffVal.trim() + '</span>' : '';
   const disputeBadge = isDispute ? '<span style="font-size:10px;font-weight:600;background:#fff0f0;color:#c0392b;padding:2px 8px;border-radius:20px;margin-left:6px;"><i class="ti ti-ticket" style="font-size:10px;vertical-align:-1px;"></i> Dispute</span>' : '';
-  card.innerHTML = '\n    <div class="adhoc-top">\n      <div style="display:flex;align-items:center;gap:8px;">\n        <div class="adhoc-type-pill" style="' + (typeColors[type] || typeColors['Other']) + '">' + (type) + '</div>\n        <div class="adhoc-status pending">Pending</div>\n        ' + subBadge + cutoffBadge + disputeBadge + '\n      </div>\n      <div style="font-size:11px;color:#9898a6;">' + (dateStr) + '</div>\n    </div>\n    <div class="adhoc-name">' + (emp) + '</div>\n    <div class="adhoc-detail">' + (desc) + '</div>\n    ' + ((before !== '\u2014' || after !== '\u2014') ? '\n    <div class="adhoc-changes">\n      <div class="change-block"><div class="change-label">Before</div><div class="change-val">' + (before) + '</div></div>\n      <div style="color:#9898a6;align-self:center;font-size:18px;">&#x2192;</div>\n      <div class="change-block"><div class="change-label">After</div><div class="change-val" style="color:#32CE13;">' + (after) + '</div></div>\n    </div>' : '') + '\n    <div class="adhoc-footer">\n      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">\n        ' + (viberDisplayTime ? '<div class="channel-tag viber"><i class="ti ti-message-circle" style="font-size:11px;"></i> Viber &middot; ' + (viberDisplayTime) + '</div>' : '') + '\n        ' + (emailDisplayTime ? '<div class="channel-tag email"><i class="ti ti-mail" style="font-size:11px;"></i> Email &middot; ' + (emailDisplayTime) + '</div>' : '') + '\n      </div>\n      ' + (emailDisplayTime ? '<div class="tat-badge ' + (tatClass) + '"><i class="ti ti-clock" style="font-size:11px;"></i> ' + (tatLabel) + '</div>' : '<div class="tat-badge grey"><i class="ti ti-clock" style="font-size:11px;"></i> TAT pending email</div>') + '\n    </div>';
+  card.innerHTML = '\n    <div class="adhoc-top">\n      <div style="display:flex;align-items:center;gap:8px;">\n        <div class="adhoc-type-pill" style="' + (typeColors[type] || typeColors['Other']) + '">' + (type) + '</div>\n        <div class="adhoc-status pending">Pending</div>\n        ' + subBadge + cutoffBadge + disputeBadge + '\n      </div>\n      <div style="font-size:11px;color:#9898a6;">' + (dateStr) + '</div>\n    </div>\n    <div class="adhoc-name">' + (emp) + '</div>\n    <div class="adhoc-detail">' + (desc) + '</div>\n    ' + ((before !== '\u2014' || after !== '\u2014') ? '\n    <div class="adhoc-changes">\n      <div class="change-block"><div class="change-label">Before</div><div class="change-val">' + (before) + '</div></div>\n      <div style="color:#9898a6;align-self:center;font-size:18px;">&#x2192;</div>\n      <div class="change-block"><div class="change-label">After</div><div class="change-val" style="color:#32CE13;">' + (after) + '</div></div>\n    </div>' : '') + '\n    ' + (remarks ? '<div class="adhoc-detail adhoc-remarks" style="margin-top:-4px;"><strong>Remarks:</strong> ' + (remarks) + '</div>' : '') + '\n    <div class="adhoc-footer">\n    </div>';
 
   const footer = card.querySelector('.adhoc-footer');
   if (footer) {
+    // No left-side content left in the footer now that the channel/TAT badges are gone --
+    // space-between (the card's default) would otherwise collapse a single flex child to the
+    // left instead of the right.
+    footer.style.justifyContent = 'flex-end';
     const actWrap = document.createElement('div');
     actWrap.style.cssText = 'display:flex;gap:4px;';
     const doneBtn = document.createElement('button');
@@ -7246,14 +7207,13 @@ function saveLog() {
   const before = document.getElementById('log-before').value || '\u2014';
   const after  = document.getElementById('log-after').value || '\u2014';
   const dateRequested = document.getElementById('log-date-requested').value || '';
-  const emailTime = document.getElementById('log-email-time').value;
   const cutoffVal = (document.getElementById('log-cutoff') || {}).value || '';
   const subGroupEl = document.getElementById('log-subcompany-group');
   const subKey = (subGroupEl && subGroupEl.style.display !== 'none') ? document.getElementById('log-subcompany').value : '';
   const isDispute = (document.getElementById('log-is-dispute') || {}).checked || false;
-  const viberTime = document.getElementById('log-viber-time').value;
+  const remarks = (document.getElementById('log-remarks') || {}).value || '';
 
-  buildAndInsertAdhocCard({ type, emp, desc, before, after, dateRequested, emailTime, viberTime, cutoffVal, subKey, isDispute });
+  buildAndInsertAdhocCard({ type, emp, desc, before, after, dateRequested, cutoffVal, subKey, isDispute, remarks });
   closeLogModal();
 }
 
@@ -7739,47 +7699,15 @@ function saveMemberProfile() {
       </div>
 
       <div class="field-group">
-        <label>How was this received? *</label>
-        <div class="channel-row">
-          <div class="channel-chip" id="chip-viber" onclick="selectChannel('viber')">
-            <i class="ti ti-message-circle" style="color:#16A34A;"></i>
-            <span>Viber only</span>
-          </div>
-          <div class="channel-chip selected" id="chip-email" onclick="selectChannel('email')">
-            <i class="ti ti-mail" style="color:#32CE13;"></i>
-            <span>Email</span>
-          </div>
-          <div class="channel-chip" id="chip-both" onclick="selectChannel('both')">
-            <i class="ti ti-messages" style="color:#1679FA;"></i>
-            <span>Viber then email</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="field-group">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
           <input type="checkbox" id="log-is-dispute" style="width:16px;height:16px;accent-color:#c0392b;">
           <span>This is a client-raised dispute <span style="color:#9898a6;font-weight:400;">(for clients without the Disputes tab enabled)</span></span>
         </label>
       </div>
 
-      <div id="viber-fields" style="display:none;margin-bottom:14px;">
-        <div class="field-group" style="margin-bottom:0">
-          <label>Viber received date &amp; time</label>
-          <input type="datetime-local" id="log-viber-time">
-          <div style="font-size:11px;color:#e67e00;margin-top:4px;"><i class="ti ti-info-circle" style="font-size:12px;vertical-align:-2px;"></i> TAT does not start until official email is received.</div>
-        </div>
-      </div>
-
-      <div id="email-fields" style="margin-bottom:14px;">
-        <div class="field-group" style="margin-bottom:0">
-          <label>Email received date &amp; time *</label>
-          <input type="datetime-local" id="log-email-time">
-        </div>
-      </div>
-
-      <div id="tat-note" style="background:#edfae8;border:1px solid #c6f0bb;border-radius:12px;padding:10px 12px;font-size:12px;color:#32CE13;margin-bottom:4px;">
-        <strong>TAT reminder:</strong> Before 12:00NN → reply by 6:00PM today &nbsp;·&nbsp; After 12:01PM → reply by 6:00PM next working day
+      <div class="field-group">
+        <label>Remarks</label>
+        <textarea id="log-remarks" rows="2" placeholder="Any additional notes..."></textarea>
       </div>
 
     </div>
