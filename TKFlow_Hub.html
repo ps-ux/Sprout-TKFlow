@@ -8225,6 +8225,12 @@ function setCutoffCoverage(clientKey, cutoffLabel, member) {
   // Keep the Admin > Coverage Pass-Off view live, regardless of which page/tab is currently
   // open — previously this only refreshed when you explicitly clicked into that tab again.
   if (typeof renderWorkspacePassoffs === 'function') renderWorkspacePassoffs();
+  // Also re-render the workspace's own Cut-off coverage dropdown -- its "disabled" state on
+  // your own name (see renderGroupOverview's lockSelf) is computed once at render time from
+  // whether anything's been explicitly assigned yet. Without refreshing here, that disabled
+  // attribute stays stuck from the very first render even after picking someone else, which
+  // is what made reselecting yourself after changing your mind look impossible.
+  if (window.currentWsGroup && typeof renderGroupOverview === 'function') renderGroupOverview(window.currentWsGroup);
 }
 
 // Adds N working days (skipping Sat/Sun) to a date — used to give a buffer after the last
