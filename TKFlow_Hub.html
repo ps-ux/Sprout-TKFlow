@@ -642,11 +642,12 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       };
       await loadCompaniesFromSupabase();
       await loadUserRelationsFromSupabase();
-      // All four depend on clients/clientGroups (companyId/groupId) already being populated above.
+      // All five depend on clients/clientGroups (companyId/groupId) already being populated above.
       await loadPolicyFilesFromSupabase();
       await loadCalendarsFromSupabase();
       await loadDisputesFromSupabase();
       await loadTaskStatusFromSupabase();
+      await loadArchivedClientsFromSupabase();
       if (typeof refreshUserUI === 'function') refreshUserUI();
       if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
       if (typeof renderDashSchedule === 'function') renderDashSchedule();
@@ -17373,7 +17374,7 @@ function addToArchives(groupKey, subKeys, churnDate, reason, notes, isPartial) {
   var specUser = Object.entries(USERS).find(function(e){ return subKeys.some(function(sk){ return e[1].assignedClients.includes(sk); }); });
   var lastHandler = specUser ? specUser[1].name : 'Unknown';
 
-  archivedClients.push({
+  var entry = {
     groupKey: groupKey,
     subKeys: subKeys,
     subNames: subNames,
@@ -17387,10 +17388,63 @@ function addToArchives(groupKey, subKeys, churnDate, reason, notes, isPartial) {
     notes: notes,
     lastHandler: lastHandler,
     archivedAt: new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})
-  });
+  };
+  archivedClients.push(entry);
+  _persistArchiveEntry(entry);
 
   renderArchives();
   updateArchivesBadge();
+}
+
+// Fire-and-forget, matching _persistCompanyStatus's pattern -- stores entry.dbId on success
+// so restoreFromArchive/deleteArchive can remove the row later by primary key. A failure here
+// just means this one churn event won't survive a reload; the churn itself (companies.status)
+// already persisted separately and isn't affected.
+function _persistArchiveEntry(entry) {
+  supabaseClient.from('client_archive_entries').insert({
+    group_key: entry.groupKey, sub_keys: entry.subKeys, is_partial: entry.isPartial,
+    churn_date: entry.churnDate, reason: entry.reason || '', notes: entry.notes || '',
+    last_handler: entry.lastHandler
+  }).select().single().then(function(res) {
+    if (res.error) { console.warn('Could not persist archive entry for ' + entry.groupKey, res.error); return; }
+    entry.dbId = res.data.id;
+  });
+}
+
+// Rebuilds archivedClients from Supabase on load -- must run after loadCompaniesFromSupabase
+// (clients[]/clientGroups[] need to already be populated so name/av/avClass/hc can be
+// recomputed the same way addToArchives computes them live, from CURRENT client data rather
+// than a frozen snapshot -- e.g. a rename after churn is reflected here too).
+async function loadArchivedClientsFromSupabase() {
+  var res = await supabaseClient.from('client_archive_entries').select('*').order('archived_at', { ascending: false });
+  if (res.error) { console.warn('Failed to load archived clients from Supabase', res.error); return; }
+  archivedClients.length = 0;
+  (res.data || []).forEach(function(row) {
+    var grp = clientGroups[row.group_key];
+    if (!grp) return; // group/company data itself is gone somehow -- nothing sane to show
+    var subKeys = row.sub_keys || [];
+    var subNames = subKeys.map(function(sk){ return (clients[sk] && clients[sk].name) || sk; });
+    var totalHc = subKeys.reduce(function(s, sk){ return s + ((clients[sk] && clients[sk].hc) || 0); }, 0);
+    var repSub = clients[subKeys[0]] || {};
+    archivedClients.push({
+      dbId: row.id,
+      groupKey: row.group_key,
+      subKeys: subKeys,
+      subNames: subNames,
+      name: row.is_partial ? (grp.name + ' \u2014 ' + subNames.join(', ')) : grp.name,
+      av: row.is_partial ? (repSub.av || grp.av) : grp.av,
+      avClass: row.is_partial ? (repSub.avClass || grp.avClass) : grp.avClass,
+      hc: totalHc,
+      isPartial: !!row.is_partial,
+      churnDate: row.churn_date,
+      reason: row.reason,
+      notes: row.notes,
+      lastHandler: row.last_handler,
+      archivedAt: new Date(row.archived_at).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})
+    });
+  });
+  if (typeof renderArchives === 'function') renderArchives();
+  if (typeof updateArchivesBadge === 'function') updateArchivesBadge();
 }
 
 function updateArchivesBadge() {
@@ -17441,6 +17495,9 @@ function restoreFromArchive(archiveIdx) {
     clients[sk].status = 'In progress';
   });
   _persistCompanyStatus(a.subKeys, 'active');
+  if (a.dbId) supabaseClient.from('client_archive_entries').delete().eq('id', a.dbId).then(function(res) {
+    if (res.error) console.warn('Could not delete archive entry for ' + a.groupKey, res.error);
+  });
   archivedClients.splice(archiveIdx, 1);
   renderClientCards();
   renderSidebarClients();
@@ -17452,6 +17509,10 @@ function restoreFromArchive(archiveIdx) {
 
 function deleteArchive(archiveIdx) {
     appConfirm('Delete archive record?', 'Permanently delete this archive record? This cannot be undone.', function() {
+  var a = archivedClients[archiveIdx];
+  if (a && a.dbId) supabaseClient.from('client_archive_entries').delete().eq('id', a.dbId).then(function(res) {
+    if (res.error) console.warn('Could not delete archive entry for ' + a.groupKey, res.error);
+  });
   archivedClients.splice(archiveIdx, 1);
   renderArchives();
   updateArchivesBadge();
