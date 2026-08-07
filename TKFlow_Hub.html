@@ -20508,6 +20508,12 @@ function closeDisputeTicket() {
   }
   document.getElementById('dispute-ticket-modal').style.display = 'none';
   dtmCurrentId = null;
+  // Clear the Summary-tab scope lock -- these globals otherwise persist for the rest of the
+  // page session, so the next thing that opens this modal (or manually clicks the Summary
+  // tab) must never inherit whichever client was last previewed.
+  window._dtmLockGroupKeys = null;
+  window._dtmFilterClient = undefined;
+  window._dtmFilterStatus = undefined;
 }
 
 document.getElementById('dispute-ticket-modal').addEventListener('click', function(e) {
@@ -21251,6 +21257,14 @@ function openAllTicketsForClient(clientKey) {
     if (typeof showToast === 'function') showToast('No tickets found for this client', '#e67e00');
     return;
   }
+  // Set the lock BEFORE opening the modal -- openDisputeTicket opens on the Details tab, but
+  // dtmSwitchTab('summary') below renders the Summary pane using whatever window._dtmLockGroupKeys
+  // currently holds, which without this would still be whatever client was last previewed (these
+  // globals persist across modal sessions -- see closeDisputeTicket). That's what let another
+  // client's ticket data flash into view briefly before the scoped re-render below corrected it.
+  window._dtmLockGroupKeys = dsGroupSiblingKeys(clientKey);
+  window._dtmFilterClient = 'all';
+  window._dtmFilterStatus = 'all';
   openDisputeTicket(d.id, clientKey);
   // After modal opens, switch to summary tab filtered to this client
   setTimeout(function() {
@@ -21268,6 +21282,11 @@ function dsOpenTicketsByStatus(clientKey, statusKey) {
     if (typeof showToast === 'function') showToast('No tickets found for this client', '#e67e00');
     return;
   }
+  // Same reasoning as openAllTicketsForClient -- lock the scope before the modal opens, not
+  // 50ms after, so nothing in between can render with a stale lock from a previous session.
+  window._dtmLockGroupKeys = dsGroupSiblingKeys(clientKey);
+  window._dtmFilterClient = 'all';
+  window._dtmFilterStatus = statusKey;
   openDisputeTicket(d.id, clientKey);
   setTimeout(function() {
     dtmSwitchTab('summary');
@@ -21285,6 +21304,9 @@ function openPreviewAllTickets() {
   if (!items.length) { if (typeof showToast === 'function') showToast('No tickets found', '#e67e00'); return; }
   // Open modal on the first ticket but go straight to summary (no client filter) — this is
   // the genuine org-wide entry point, so no group lock here; canSeeAllDisputes applies as normal.
+  window._dtmLockGroupKeys = [];
+  window._dtmFilterClient = 'all';
+  window._dtmFilterStatus = 'all';
   openDisputeTicket(items[0].id, null);
   dtmCurrentClient = null;
   setTimeout(function() {
