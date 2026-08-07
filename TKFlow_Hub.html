@@ -6029,7 +6029,19 @@ function setBasicPayOffset(subKeysCsv, val) {
 function setPayrollType(subKeysCsv, type) {
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk]) return;
+    var oldType = clients[sk].payrollType || 'Semi-monthly';
     clients[sk].payrollType = type;
+    if (oldType !== type) {
+      // The old periods belonged to a different cadence (e.g. "1st Payout" doesn't carry
+      // over meaningfully to "Week 1 Payout", and the period count itself may differ) -- reset
+      // to blank rows matching the new type's labels so there's somewhere to re-enter the
+      // payout day/attendance cut-off for each of the new periods, rather than leaving behind
+      // stale or mismatched-count data under the new type.
+      clients[sk].cutoffs = (typeof periodLabelsFor === 'function' ? periodLabelsFor(type) : ['1st Payout', '2nd Payout']).map(function(label) {
+        return { label: label, payoutDay: '', attStart: '', attEnd: '', note: '' };
+      });
+      _persistClientCutoffs(sk);
+    }
     var companyId = clients[sk].companyId;
     if (companyId) {
       supabaseClient.from('companies').update({ payroll_type: type }).eq('short_key', sk).then(function(res) {
@@ -6398,37 +6410,44 @@ function renderClientProfile(key) {
     }).join('') : '<div style="padding:12px 16px;color:#9898a6;font-size:12px;">No POCs on file</div>';
   }
 
-  // subKeysCsv, when passed, switches this from a read-only display into an editable form
-  // (calendar-derived cutoffs stay read-only -- they come from the uploaded file, so editing
-  // them here wouldn't do anything). attStart/attEnd are already free-form formatted text
-  // (e.g. "23rd previous month", built by the Add Client wizard's acAttText helper), so plain
-  // text inputs match how this data has always been entered, no structured day/month picker
-  // needed.
-  function cutoffsHtmlFor(cutoffs, subKeysCsv) {
-    var editable = !!subKeysCsv;
-    function fld(idx, field, val, placeholder, extraStyle) {
+  // subKeysCsv, when passed, switches this from a read-only display into an editable form.
+  // calMode additionally handles the uploaded-TK-Calendar-derived case -- the client
+  // sometimes moves a payout date or attendance cut-off mid-stream without a new calendar
+  // file being uploaded yet, so this still needs to be editable, just against the calendar's
+  // own stored periods (setCalendarCutoffField) instead of companies.cutoffs
+  // (setClientCutoffField) -- period count there is fixed by the uploaded file, so no add/
+  // remove row controls, and label/note aren't calendar fields so they stay read-only.
+  // attStart/attEnd are already free-form formatted text (e.g. "23rd previous month" for the
+  // manual case, "6/1" for the calendar case), so plain text inputs match how this data has
+  // always looked, no structured day/month picker needed.
+  function cutoffsHtmlFor(cutoffs, subKeysCsv, calMode) {
+    var editable = !!subKeysCsv || !!calMode;
+    function fld(onblurCall, val, placeholder, extraStyle) {
       return '<input type="text" value="' + String(val||'').replace(/"/g,'&quot;') + '" placeholder="' + (placeholder||'') + '" '
-        + 'onblur="setClientCutoffField(\'' + subKeysCsv + '\',' + idx + ',\'' + field + '\',this.value)" '
+        + 'onblur="' + onblurCall + '" '
         + 'style="width:100%;padding:5px 8px;border:1px solid #EBEBEF;border-radius:8px;font-size:12px;font-family:Rubik,sans-serif;box-sizing:border-box;' + (extraStyle||'') + '">';
     }
     var rowsHtml = cutoffs.map(function(co, idx) {
-      var labelHtml = editable
-        ? fld(idx, 'label', co.label, 'Period label', 'font-weight:600;color:#32CE13;')
+      var fieldTarget = calMode
+        ? function(field) { return 'setCalendarCutoffField(' + co._calYr + ',' + co._calMonth + ',' + co._calPeriod + ',\'' + field + '\',this.value)'; }
+        : function(field) { return 'setClientCutoffField(\'' + subKeysCsv + '\',' + idx + ',\'' + field + '\',this.value)'; };
+      var labelHtml = (editable && !calMode)
+        ? fld(fieldTarget('label'), co.label, 'Period label', 'font-weight:600;color:#32CE13;')
         : '<div style="font-size:12px;font-weight:600;color:#32CE13;margin-bottom:8px;">' + co.label + '</div>';
-      var removeBtn = editable
+      var removeBtn = (editable && !calMode)
         ? '<button onclick="removeClientCutoffRow(\'' + subKeysCsv + '\',' + idx + ')" title="Remove this cut-off period" style="background:none;border:none;color:#9898a6;cursor:pointer;font-size:13px;padding:0;margin-left:8px;flex-shrink:0;"><i class="ti ti-trash"></i></button>'
         : '';
       var payoutHtml = editable
-        ? fld(idx, 'payoutDay', co.payoutDay, 'e.g. 13')
+        ? fld(fieldTarget('payoutDay'), co.payoutDay, 'e.g. 13')
         : '<div style="font-size:13px;color:#1a1a2e;">' + co.payoutDay + 'th of the month</div>';
       var attHtml = editable
-        ? '<div style="display:flex;gap:6px;align-items:center;">' + fld(idx, 'attStart', co.attStart, 'e.g. 23rd previous month') + '<span style="color:#9898a6;flex-shrink:0;">\u2013</span>' + fld(idx, 'attEnd', co.attEnd, 'e.g. 8th current month') + '</div>'
+        ? '<div style="display:flex;gap:6px;align-items:center;">' + fld(fieldTarget('attStart'), co.attStart, 'e.g. 23rd previous month') + '<span style="color:#9898a6;flex-shrink:0;">\u2013</span>' + fld(fieldTarget('attEnd'), co.attEnd, 'e.g. 8th current month') + '</div>'
         : '<div style="font-size:13px;color:#1a1a2e;">' + co.attStart + ' \u2013 ' + co.attEnd + '</div>';
-      var noteHtml = editable
-        ? fld(idx, 'note', co.note, 'Note', 'margin-top:6px;color:#9898a6;font-size:11px;')
+      var noteHtml = (editable && !calMode)
+        ? fld(fieldTarget('note'), co.note, 'Note', 'margin-top:6px;color:#9898a6;font-size:11px;')
         : '<div style="font-size:11px;color:#9898a6;margin-top:6px;">' + co.note + '</div>';
       return '<div style="background:#F4F4F8;border-radius:14px;padding:14px 16px;">'
-        + '<div style="display:flex;align-items:center;justify-content:space-between;' + (editable ? 'margin-bottom:8px;' : '') + '">' + labelHtml + removeBtn + '</div>'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;' + (editable && !calMode ? 'margin-bottom:8px;' : '') + '">' + labelHtml + removeBtn + '</div>'
         + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
         + '<div><div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;margin-bottom:3px;">Payout Day</div>' + payoutHtml + '</div>'
         + '<div><div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;margin-bottom:3px;">Attendance Cut-off</div>' + attHtml + '</div>'
@@ -6436,7 +6455,7 @@ function renderClientProfile(key) {
         + noteHtml
         + '</div>';
     }).join('');
-    if (editable) {
+    if (editable && !calMode) {
       return rowsHtml + '<button onclick="addClientCutoffRow(\'' + subKeysCsv + '\')" style="grid-column:1/-1;padding:10px;border:1.5px dashed #EBEBEF;border-radius:12px;background:none;color:#32CE13;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">+ Add cut-off period</button>';
     }
     return rowsHtml || '<div style="color:#9898a6;font-size:12px;">No cut-off schedule on file</div>';
@@ -6477,7 +6496,10 @@ function renderClientProfile(key) {
         payoutDay: p.payout ? p.payout.getDate() : '?',
         attStart: (attParts[0] || '').trim(),
         attEnd: (attParts[1] || '').trim(),
-        note: 'From uploaded TK Calendar'
+        note: 'From uploaded TK Calendar',
+        // Identifies which store.calPeriods entry this came from, for setCalendarCutoffField
+        // to write back to -- yr/month/period together are unique per period.
+        _calYr: p.yr, _calMonth: p.month, _calPeriod: p.period
       };
     });
   }
@@ -6527,7 +6549,7 @@ function renderClientProfile(key) {
   var cutoffSection;
   var liveCutoffs = cutoffsFromCalendar();
   if (liveCutoffs) {
-    cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(liveCutoffs) + '</div>';
+    cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(liveCutoffs, null, true) + '</div>';
   } else if (subs.length <= 1) {
     cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(clients[subs[0]].cutoffs||[], subs[0]) + '</div>';
   } else {
@@ -21589,6 +21611,33 @@ async function loadCalendarsFromSupabase() {
       calHolidays: row.cal_holidays || {},
       calFileName: row.file_name || ''
     };
+  });
+}
+
+// A client sometimes moves a payout date or attendance cut-off mid-stream without a new TK
+// Calendar file being uploaded yet -- lets Client Profile edit the already-uploaded
+// calendar's own period data in place instead of requiring a full reupload just to fix one
+// date. yr/month/period together identify the exact store.calPeriods entry (see
+// cutoffsFromCalendar's _calYr/_calMonth/_calPeriod). Only updates cal_periods, not the
+// stored file itself or its Storage object.
+function setCalendarCutoffField(yr, month, period, field, value) {
+  var store = (typeof _calGet === 'function') ? _calGet() : null;
+  if (!store || !store.calPeriods) return;
+  var p = store.calPeriods.find(function(x){ return x.yr === yr && x.month === month && x.period === period; });
+  if (!p) return;
+  if (field === 'payoutDay') {
+    var day = parseInt(value, 10);
+    if (day && p.payout) p.payout = new Date(p.payout.getFullYear(), p.payout.getMonth(), day);
+  } else if (field === 'attStart' || field === 'attEnd') {
+    var parts = (p.attCov || '').split('-');
+    var newParts = [(parts[0] || '').trim(), (parts[1] || '').trim()];
+    newParts[field === 'attStart' ? 0 : 1] = value.trim();
+    p.attCov = newParts.join('-');
+  }
+  var scope = (typeof _calScope === 'function') ? _calScope() : null;
+  if (!scope) return;
+  supabaseClient.from('calendars').update({ cal_periods: store.calPeriods }).eq('scope_type', scope.type).eq('scope_id', scope.id).then(function(res) {
+    if (res.error) { console.warn('Could not save calendar edit', res.error); if (typeof showToast === 'function') showToast('Could not save calendar edit: ' + res.error.message, '#c0392b'); }
   });
 }
 
