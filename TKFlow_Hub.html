@@ -8765,6 +8765,214 @@ let varCutoffCounter = 1;
 var varBatchGroups = [];   // [{name, clientKey, cutoffs:[{id}], status:'pending'|'processing'|'done'|'error', errorMsg}]
 var varActiveGroupIdx = -1;
 
+// -- Variance review-state persistence (task_cutoff_review_state + variance-workbooks bucket) --
+// Unlike Validation, Variance rebuilds its output workbook entirely from parsed data rather
+// than patching the original uploaded files' bytes, so only the already-built workbook (not
+// the original Orig/ACO/PayReg uploads) needs to survive a reload -- reprocessing from the
+// originals would need them re-uploaded, same class of gap Validation had before its Phase 3
+// fix. Keyed by (company, cutoff_label) since a company can have several cut-offs in progress
+// at once.
+
+function varUploadWorkbook(companyId, safeN, arrayBuffer) {
+  var path = companyId + '/' + safeN + '.xlsx';
+  return supabaseClient.storage.from('variance-workbooks').upload(path, new Blob([arrayBuffer]), { upsert: true }).then(function(res) {
+    if (res.error) throw res.error;
+    return path;
+  });
+}
+
+function varDownloadWorkbook(path) {
+  return supabaseClient.storage.from('variance-workbooks').download(path).then(function(res) {
+    if (res.error) throw res.error;
+    return res.data.arrayBuffer();
+  });
+}
+
+// Fire-and-forget, called once right after a cut-off finishes processing and again from
+// varFinalize when the finalized flag changes -- matches the ticketing_mode/url update
+// pattern elsewhere in this file rather than blocking the UI on a round-trip.
+async function varSaveCutoffSnapshot(clientKey, co) {
+  var companyId = clients[clientKey] && clients[clientKey].companyId;
+  if (!companyId || !co._payout) return;
+  var wbPath = null;
+  try {
+    var wbArr = XLSX.write(co._varWb, { bookType: 'xlsx', type: 'array' });
+    wbPath = await varUploadWorkbook(companyId, co._safeN, wbArr);
+  } catch (e) {
+    console.warn('Could not upload Variance workbook for ' + clientKey + ' / ' + co._payout, e);
+  }
+  var res = await supabaseClient.from('task_cutoff_review_state').upsert({
+    company_id: companyId, task_key: 'variance', cutoff_label: co._payout,
+    data: { attData: co._attData || [], attColors: co._attColors || {}, finalized: !!co._finalized },
+    wb_storage_path: wbPath,
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'company_id,task_key,cutoff_label' });
+  if (res.error) console.warn('Could not save Variance review state for ' + clientKey + ' / ' + co._payout, res.error);
+}
+
+// Builds the result card from already-known attData (freshly processed or restored from
+// Supabase) -- recomputes withVar/additions/deductions/noChange from it rather than persisting
+// those as separate arrays, since they're cheap derived views of attData. Also (re)populates
+// window.varResults[payout], which the Payroll Instructions builder and the task-runner
+// header badge both read directly.
+function varRenderResultCard(co, cutoffIdx, attData) {
+  var VAR_KEEP = ['ID','Name','Days Absent','Undertime (min)',
+    'Ord-OT','Ord-ND','Ord-ND-OT',
+    'RD','RD-OT','RD-ND','RD-ND-OT',
+    'SH','SH-OT','SH-ND','SH-ND-OT',
+    'LH','LH-OT','LH-ND','LH-ND-OT',
+    'SH-RD','SH-RD-OT','SH-RD-ND','SH-RD-ND-OT',
+    'LH-RD','LH-RD-OT','LH-RD-ND','LH-RD-ND-OT',
+    'DH','DH-OT','DH-ND','DH-ND-OT',
+    'DH-RD','DH-RD-OT','DH-RD-ND','DH-RD-ND-OT'];
+
+  var withVar    = attData.filter(function(e){ return e.hasVar; });
+  var noChange   = attData.filter(function(e){ return !e.hasVar; });
+  var additions  = withVar.filter(function(e){ return e.row.slice(2,35).reduce(function(s,v){return s+v;},0)>=0; });
+  var deductions = withVar.filter(function(e){ return e.row.slice(2,35).reduce(function(s,v){return s+v;},0)<0; });
+
+  window.varResults[co._payout] = {additions:additions, deductions:deductions, noChange:noChange, attData:attData, finalized: !!co._finalized};
+  co._withVar = withVar;
+  co._adds    = additions.length;
+  co._deds    = deductions.length;
+  co._nc      = noChange.length;
+  co._total   = attData.length;
+
+  var resultDiv = document.getElementById('var-result');
+  if (!resultDiv) return;
+
+  var card = document.createElement('div');
+  card.id = 'var-card-' + co.id;
+  card.style.cssText = 'background:#fff;border:1.5px solid #EBEBEF;border-radius:16px;overflow:hidden;margin-bottom:12px;';
+
+  var flagged = attData.filter(function(e){ return e.missing; });
+
+  var cardHdr = '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#F4F4F8;border-bottom:1px solid #EBEBEF;">'
+    + '<div><div style="font-size:11px;color:#9898a6;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">Cut-off ' + (cutoffIdx+1) + '</div>'
+    + '<div style="font-size:14px;font-weight:600;color:#1a1a2e;">' + co._payout + '</div></div>'
+    + '<div style="display:flex;gap:8px;align-items:center;">'
+    + '<span style="font-size:11px;background:#edfae8;color:#32CE13;padding:2px 10px;border-radius:20px;font-weight:600;">' + additions.length + ' additions</span>'
+    + '<span style="font-size:11px;background:#fff0f0;color:#c0392b;padding:2px 10px;border-radius:20px;font-weight:600;">' + deductions.length + ' deductions</span>'
+    + '<span style="font-size:11px;background:#F4F4F8;color:#9898a6;padding:2px 10px;border-radius:20px;">' + noChange.length + ' no change</span>'
+    + (flagged.length ? '<span style="font-size:11px;background:#fffbeb;color:#92400e;padding:2px 10px;border-radius:20px;font-weight:600;border:1px solid #fcd34d;"><i class="ti ti-alert-triangle" style="font-size:10px;"></i> ' + flagged.length + ' flagged</span>' : '')
+    + '</div></div>';
+
+  var varTableRows = '';
+  var tableList = attData.filter(function(e){ return e.hasVar || e.missing; });
+  if (tableList.length) {
+    varTableRows = tableList.map(function(emp) {
+      var changedCols = [];
+      if (emp.missing) {
+        changedCols.push('<span style="font-size:10px;padding:1px 6px;border-radius:4px;margin:1px;display:inline-block;background:#fffbeb;color:#92400e;border:1px solid #fcd34d;font-weight:600;">'
+          + '<i class="ti ti-alert-triangle" style="font-size:9px;"></i> ' + emp.missing + '</span>');
+      }
+      for (var ci = 2; ci < 35; ci++) {
+        if (Math.abs(emp.row[ci]) > 0.001) {
+          var isBlue = emp.row[ci] > 0;
+          changedCols.push('<span style="font-size:10px;padding:1px 6px;border-radius:4px;margin:1px;display:inline-block;background:'
+            + (isBlue?'#BDD7EE':'#FFC7CE') + ';color:'
+            + (isBlue?'#1F4E79':'#9C0006') + ';font-weight:600;">'
+            + VAR_KEEP[ci] + ': ' + (isBlue ? '+' : '-') + Math.abs(emp.row[ci]).toFixed(2) + '</span>');
+        }
+      }
+      var idColor   = emp.missing ? '#92400E' : '#9898a6';
+      var nameColor = emp.missing ? '#78350F' : '#1a1a2e';
+      return '<tr' + (emp.missing ? ' style="background:#fffdf5;"' : '') + '>'
+        + '<td style="padding:7px 10px;border-bottom:1px solid #EBEBEF;font-family:monospace;font-size:11px;color:' + idColor + ';white-space:nowrap;">' + emp.id + '</td>'
+        + '<td style="padding:7px 10px;border-bottom:1px solid #EBEBEF;font-size:12px;font-weight:500;color:' + nameColor + ';">' + emp.name + '</td>'
+        + '<td style="padding:7px 10px;border-bottom:1px solid #EBEBEF;">' + changedCols.join('') + '</td>'
+        + '</tr>';
+    }).join('');
+  } else {
+    varTableRows = '<tr><td colspan="3" style="padding:16px;text-align:center;color:#9898a6;font-size:12px;">No variances detected</td></tr>';
+  }
+
+  var varTable = '<div style="padding:14px 16px;border-bottom:1px solid #EBEBEF;">'
+    + '<div style="font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;">Variance details</div>'
+    + '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-radius:12px;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
+    + '<thead><tr style="background:#F4F4F8;">'
+    + '<th style="padding:6px 10px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;white-space:nowrap;">Employee ID</th>'
+    + '<th style="padding:6px 10px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Name</th>'
+    + '<th style="padding:6px 10px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Variances</th>'
+    + '</tr></thead><tbody>' + varTableRows + '</tbody></table></div></div>';
+
+  var actionsHtml = '<div style="padding:12px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+    + '<button id="dl-var-' + co.id + '" onclick="varDownload(' + co.id + ')" class="dl-btn" style="margin:0;width:auto;flex:1 1 220px;">'
+    + '<i class="ti ti-download"></i> Download Variance Template</button>'
+    + '<button id="dl-disp-' + co.id + '" onclick="varDisputesDownload(' + co.id + ')" class="dl-btn" style="margin:0;width:auto;flex:1 1 220px;" '
+    + (withVar.length ? '' : 'disabled title="No variances detected — nothing to log"') + '>'
+    + '<i class="ti ti-ticket"></i> Download Disputes Tab</button>'
+    + '<button id="finalize-var-' + co.id + '" onclick="varFinalize(' + co.id + ')" '
+    + 'style="padding:8px 16px;background:#F4F4F8;color:#9898a6;border:1.5px solid #EBEBEF;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:' + (co._finalized ? 'none' : 'inline-flex') + ';align-items:center;gap:6px;">'
+    + '<i class="ti ti-lock" style="font-size:13px;"></i> Mark as finalized</button>'
+    + '<span id="finalized-badge-' + co.id + '" style="display:' + (co._finalized ? 'inline-flex' : 'none') + ';font-size:11px;background:#edfae8;color:#32CE13;padding:3px 10px;border-radius:20px;font-weight:600;">'
+    + '<i class="ti ti-circle-check" style="font-size:11px;"></i> Finalized — included in Payroll Instructions</span>'
+    + '</div>';
+
+  card.innerHTML = cardHdr + varTable + actionsHtml;
+  if (co._finalized) card.style.borderColor = '#A6EB93';
+  resultDiv.appendChild(card);
+}
+
+// If Supabase has saved Variance session(s) for this subcompany (from before a reload wiped
+// varBatchGroups), restores them -- built workbooks included, so nothing needs reprocessing.
+// A company can have several cut-offs saved at once, so this restores the whole set into
+// g.cutoffs (replacing the single upload-form placeholder), not just one. Only restores into
+// a group that hasn't already been processed in THIS session (status still 'pending'), and
+// re-checks after each await in case the group moved on (different subcompany picked, or a
+// fresh upload started) while this was in flight -- same race-avoidance as Validation's
+// tkTryRestoreFromSupabase.
+async function varTryRestoreFromSupabase(gi) {
+  var g = varBatchGroups[gi];
+  if (!g || !g.clientKey || g.status !== 'pending') return;
+  var clientKeyAtStart = g.clientKey;
+  var companyId = clients[clientKeyAtStart] && clients[clientKeyAtStart].companyId;
+  if (!companyId) return;
+
+  var res = await supabaseClient.from('task_cutoff_review_state').select('*')
+    .eq('company_id', companyId).eq('task_key', 'variance').order('updated_at', { ascending: true });
+  if (res.error) { console.warn('Could not check for a saved Variance session for ' + clientKeyAtStart, res.error); return; }
+  if (!res.data || !res.data.length) return;
+
+  g = varBatchGroups[gi];
+  if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending') return;
+
+  var restored = [];
+  for (var i = 0; i < res.data.length; i++) {
+    var row = res.data[i];
+    var wbBuf = null;
+    try {
+      if (row.wb_storage_path) wbBuf = await varDownloadWorkbook(row.wb_storage_path);
+    } catch (e) {
+      console.warn('Could not download saved Variance workbook for ' + clientKeyAtStart + ' / ' + row.cutoff_label, e);
+    }
+    g = varBatchGroups[gi];
+    if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending') return;
+    var data = row.data || {};
+    restored.push({
+      id: ++varCutoffCounter,
+      _payout: row.cutoff_label,
+      _safeN: row.cutoff_label.replace(/[^a-zA-Z0-9]/g, '_'),
+      _attData: data.attData || [],
+      _attColors: data.attColors || {},
+      _finalized: !!data.finalized,
+      _varWb: wbBuf ? XLSX.read(new Uint8Array(wbBuf), { type: 'array' }) : null
+    });
+  }
+  if (!restored.length) return;
+
+  g = varBatchGroups[gi];
+  if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending') return;
+
+  g.cutoffs = restored;
+  g.status = 'done';
+  renderVarBatchList();
+  if (typeof showToast === 'function') showToast('Restored your previous Variance progress for ' + (g.name || g.clientKey));
+  if (gi === varActiveGroupIdx || (varActiveGroupIdx < 0 && gi === 0)) {
+    varSwitchGroup(gi);
+  }
+}
+
 function subOptionsForCurrentGroup() {
   var grp = window.currentWsGroup && clientGroups[window.currentWsGroup];
   if (grp && grp.subs) return grp.subs.filter(function(k){ return clients[k]; });
@@ -8786,6 +8994,7 @@ function buildVarianceRunner(body) {
     varBatchGroups = [{ name: _defaultKey ? (clients[_defaultKey].name||_defaultKey) : 'Subcompany 1', clientKey: _defaultKey, cutoffs: [{ id: 1 }], status: 'pending', errorMsg: '' }];
     varActiveGroupIdx = -1;
     window._varWsKey = wsKey;
+    if (_defaultKey) varTryRestoreFromSupabase(0);
   }
   // else: reopening the same workspace's already-processed results — keep varBatchGroups as-is
 
@@ -8848,6 +9057,7 @@ function varGroupCardHtml(g, gi) {
 function varSetGroupClient(gi, key) {
   varBatchGroups[gi].clientKey = key || null;
   varBatchGroups[gi].name = key ? (clients[key].name || key) : ('Subcompany ' + (gi + 1));
+  if (key) varTryRestoreFromSupabase(gi);
 }
 
 function varRenderGroups() {
@@ -9790,13 +10000,6 @@ function runVariance(opts) {
           origRow:origRow, acoRow:acoRow});
       });
 
-      var withVar    = attData.filter(function(e){ return e.hasVar; });
-      var noChange   = attData.filter(function(e){ return !e.hasVar; });
-      var additions  = withVar.filter(function(e){ return e.row.slice(2,35).reduce(function(s,v){return s+v;},0)>=0; });
-      var deductions = withVar.filter(function(e){ return e.row.slice(2,35).reduce(function(s,v){return s+v;},0)<0; });
-
-      window.varResults[payout] = {additions:additions, deductions:deductions, noChange:noChange, attData:attData};
-
       // Amt calculation
       var amtData = [];
       attData.forEach(function(emp) {
@@ -9916,88 +10119,11 @@ function runVariance(opts) {
       co._varWb  = wb;
       co._payout = payout;
       co._safeN  = safeN;
-      co._withVar = withVar;
-      co._adds   = additions.length;
-      co._deds   = deductions.length;
-      co._nc     = noChange.length;
-      co._total  = attData.length;
       co._finalized = false;
+      co._attData = attData;
 
-      // ── Result card ───────────────────────────────────────────────────
-      var card = document.createElement('div');
-      card.id = 'var-card-' + co.id;
-      card.style.cssText = 'background:#fff;border:1.5px solid #EBEBEF;border-radius:16px;overflow:hidden;margin-bottom:12px;';
-
-      var flagged = attData.filter(function(e){ return e.missing; });
-
-      // Header
-      var cardHdr = '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#F4F4F8;border-bottom:1px solid #EBEBEF;">'
-        + '<div><div style="font-size:11px;color:#9898a6;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">Cut-off ' + (cutoffIdx+1) + '</div>'
-        + '<div style="font-size:14px;font-weight:600;color:#1a1a2e;">' + payout + '</div></div>'
-        + '<div style="display:flex;gap:8px;align-items:center;">'
-        + '<span style="font-size:11px;background:#edfae8;color:#32CE13;padding:2px 10px;border-radius:20px;font-weight:600;">' + additions.length + ' additions</span>'
-        + '<span style="font-size:11px;background:#fff0f0;color:#c0392b;padding:2px 10px;border-radius:20px;font-weight:600;">' + deductions.length + ' deductions</span>'
-        + '<span style="font-size:11px;background:#F4F4F8;color:#9898a6;padding:2px 10px;border-radius:20px;">' + noChange.length + ' no change</span>'
-        + (flagged.length ? '<span style="font-size:11px;background:#fffbeb;color:#92400e;padding:2px 10px;border-radius:20px;font-weight:600;border:1px solid #fcd34d;"><i class="ti ti-alert-triangle" style="font-size:10px;"></i> ' + flagged.length + ' flagged</span>' : '')
-        + '</div></div>';
-
-      // Variance table (employees with variances, plus any flagged as missing from one file)
-      var varTableRows = '';
-      var tableList = attData.filter(function(e){ return e.hasVar || e.missing; });
-      if (tableList.length) {
-        varTableRows = tableList.map(function(emp) {
-          var changedCols = [];
-          if (emp.missing) {
-            changedCols.push('<span style="font-size:10px;padding:1px 6px;border-radius:4px;margin:1px;display:inline-block;background:#fffbeb;color:#92400e;border:1px solid #fcd34d;font-weight:600;">'
-              + '<i class="ti ti-alert-triangle" style="font-size:9px;"></i> ' + emp.missing + '</span>');
-          }
-          for (var ci = 2; ci < 35; ci++) {
-            if (Math.abs(emp.row[ci]) > 0.001) {
-              var isBlue = emp.row[ci] > 0;
-              changedCols.push('<span style="font-size:10px;padding:1px 6px;border-radius:4px;margin:1px;display:inline-block;background:'
-                + (isBlue?'#BDD7EE':'#FFC7CE') + ';color:'
-                + (isBlue?'#1F4E79':'#9C0006') + ';font-weight:600;">'
-                + VAR_KEEP[ci] + ': ' + (isBlue ? '+' : '-') + Math.abs(emp.row[ci]).toFixed(2) + '</span>');
-            }
-          }
-          var idColor   = emp.missing ? '#92400E' : '#9898a6';
-          var nameColor = emp.missing ? '#78350F' : '#1a1a2e';
-          return '<tr' + (emp.missing ? ' style="background:#fffdf5;"' : '') + '>'
-            + '<td style="padding:7px 10px;border-bottom:1px solid #EBEBEF;font-family:monospace;font-size:11px;color:' + idColor + ';white-space:nowrap;">' + emp.id + '</td>'
-            + '<td style="padding:7px 10px;border-bottom:1px solid #EBEBEF;font-size:12px;font-weight:500;color:' + nameColor + ';">' + emp.name + '</td>'
-            + '<td style="padding:7px 10px;border-bottom:1px solid #EBEBEF;">' + changedCols.join('') + '</td>'
-            + '</tr>';
-        }).join('');
-      } else {
-        varTableRows = '<tr><td colspan="3" style="padding:16px;text-align:center;color:#9898a6;font-size:12px;">No variances detected</td></tr>';
-      }
-
-      var varTable = '<div style="padding:14px 16px;border-bottom:1px solid #EBEBEF;">'
-        + '<div style="font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;">Variance details</div>'
-        + '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-radius:12px;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
-        + '<thead><tr style="background:#F4F4F8;">'
-        + '<th style="padding:6px 10px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;white-space:nowrap;">Employee ID</th>'
-        + '<th style="padding:6px 10px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Name</th>'
-        + '<th style="padding:6px 10px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Variances</th>'
-        + '</tr></thead><tbody>' + varTableRows + '</tbody></table></div></div>';
-
-      // Action buttons
-      var actionsHtml = '<div style="padding:12px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
-        + '<button id="dl-var-' + co.id + '" onclick="varDownload(' + co.id + ')" class="dl-btn" style="margin:0;width:auto;flex:1 1 220px;">'
-        + '<i class="ti ti-download"></i> Download Variance Template</button>'
-        + '<button id="dl-disp-' + co.id + '" onclick="varDisputesDownload(' + co.id + ')" class="dl-btn" style="margin:0;width:auto;flex:1 1 220px;" '
-        + (withVar.length ? '' : 'disabled title="No variances detected — nothing to log"') + '>'
-        + '<i class="ti ti-ticket"></i> Download Disputes Tab</button>'
-        + '<button id="finalize-var-' + co.id + '" onclick="varFinalize(' + co.id + ')" '
-        + 'style="padding:8px 16px;background:#F4F4F8;color:#9898a6;border:1.5px solid #EBEBEF;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:' + (co._finalized ? 'none' : 'inline-flex') + ';align-items:center;gap:6px;">'
-        + '<i class="ti ti-lock" style="font-size:13px;"></i> Mark as finalized</button>'
-        + '<span id="finalized-badge-' + co.id + '" style="display:' + (co._finalized ? 'inline-flex' : 'none') + ';font-size:11px;background:#edfae8;color:#32CE13;padding:3px 10px;border-radius:20px;font-weight:600;">'
-        + '<i class="ti ti-circle-check" style="font-size:11px;"></i> Finalized \u2014 included in Payroll Instructions</span>'
-        + '</div>';
-
-      card.innerHTML = cardHdr + varTable + actionsHtml;
-      if (co._finalized) card.style.borderColor = '#A6EB93';
-      resultDiv.appendChild(card);
+      varRenderResultCard(co, cutoffIdx, attData);
+      varSaveCutoffSnapshot((varBatchGroups[varActiveGroupIdx] || {}).clientKey, co);
     });
 
     if (opts.onDone) { opts.onDone(); return; }
@@ -10141,11 +10267,16 @@ function varSwitchGroup(gi) {
   Array.prototype.push.apply(varCutoffs, g.cutoffs);
   varActiveGroupIdx = gi;
   renderVarBatchList();
-  // Re-run to redisplay this subcompany's results (files are still cached in taskFiles,
-  // so this recomputes quickly rather than needing a separate render-only code path).
-  runVariance({ onDone: function(){ renderVarBatchList(); } });
+  // Cut-offs already carry their computed attData (just processed this session, or restored
+  // from Supabase) -- render straight from it instead of re-parsing taskFiles.
   var resultDiv = document.getElementById('var-result');
-  if (resultDiv) setTimeout(function(){ resultDiv.scrollIntoView({behavior:'smooth', block:'start'}); }, 150);
+  if (resultDiv) {
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = '';
+    window.varResults = {};
+    g.cutoffs.forEach(function(co, idx) { varRenderResultCard(co, idx, co._attData || []); });
+    setTimeout(function(){ resultDiv.scrollIntoView({behavior:'smooth', block:'start'}); }, 150);
+  }
 }
 
 function varDownloadAllGroups() {
@@ -10465,6 +10596,9 @@ function varFinalize(coId) {
   if (window.varResults && co._payout && window.varResults[co._payout]) {
     window.varResults[co._payout].finalized = true;
   }
+
+  var activeG = (typeof varActiveGroupIdx !== 'undefined' && varActiveGroupIdx >= 0) ? varBatchGroups[varActiveGroupIdx] : null;
+  if (activeG && activeG.clientKey) varSaveCutoffSnapshot(activeG.clientKey, co);
 
   if (typeof showToast === 'function') showToast('Cut-off ' + co._payout + ' finalized \u2014 findings will be included in Payroll Instructions');
 }
