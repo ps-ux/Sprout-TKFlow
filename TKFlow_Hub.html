@@ -494,7 +494,7 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
   // fields are left as whatever the hardcoded seed already has.
   async function loadCompaniesFromSupabase() {
     var groupsRes = await supabaseClient.from('company_groups').select('*');
-    var companiesRes = await supabaseClient.from('companies').select('*, company_pocs(*)');
+    var companiesRes = await supabaseClient.from('companies').select('*');
     if (groupsRes.error || companiesRes.error) {
       console.warn('Failed to load companies from Supabase', groupsRes.error, companiesRes.error);
       return;
@@ -527,9 +527,6 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       existing._churned = c.status === 'Churned';
       if (existing._churned) existing.status = 'Churned';
       if (group) { existing.group = group.code; existing.groupName = group.name; }
-      existing.pocs = (c.company_pocs || []).map(function(p) {
-        return { name: p.name, role: p.role, phone: p.phone || '', email: p.email || '' };
-      });
       ensureClientTaskScaffold(existing, c.short_key);
     });
 
@@ -648,9 +645,10 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       };
       await loadCompaniesFromSupabase();
       await loadUserRelationsFromSupabase();
-      // All seven depend on clients/clientGroups (companyId/groupId) already being populated above.
+      // All eight depend on clients/clientGroups (companyId/groupId) already being populated above.
       await loadPolicyFilesFromSupabase();
       await loadCalendarsFromSupabase();
+      await loadPocsFromSupabase();
       await loadDisputesFromSupabase();
       await loadTaskStatusFromSupabase();
       await loadArchivedClientsFromSupabase();
@@ -1798,10 +1796,10 @@ var clients = {
       {label:'1st Payout', payoutDay:15, attStart:'16th prev', attEnd:'30/31st prev', note:'e.g. Apr 16–30 → May 15'},
       {label:'2nd Payout', payoutDay:30, attStart:'1st current', attEnd:'15th current', note:'e.g. May 1–15 → May 30'}
     ],
-    pocs:[
-      {name:'Francesca Atengco', role:'Main POC', phone:'09773052013', email:'francesca.atengco@kuehne-nagel.com'},
-      {name:'Charlie Aguilar',   role:'Secondary POC (her superior)', phone:'', email:'charlie.aguilar@kuehne-nagel.com'}
-    ],
+    // Francesca/Charlie now live in Supabase as group-scoped POCs (see loadPocsFromSupabase),
+    // shared across every sub in KN -- kept as an empty array here rather than removing the
+    // field, since this is still the fallback for a client whose POCs haven't been migrated.
+    pocs:[],
     tasks:[
       {ico:'ico-g',icon:'ti-table-plus',name:'Variance analysis',taskKey:'variance',st:'tst-pend',stl:'Pending'},
       {ico:'ico-b',icon:'ti-clock-check',name:'Current Attendance Validation',taskKey:'validation',st:'tst-pend',stl:'Pending'},
@@ -1825,10 +1823,10 @@ var clients = {
       {label:'1st Payout', payoutDay:15, attStart:'16th prev', attEnd:'30/31st prev', note:'e.g. Apr 16–30 → May 15'},
       {label:'2nd Payout', payoutDay:30, attStart:'1st current', attEnd:'15th current', note:'e.g. May 1–15 → May 30'}
     ],
-    pocs:[
-      {name:'Francesca Atengco', role:'Main POC', phone:'09773052013', email:'francesca.atengco@kuehne-nagel.com'},
-      {name:'Charlie Aguilar',   role:'Secondary POC (her superior)', phone:'', email:'charlie.aguilar@kuehne-nagel.com'}
-    ],
+    // Francesca/Charlie now live in Supabase as group-scoped POCs (see loadPocsFromSupabase),
+    // shared across every sub in KN -- kept as an empty array here rather than removing the
+    // field, since this is still the fallback for a client whose POCs haven't been migrated.
+    pocs:[],
     tasks:[
       {ico:'ico-g',icon:'ti-table-plus',name:'Variance analysis',taskKey:'variance',st:'tst-pend',stl:'Pending'},
       {ico:'ico-b',icon:'ti-clock-check',name:'Current Attendance Validation',taskKey:'validation',st:'tst-pend',stl:'Pending'},
@@ -4193,6 +4191,31 @@ function periodLabelsFor(payrollType) {
   return ['1st Payout', '2nd Payout'];
 }
 
+// Shared Attendance Cut-off text format ("23rd previous month") -- used by both the Add
+// Client wizard and Client Profile's Cut-off Schedule, so the two structured Day + Month-scope
+// inputs always produce (and can be parsed back into) the exact same phrasing instead of each
+// entry point free-typing its own.
+function ordinalSuffix(n) {
+  n = parseInt(n, 10);
+  if (isNaN(n)) return '';
+  var s = ['th','st','nd','rd'], v = n % 100;
+  return n + (s[(v-20)%10] || s[v] || s[0]);
+}
+function attText(day, monthScope) {
+  if (!day) return '';
+  return ordinalSuffix(day) + ' ' + (monthScope === 'prev' ? 'previous month' : 'current month');
+}
+// Reverse of attText() -- pulls {day, month} back out of an already-stored string so the
+// structured inputs can be pre-filled when editing existing data. Only understands the exact
+// format attText() produces; a value that predates this format (typed freely into the old
+// plain-text field) won't match and the inputs will show blank until re-entered -- the
+// original stored string is left alone until the user actually changes something, though.
+function parseAttText(s) {
+  var m = String(s || '').match(/^(\d{1,2})\w*\s+(previous|current)\s+month$/i);
+  if (!m) return { day: '', month: 'current' };
+  return { day: m[1], month: m[2].toLowerCase() === 'previous' ? 'prev' : 'current' };
+}
+
 // Renders however many cutoff-schedule blocks the given payroll type needs into
 // #ac-cutoff-fields-container -- replaces what used to be two static hardcoded blocks.
 // Field ids are suffixed by index (ac-payout1-day, ac-payout2-day, ac-payout3-day, ...) so
@@ -4536,21 +4559,12 @@ async function _saveClientConfirmed() {
   // exists (uploaded here or later), it takes over automatically and these become the
   // fallback shown only for clients without one.
   function acVal(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
-  function ordinalSuffix(n) {
-    n = parseInt(n, 10);
-    if (isNaN(n)) return '';
-    var s = ['th','st','nd','rd'], v = n % 100;
-    return n + (s[(v-20)%10] || s[v] || s[0]);
-  }
-  // Builds a consistently-formatted string ("23rd previous month") from the structured
-  // day + month-scope dropdown fields, instead of letting each person free-type their own
-  // phrasing ("23rd prev", "prev 23", "23 (last month)", etc).
+  // attText() (shared with Client Profile's Cut-off Schedule) builds the consistently-
+  // formatted string ("23rd previous month") from the structured day + month-scope dropdown
+  // fields, instead of letting each person free-type their own phrasing.
   function acAttText(dayId, monthId) {
-    var day = acVal(dayId);
-    if (!day) return '';
     var monthSel = document.getElementById(monthId);
-    var monthScope = monthSel ? monthSel.value : 'current';
-    return ordinalSuffix(day) + ' ' + (monthScope === 'prev' ? 'previous month' : 'current month');
+    return attText(acVal(dayId), monthSel ? monthSel.value : 'current');
   }
   const basicOffsetEl = document.getElementById('ac-basic-offset');
   const basicPayOffsetVal = basicOffsetEl ? parseInt(basicOffsetEl.value, 10) || 0 : 0;
@@ -6037,6 +6051,7 @@ function setPayrollType(subKeysCsv, type) {
       // to blank rows matching the new type's labels so there's somewhere to re-enter the
       // payout day/attendance cut-off for each of the new periods, rather than leaving behind
       // stale or mismatched-count data under the new type.
+      _cutoffHistorySnapshot(sk);
       clients[sk].cutoffs = (typeof periodLabelsFor === 'function' ? periodLabelsFor(type) : ['1st Payout', '2nd Payout']).map(function(label) {
         return { label: label, payoutDay: '', attStart: '', attEnd: '', note: '' };
       });
@@ -6070,20 +6085,136 @@ function _persistClientCutoffs(sk) {
     supabaseClient.from('companies').update({ cutoffs: clients[sk].cutoffs || [] }).eq('short_key', sk).then(function(res) {
       if (res.error) { console.warn('Could not save cut-off schedule for ' + sk, res.error); if (typeof showToast === 'function') showToast('Could not save cut-off schedule: ' + res.error.message, '#c0392b'); }
     });
+    _recordCutoffHistory(sk);
   }, 600);
+}
+
+// Change history for the Cut-off Schedule -- companies.cutoffs only ever holds the current
+// state, with no trace of prior values, so staff couldn't previously look back at when/why a
+// client's payout day or attendance cut-off range changed. Snapshots before/after around the
+// same debounce window _persistClientCutoffs already uses, so a burst of edits (e.g. typing
+// out a day, then picking a month) becomes one history row, not one per keystroke. Every
+// mutator (setClientCutoffField, addClientCutoffRow, removeClientCutoffRow, setPayrollType's
+// reset) calls _cutoffHistorySnapshot(sk) before its own mutation, then _persistClientCutoffs
+// as usual -- this is the only place that actually writes the history row.
+var _cutoffHistoryBaseline = {};
+function _cutoffHistorySnapshot(sk) {
+  if (!(sk in _cutoffHistoryBaseline)) {
+    _cutoffHistoryBaseline[sk] = JSON.parse(JSON.stringify((clients[sk] && clients[sk].cutoffs) || []));
+  }
+}
+function _recordCutoffHistory(sk) {
+  var companyId = clients[sk] && clients[sk].companyId;
+  var before = _cutoffHistoryBaseline[sk];
+  delete _cutoffHistoryBaseline[sk];
+  if (!companyId || !before) return;
+  var after = clients[sk].cutoffs || [];
+  if (JSON.stringify(before) === JSON.stringify(after)) return;
+  supabaseClient.from('cutoff_schedule_history').insert({
+    company_id: companyId,
+    changed_by: (typeof currentUser !== 'undefined' && currentUser && currentUser.name) || '',
+    cutoffs_before: before,
+    cutoffs_after: after
+  }).then(function(res) {
+    if (res.error) console.warn('Could not record cut-off schedule history for ' + sk, res.error);
+  });
+}
+
+// Cut-off Schedule starts locked (read-only) every time the profile renders -- this just flips
+// the flag cutoffsHtmlFor checks and re-renders, matching the re-render idiom used by every
+// other Cut-off Schedule mutator in this file.
+window._cutoffEditMode = window._cutoffEditMode || {};
+function toggleCutoffEditMode(cutoffEditKey) {
+  window._cutoffEditMode[cutoffEditKey] = !window._cutoffEditMode[cutoffEditKey];
+  if (typeof renderClientProfile === 'function' && window.currentWsGroup) renderClientProfile(window.currentWsGroup);
+  else if (typeof renderClientProfile === 'function' && window.currentWsClient) renderClientProfile(window.currentWsClient);
+}
+
+// Compares two cutoffs snapshots period-by-period (matched by array position) and describes
+// what changed in plain language, for the History modal below.
+function _diffCutoffSnapshots(before, after) {
+  var fieldNames = { label: 'Label', payoutDay: 'Payout day', attStart: 'Attendance cut-off start', attEnd: 'Attendance cut-off end', note: 'Note' };
+  var lines = [];
+  var maxLen = Math.max(before.length, after.length);
+  for (var i = 0; i < maxLen; i++) {
+    var b = before[i], a = after[i];
+    if (!b && a) { lines.push('Added "' + a.label + '"'); continue; }
+    if (b && !a) { lines.push('Removed "' + b.label + '"'); continue; }
+    if (!b || !a) continue;
+    Object.keys(fieldNames).forEach(function(f) {
+      if ((b[f] || '') !== (a[f] || '')) {
+        lines.push((a.label || b.label) + ' — ' + fieldNames[f] + ': "' + (b[f] || '(blank)') + '" → "' + (a[f] || '(blank)') + '"');
+      }
+    });
+  }
+  return lines;
+}
+
+// Shows every recorded Cut-off Schedule change for this scope (see _recordCutoffHistory) --
+// cutoffEditKey is the same subs-csv used as the section's Edit/Done state, so this looks up
+// every sub sharing that schedule at once.
+async function showCutoffHistoryModal(cutoffEditKey) {
+  var existing = document.getElementById('cutoff-history-overlay');
+  if (existing) existing.remove();
+
+  var overlay = document.createElement('div');
+  overlay.id = 'cutoff-history-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.35);z-index:4000;display:flex;align-items:center;justify-content:center;';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  var panel = document.createElement('div');
+  panel.style.cssText = 'background:#fff;border-radius:14px;padding:20px;width:460px;max-width:90vw;max-height:75vh;overflow-y:auto;box-shadow:0 12px 40px rgba(0,0,0,0.25);';
+  panel.innerHTML = '<div style="font-size:14px;font-weight:600;color:#1a1a2e;margin-bottom:12px;">Cut-off Schedule history</div><div style="text-align:center;color:#9898a6;font-size:12px;padding:20px 0;">Loading…</div>';
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+
+  var companyIds = cutoffEditKey.split(',').map(function(sk){ return clients[sk] && clients[sk].companyId; }).filter(Boolean);
+  if (!companyIds.length) {
+    panel.innerHTML = '<div style="font-size:14px;font-weight:600;color:#1a1a2e;margin-bottom:12px;">Cut-off Schedule history</div><div style="text-align:center;color:#9898a6;font-size:12px;padding:20px 0;">No history available.</div>';
+    return;
+  }
+
+  var res = await supabaseClient.from('cutoff_schedule_history').select('*').in('company_id', companyIds).order('changed_at', { ascending: false }).limit(50);
+  if (res.error) {
+    panel.innerHTML = '<div style="font-size:14px;font-weight:600;color:#1a1a2e;margin-bottom:12px;">Cut-off Schedule history</div><div style="text-align:center;color:#c0392b;font-size:12px;padding:20px 0;">Could not load history: ' + res.error.message + '</div>';
+    return;
+  }
+  var rows = res.data || [];
+  var rowsHtml = rows.length ? rows.map(function(r) {
+    var diffLines = _diffCutoffSnapshots(r.cutoffs_before || [], r.cutoffs_after || []);
+    var dt = new Date(r.changed_at);
+    return '<div style="padding:10px 0;border-bottom:1px solid #F4F4F8;">'
+      + '<div style="font-size:11px;color:#9898a6;margin-bottom:4px;">' + dt.toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' }) + (r.changed_by ? ' · ' + r.changed_by : '') + '</div>'
+      + (diffLines.length
+          ? diffLines.map(function(l){ return '<div style="font-size:12px;color:#1a1a2e;">' + l + '</div>'; }).join('')
+          : '<div style="font-size:12px;color:#9898a6;">No field-level changes detected</div>')
+      + '</div>';
+  }).join('') : '<div style="text-align:center;color:#9898a6;font-size:12px;padding:20px 0;">No changes recorded yet.</div>';
+
+  panel.innerHTML = '<div style="font-size:14px;font-weight:600;color:#1a1a2e;margin-bottom:12px;">Cut-off Schedule history</div>' + rowsHtml;
 }
 
 function setClientCutoffField(subKeysCsv, idx, field, value) {
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk] || !clients[sk].cutoffs || !clients[sk].cutoffs[idx]) return;
+    _cutoffHistorySnapshot(sk);
     clients[sk].cutoffs[idx][field] = value;
     _persistClientCutoffs(sk);
   });
 }
 
+// Attendance Cut-off's Day + Month-scope inputs are two separate fields in the DOM but one
+// combined string in storage -- recombines them via the shared attText() formatter (same
+// format the Add Client wizard writes) and hands the result to setClientCutoffField as usual.
+function setClientCutoffAttField(subKeysCsv, idx, field, dayId, monthId) {
+  var day = (document.getElementById(dayId) || {}).value || '';
+  var monthScope = (document.getElementById(monthId) || {}).value || 'current';
+  setClientCutoffField(subKeysCsv, idx, field, attText(day, monthScope));
+}
+
 function addClientCutoffRow(subKeysCsv) {
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk]) return;
+    _cutoffHistorySnapshot(sk);
     if (!clients[sk].cutoffs) clients[sk].cutoffs = [];
     clients[sk].cutoffs.push({ label: 'New Payout', payoutDay: '', attStart: '', attEnd: '', note: '' });
     _persistClientCutoffs(sk);
@@ -6095,6 +6226,7 @@ function addClientCutoffRow(subKeysCsv) {
 function removeClientCutoffRow(subKeysCsv, idx) {
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk] || !clients[sk].cutoffs) return;
+    _cutoffHistorySnapshot(sk);
     clients[sk].cutoffs.splice(idx, 1);
     _persistClientCutoffs(sk);
   });
@@ -6394,31 +6526,43 @@ function renderClientProfile(key) {
 
   function jsonEq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
-  function pocsHtmlFor(pocs, subKeyForActions) {
+  // scope is 'group' (shared across every sub, stored in _pocStore) or 'company' (this one
+  // sub's own list, stored in clients[key].pocs) -- key is the group code or short_key that
+  // openEditPOCModal()/removePOC() index back into the right store with.
+  function pocsHtmlFor(pocs, scope, key) {
+    var channelLabel = { viber: 'Viber', whatsapp: 'WhatsApp', call_sms: 'Call/SMS', other: 'Other' };
     return pocs.length ? pocs.map(function(p, idx) {
       return '<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid #F4F4F8;">'
         + '<div style="width:36px;height:36px;border-radius:50%;background:#DCFCE7;color:#32CE13;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;">'
         + p.name.split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase() + '</div>'
         + '<div style="flex:1;"><div style="font-size:13px;font-weight:500;color:#1a1a2e;">' + p.name + '</div>'
-        + '<div style="font-size:11px;color:#9898a6;margin-top:2px;">' + p.role + '</div></div>'
+        + '<div style="font-size:11px;color:#9898a6;margin-top:2px;">' + p.role + '</div>'
+        + (p.notes ? '<div style="font-size:11px;color:#9898a6;margin-top:2px;font-style:italic;">' + p.notes + '</div>' : '')
+        + '</div>'
         + '<div style="text-align:right;">'
-        + (p.phone ? '<div style="font-size:12px;color:#1a1a2e;">' + p.phone + '</div>' : '')
+        + (p.phone ? '<div style="font-size:12px;color:#1a1a2e;">' + p.phone + (p.phoneChannel && channelLabel[p.phoneChannel] ? ' <span style="font-size:10px;color:#9898a6;">(' + channelLabel[p.phoneChannel] + ')</span>' : '') + '</div>' : '')
         + '<a href="mailto:' + p.email + '" style="font-size:11px;color:#32CE13;text-decoration:none;">' + p.email + '</a>'
         + '</div>'
-        + (subKeyForActions ? '<button onclick="removePOC(\'' + subKeyForActions + '\',' + idx + ')" title="Remove" style="margin-left:8px;padding:5px 7px;border:1px solid #EBEBEF;border-radius:6px;background:#fff;color:#c0392b;cursor:pointer;flex-shrink:0;"><i class="ti ti-trash" style="font-size:12px;"></i></button>' : '')
+        + '<button onclick="openEditPOCModal(\'' + scope + '\',\'' + key + '\',' + idx + ')" title="Edit" style="margin-left:8px;padding:5px 7px;border:1px solid #EBEBEF;border-radius:6px;background:#fff;color:#6b6b80;cursor:pointer;flex-shrink:0;"><i class="ti ti-pencil" style="font-size:12px;"></i></button>'
+        + '<button onclick="removePOC(\'' + scope + '\',\'' + key + '\',' + idx + ')" title="Remove" style="margin-left:6px;padding:5px 7px;border:1px solid #EBEBEF;border-radius:6px;background:#fff;color:#c0392b;cursor:pointer;flex-shrink:0;"><i class="ti ti-trash" style="font-size:12px;"></i></button>'
         + '</div>';
     }).join('') : '<div style="padding:12px 16px;color:#9898a6;font-size:12px;">No POCs on file</div>';
   }
 
-  // subKeysCsv, when passed, switches this from a read-only display into an editable form.
+  // subKeysCsv, when passed, allows an editable form -- but it only actually renders editable
+  // once toggleCutoffEditMode() has flipped that scope's entry in window._cutoffEditMode on
+  // (see the Edit/Done button in renderClientProfile). Cut-off Schedule starts locked/read-only
+  // so it reads as an official record rather than something anyone browsing the profile could
+  // nudge by accident. editKey defaults to subKeysCsv, but the "differs per sub" branch below
+  // passes the whole group's key explicitly so all sub-cards share one Edit/Done state.
   // This is always the manually-entered schedule (companies.cutoffs) -- it used to be
   // overridden by whatever the uploaded TK Calendar contained when one existed, but that
   // calendar is shared across the whole group and templated semi-monthly regardless of a
   // given sub's own payroll type, so the override could show the wrong period count/labels
   // (e.g. a Monthly client seeing "1st"/"2nd" periods spanning two different months) instead
   // of what was actually set up for it via periodLabelsFor(payrollType).
-  function cutoffsHtmlFor(cutoffs, subKeysCsv) {
-    var editable = !!subKeysCsv;
+  function cutoffsHtmlFor(cutoffs, subKeysCsv, editKey) {
+    var editable = !!subKeysCsv && !!(window._cutoffEditMode || {})[editKey || subKeysCsv];
     function fld(onblurCall, val, placeholder, extraStyle) {
       return '<input type="text" value="' + String(val||'').replace(/"/g,'&quot;') + '" placeholder="' + (placeholder||'') + '" '
         + 'onblur="' + onblurCall + '" '
@@ -6434,19 +6578,39 @@ function renderClientProfile(key) {
         : '';
       var payoutHtml = editable
         ? fld(fieldTarget('payoutDay'), co.payoutDay, 'e.g. 13')
-        : '<div style="font-size:13px;color:#1a1a2e;">' + co.payoutDay + 'th of the month</div>';
+        : '<div style="font-size:13px;color:#1a1a2e;">' + (co.payoutDay && co.payoutDay !== '?' ? ordinalSuffix(co.payoutDay) + ' of the month' : 'Not set') + '</div>';
+      // Attendance Cut-off is a Day input + Current/Previous-month dropdown per boundary
+      // (Start, End), matching the Add Client wizard's renderCutoffFields exactly -- rather
+      // than a free-text field, where the month easily gets left out or phrased differently
+      // between Start and End. Combined via setClientCutoffAttField() back into the same
+      // "23rd previous month" string the wizard and every read-only display already use.
+      function attFieldRow(rowLabel, parsed, dayId, monthId, onCombinedChange) {
+        return '<div style="margin-top:8px;">'
+          + '<div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;margin-bottom:3px;">' + rowLabel + '</div>'
+          + '<div style="display:flex;gap:6px;">'
+          + '<input type="number" min="1" max="31" id="' + dayId + '" value="' + (parsed.day || '') + '" placeholder="Day" onchange="' + onCombinedChange + '" style="width:64px;flex-shrink:0;padding:5px 8px;border:1px solid #EBEBEF;border-radius:8px;font-size:12px;font-family:Rubik,sans-serif;box-sizing:border-box;">'
+          + '<select id="' + monthId + '" onchange="' + onCombinedChange + '" style="flex:1;padding:5px 8px;border:1px solid #EBEBEF;border-radius:8px;font-size:12px;font-family:Rubik,sans-serif;">'
+          + '<option value="prev"' + (parsed.month === 'prev' ? ' selected' : '') + '>Previous month</option>'
+          + '<option value="current"' + (parsed.month !== 'prev' ? ' selected' : '') + '>Current month</option>'
+          + '</select>'
+          + '</div></div>';
+      }
+      var idBase = 'co-' + subKeysCsv.replace(/[^a-zA-Z0-9]/g, '_') + '-' + idx;
+      var startDayId = idBase + '-start-day', startMonthId = idBase + '-start-month';
+      var endDayId = idBase + '-end-day', endMonthId = idBase + '-end-month';
       var attHtml = editable
-        ? '<div style="display:flex;gap:6px;align-items:center;">' + fld(fieldTarget('attStart'), co.attStart, 'e.g. 23rd previous month') + '<span style="color:#9898a6;flex-shrink:0;">\u2013</span>' + fld(fieldTarget('attEnd'), co.attEnd, 'e.g. 8th current month') + '</div>'
-        : '<div style="font-size:13px;color:#1a1a2e;">' + co.attStart + ' \u2013 ' + co.attEnd + '</div>';
+        ? attFieldRow('Attendance cut-off start', parseAttText(co.attStart), startDayId, startMonthId,
+            'setClientCutoffAttField(\'' + subKeysCsv + '\',' + idx + ',\'attStart\',\'' + startDayId + '\',\'' + startMonthId + '\')')
+          + attFieldRow('Attendance cut-off end', parseAttText(co.attEnd), endDayId, endMonthId,
+            'setClientCutoffAttField(\'' + subKeysCsv + '\',' + idx + ',\'attEnd\',\'' + endDayId + '\',\'' + endMonthId + '\')')
+        : '<div style="font-size:13px;color:#1a1a2e;margin-top:8px;">' + (co.attStart || co.attEnd ? (co.attStart || 'Not set') + ' \u2013 ' + (co.attEnd || 'Not set') : 'Not set') + '</div>';
       var noteHtml = editable
-        ? fld(fieldTarget('note'), co.note, 'Note', 'margin-top:6px;color:#9898a6;font-size:11px;')
+        ? fld(fieldTarget('note'), co.note, 'Note', 'margin-top:8px;color:#9898a6;font-size:11px;')
         : '<div style="font-size:11px;color:#9898a6;margin-top:6px;">' + co.note + '</div>';
       return '<div style="background:#F4F4F8;border-radius:14px;padding:14px 16px;">'
         + '<div style="display:flex;align-items:center;justify-content:space-between;' + (editable ? 'margin-bottom:8px;' : '') + '">' + labelHtml + removeBtn + '</div>'
-        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
-        + '<div><div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;margin-bottom:3px;">Payout Day</div>' + payoutHtml + '</div>'
-        + '<div><div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;margin-bottom:3px;">Attendance Cut-off</div>' + attHtml + '</div>'
-        + '</div>'
+        + '<div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;margin-bottom:3px;">Payout day of month</div>' + payoutHtml
+        + attHtml
         + noteHtml
         + '</div>';
     }).join('');
@@ -6475,41 +6639,52 @@ function renderClientProfile(key) {
     }).join('') : '<div style="padding:12px 16px;color:#9898a6;font-size:12px;">No tasks configured</div>';
   }
 
-  // ── POCs: consolidated if identical across all subs, else broken out per subcompany ──
-  var pocsSection;
-  if (subs.length <= 1) {
-    pocsSection = '<div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow:hidden;margin-bottom:20px;">' + pocsHtmlFor(clients[subs[0]].pocs||[], subs[0]) + '</div>';
+  // ── POCs: one shared list per group (scope 'group', shown once at the top) plus any
+  // sub-specific entries (scope 'company', shown under that sub's own header) -- replaces the
+  // old "only consolidated if every sub's full list happens to be byte-identical" check, which
+  // broke (silently forking into a separate per-sub list) the instant one sub got even a
+  // single POC the others didn't share.
+  var pocGroupKey = _calKey();
+  var sharedPocs = _pocGet();
+  var pocsSubSections = subs.map(function(k) {
+    var ownPocs = clients[k].pocs || [];
+    if (!ownPocs.length) return '';
+    return '<div style="margin-bottom:10px;">'
+      + (subs.length > 1 ? '<div style="font-size:11px;font-weight:600;color:#32CE13;margin-bottom:4px;">' + clients[k].name + '</div>' : '')
+      + '<div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow:hidden;">' + pocsHtmlFor(ownPocs, 'company', k) + '</div>'
+      + '</div>';
+  }).join('');
+  var pocsSection = sharedPocs.length
+    ? '<div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow:hidden;margin-bottom:12px;">' + pocsHtmlFor(sharedPocs, 'group', pocGroupKey) + '</div>'
+    : '';
+  pocsSection += pocsSubSections;
+  if (!pocsSection) {
+    pocsSection = '<div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow:hidden;margin-bottom:20px;">' + pocsHtmlFor([], 'group', pocGroupKey) + '</div>';
   } else {
-    var firstPocs = clients[subs[0]].pocs || [];
-    var pocsAllSame = subs.every(function(k){ return jsonEq(clients[k].pocs||[], firstPocs); });
-    if (pocsAllSame) {
-      pocsSection = '<div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow:hidden;margin-bottom:20px;">' + pocsHtmlFor(firstPocs, subs[0]) + '</div>';
-    } else {
-      pocsSection = subs.map(function(k) {
-        return '<div style="margin-bottom:10px;">'
-          + '<div style="font-size:11px;font-weight:600;color:#32CE13;margin-bottom:4px;">' + clients[k].name + '</div>'
-          + '<div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow:hidden;">' + pocsHtmlFor(clients[k].pocs||[], k) + '</div>'
-          + '</div>';
-      }).join('');
-    }
+    pocsSection = '<div style="margin-bottom:20px;">' + pocsSection + '</div>';
   }
 
   // Cutoff schedule -- always the manually-entered schedule (companies.cutoffs), sized by
   // payrollType via periodLabelsFor. Subs in a group usually share one schedule, but can
   // differ, so this still checks for that before falling back to a per-sub breakdown.
+  // cutoffEditKey is the single Edit/Done state for the whole section (see the button below) --
+  // passed through as every card's editKey even in the per-sub branch, so switching one sub's
+  // card into edit mode doesn't leave the others locked.
+  var cutoffEditKey = subs.join(',');
+  var cutoffEditing = !!(window._cutoffEditMode || {})[cutoffEditKey];
   var cutoffSection;
   if (subs.length <= 1) {
-    cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(clients[subs[0]].cutoffs||[], subs[0]) + '</div>';
+    cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(clients[subs[0]].cutoffs||[], subs[0], cutoffEditKey) + '</div>';
   } else {
     var firstCutoffs = clients[subs[0]].cutoffs || [];
     var cutoffsAllSame = subs.every(function(k){ return jsonEq(clients[k].cutoffs||[], firstCutoffs); });
     if (cutoffsAllSame) {
-      cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(firstCutoffs, subs.join(',')) + '</div>';
+      cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(firstCutoffs, subs.join(','), cutoffEditKey) + '</div>';
     } else {
       cutoffSection = subs.map(function(k) {
         return '<div style="margin-bottom:14px;">'
           + '<div style="font-size:11px;font-weight:600;color:#32CE13;margin-bottom:6px;">' + clients[k].name + '</div>'
-          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + cutoffsHtmlFor(clients[k].cutoffs||[], k) + '</div>'
+          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + cutoffsHtmlFor(clients[k].cutoffs||[], k, cutoffEditKey) + '</div>'
           + '</div>';
       }).join('');
     }
@@ -6736,7 +6911,15 @@ function renderClientProfile(key) {
     + pocsSection
     + processorHistorySection
     // Cutoff schedule
-    + '<div style="font-size:12px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Cut-off Schedule</div>'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'
+    + '<div style="font-size:12px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;">Cut-off Schedule</div>'
+    + '<div style="display:flex;gap:8px;">'
+    + '<button onclick="showCutoffHistoryModal(\'' + cutoffEditKey + '\')" style="padding:5px 12px;background:#F8F8FA;border:1px solid #EBEBEF;border-radius:7px;font-size:11px;color:#1a1a2e;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:4px;"><i class="ti ti-history" style="font-size:11px;"></i> History</button>'
+    + '<button onclick="toggleCutoffEditMode(\'' + cutoffEditKey + '\')" style="padding:5px 12px;background:' + (cutoffEditing ? '#DCFCE7' : '#F8F8FA') + ';border:1px solid ' + (cutoffEditing ? '#32CE13' : '#EBEBEF') + ';border-radius:7px;font-size:11px;color:' + (cutoffEditing ? '#1F7A0A' : '#1a1a2e') + ';cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:4px;">'
+    + (cutoffEditing ? '<i class="ti ti-check" style="font-size:11px;"></i> Done editing' : '<i class="ti ti-pencil" style="font-size:11px;"></i> Edit')
+    + '</button>'
+    + '</div>'
+    + '</div>'
     + payrollTypeControl
     + cutoffSection
     + basicPayOffsetControl
@@ -17163,10 +17346,11 @@ function openAuditFromDashboard() {
 <div id="poc-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:3000;align-items:center;justify-content:center;backdrop-filter:blur(2px);pointer-events:none;">
   <div style="background:#ffffff;border-radius:16px;width:480px;box-shadow:0 24px 64px rgba(0,0,0,0.3);border:1px solid #EBEBEF;">
     <div style="padding:18px 22px 14px;border-bottom:1px solid #EBEBEF;display:flex;align-items:center;justify-content:space-between;">
-      <div style="font-size:15px;font-weight:600;color:#1a1a2e;">Add point of contact</div>
+      <div style="font-size:15px;font-weight:600;color:#1a1a2e;" id="poc-modal-title">Add point of contact</div>
       <div onclick="(function(){ const el=document.getElementById('poc-modal'); el.style.display='none'; el.style.pointerEvents='none'; })()" style="width:30px;height:30px;border-radius:12px;border:1px solid #EBEBEF;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9898a6;font-size:16px;"><i class="ti ti-x"></i></div>
     </div>
     <div style="padding:20px 22px;">
+      <input type="hidden" id="poc-edit-id">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
         <div><label class="task-field-label">Full name *</label><input class="task-input" type="text" id="poc-name" placeholder="e.g. France Reyes"></div>
         <div><label class="task-field-label">Position / title</label><input class="task-input" type="text" id="poc-position" placeholder="e.g. Timekeeping Officer"></div>
@@ -17176,7 +17360,15 @@ function openAuditFromDashboard() {
         <div><label class="task-field-label">Phone / mobile</label><input class="task-input" type="text" id="poc-phone" placeholder="+63 9XX XXX XXXX"></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
-        <div><label class="task-field-label">Entity</label><input class="task-input" type="text" id="poc-entity" placeholder="e.g. KNI, KNLSI"></div>
+        <div><label class="task-field-label">Contact via</label>
+          <select class="task-input" id="poc-phone-channel">
+            <option value="">Not specified</option>
+            <option value="viber">Viber</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="call_sms">Call / SMS</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
         <div><label class="task-field-label">Type</label>
           <select class="task-input" id="poc-type">
             <option value="Primary">Primary contact</option>
@@ -17186,11 +17378,15 @@ function openAuditFromDashboard() {
           </select>
         </div>
       </div>
+      <div style="margin-bottom:12px;">
+        <label class="task-field-label">Applies to</label>
+        <select class="task-input" id="poc-scope"></select>
+      </div>
       <div><label class="task-field-label">Notes</label><input class="task-input" type="text" id="poc-notes" placeholder="Any additional notes about this contact..."></div>
     </div>
     <div style="padding:14px 22px;border-top:1px solid #EBEBEF;display:flex;gap:8px;justify-content:flex-end;">
       <button onclick="(function(){ const el=document.getElementById('poc-modal'); el.style.display='none'; el.style.pointerEvents='none'; })()" style="padding:9px 18px;border:1px solid #EBEBEF;border-radius:12px;background:#ffffff;color:#6b6b80;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Cancel</button>
-      <button onclick="savePOC()" style="padding:9px 18px;border:none;border-radius:12px;background:var(--ub-500);color:#fff;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Save POC</button>
+      <button onclick="savePOC()" id="poc-save-btn" style="padding:9px 18px;border:none;border-radius:12px;background:var(--ub-500);color:#fff;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Save POC</button>
     </div>
   </div>
 </div>
@@ -17285,16 +17481,6 @@ function openAuditFromDashboard() {
 
 <script>
 // ── Client profile ──────────────────────────────────────────────────────────
-// Resolves which client key a new/edited POC should actually be saved against — the
-// representative (first) subcompany of the current group, or the single client itself.
-function pocTargetSubKey() {
-  var grpKey = window.currentWsGroup;
-  if (grpKey && clientGroups[grpKey]) {
-    var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
-    return subs[0];
-  }
-  return window.currentWsClient;
-}
 
 // Renaming a client keeps the old name as history rather than overwriting it — useful for
 // a real legal business-name change. Works on the group (if this client is part of one) or
@@ -17371,40 +17557,139 @@ function openNameHistoryModal(key) {
   if (modal) modal.style.display = 'flex';
 }
 
+// Populates "Applies to" with "All subcompanies" (only offered when this workspace is a real
+// multi-entity group -- a standalone client has nothing to share a POC across) plus one option
+// per sub. selectedValue lets openEditPOCModal() preselect whatever the POC's current scope is.
+function _populatePocScopeOptions(selectedValue) {
+  var sel = document.getElementById('poc-scope');
+  if (!sel) return;
+  var grpKey = window.currentWsGroup;
+  var grp = grpKey && clientGroups[grpKey];
+  var subs = grp ? grp.subs.filter(function(k){ return clients[k] && !clients[k]._churned; }) : [window.currentWsClient];
+  var isRealGroup = !!(grp && grp.groupId && subs.length > 1);
+  var options = [];
+  if (isRealGroup) options.push({ value: 'group', label: 'All subcompanies' });
+  subs.forEach(function(k) { if (clients[k]) options.push({ value: k, label: clients[k].name }); });
+  sel.innerHTML = options.map(function(o) { return '<option value="' + o.value + '">' + o.label + '</option>'; }).join('');
+  sel.value = selectedValue || (isRealGroup ? 'group' : (subs[0] || ''));
+}
+
 function openAddPOCModal() {
-  ['poc-name','poc-position','poc-email','poc-phone','poc-entity','poc-notes'].forEach(id => {
+  ['poc-name','poc-position','poc-email','poc-phone','poc-notes'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
+  document.getElementById('poc-edit-id').value = '';
+  document.getElementById('poc-phone-channel').value = '';
+  document.getElementById('poc-type').value = 'Primary';
+  _populatePocScopeOptions();
+  document.getElementById('poc-modal-title').textContent = 'Add point of contact';
+  document.getElementById('poc-save-btn').textContent = 'Save POC';
   const pm = document.getElementById('poc-modal'); pm.style.display = 'flex'; pm.style.pointerEvents = 'auto';
 }
 
-function savePOC() {
-  const name     = document.getElementById('poc-name').value.trim();
-  const position = document.getElementById('poc-position').value.trim();
-  const email    = document.getElementById('poc-email').value.trim();
-  const phone    = document.getElementById('poc-phone').value.trim();
-  const entity   = document.getElementById('poc-entity').value.trim();
-  const type     = document.getElementById('poc-type').value;
-  const notes    = document.getElementById('poc-notes').value.trim();
+// scope/key/idx identify the POC exactly as pocsHtmlFor's buttons do -- 'group' looks it up in
+// _pocGet(), 'company' looks it up in clients[key].pocs.
+function openEditPOCModal(scope, key, idx) {
+  var poc = scope === 'group' ? (window._pocStore[key] || [])[idx] : ((clients[key] || {}).pocs || [])[idx];
+  if (!poc) return;
+  document.getElementById('poc-name').value = poc.name || '';
+  document.getElementById('poc-position').value = poc.role || '';
+  document.getElementById('poc-email').value = poc.email || '';
+  document.getElementById('poc-phone').value = poc.phone || '';
+  document.getElementById('poc-phone-channel').value = poc.phoneChannel || '';
+  document.getElementById('poc-notes').value = poc.notes || '';
+  document.getElementById('poc-edit-id').value = poc._id || '';
+  document.getElementById('poc-type').value = 'Primary';
+  _populatePocScopeOptions(scope === 'group' ? 'group' : key);
+  document.getElementById('poc-modal-title').textContent = 'Edit point of contact';
+  document.getElementById('poc-save-btn').textContent = 'Save changes';
+  var pm = document.getElementById('poc-modal'); pm.style.display = 'flex'; pm.style.pointerEvents = 'auto';
+}
+
+// After an edit, the POC might have moved scope (e.g. from one specific sub to "All
+// subcompanies") -- rather than tracking its old location, just find it by id wherever it
+// currently lives (there are only ever a handful of POCs per client), remove it there, and add
+// the fresh data to wherever it should live now.
+function _replacePocInMemory(id, freshData, newScope, newKey) {
+  Object.keys(window._pocStore).forEach(function(gk) {
+    var arr = window._pocStore[gk];
+    var i = arr.findIndex(function(p){ return p._id === id; });
+    if (i >= 0) arr.splice(i, 1);
+  });
+  Object.keys(clients).forEach(function(sk) {
+    var arr = clients[sk].pocs;
+    if (!arr) return;
+    var i = arr.findIndex(function(p){ return p._id === id; });
+    if (i >= 0) arr.splice(i, 1);
+  });
+  if (newScope === 'group') {
+    if (!window._pocStore[newKey]) window._pocStore[newKey] = [];
+    window._pocStore[newKey].push(freshData);
+  } else {
+    if (!clients[newKey].pocs) clients[newKey].pocs = [];
+    clients[newKey].pocs.push(freshData);
+  }
+}
+
+async function savePOC() {
+  const name        = document.getElementById('poc-name').value.trim();
+  const position    = document.getElementById('poc-position').value.trim();
+  const email       = document.getElementById('poc-email').value.trim();
+  const phone       = document.getElementById('poc-phone').value.trim();
+  const phoneChannel = document.getElementById('poc-phone-channel').value;
+  const type        = document.getElementById('poc-type').value;
+  const notes       = document.getElementById('poc-notes').value.trim();
+  const scopeVal    = document.getElementById('poc-scope').value;
+  const editId      = document.getElementById('poc-edit-id').value;
 
   if (!name || !email) { alert('Name and email are required'); return; }
+  if (!scopeVal) { showToast('No client selected', '#e67e00'); return; }
 
-  var targetKey = pocTargetSubKey();
-  if (!targetKey || !clients[targetKey]) { showToast('No client selected', '#e67e00'); return; }
-  if (!clients[targetKey].pocs) clients[targetKey].pocs = [];
-  clients[targetKey].pocs.push({ name: name, role: position || type, email: email, phone: phone, entity: entity, type: type, notes: notes });
+  var isGroupScope = scopeVal === 'group';
+  var grpKey = window.currentWsGroup;
+  var grp = grpKey && clientGroups[grpKey];
+  var row = {
+    name: name, role: position || type, phone: phone, phone_channel: phoneChannel,
+    email: email, notes: notes, scope_type: isGroupScope ? 'group' : 'company',
+    company_id: isGroupScope ? null : ((clients[scopeVal] || {}).companyId || null),
+    group_id: isGroupScope ? ((grp && grp.groupId) || null) : null
+  };
+  if (isGroupScope && !row.group_id) { showToast('This client has no group to share a POC across', '#e67e00'); return; }
+  if (!isGroupScope && !row.company_id) { showToast('Could not resolve that subcompany', '#e67e00'); return; }
+
+  var localPoc = { name: name, role: position || type, phone: phone, phoneChannel: phoneChannel, email: email, notes: notes };
+  var newKey = isGroupScope ? _calKey() : scopeVal;
+
+  if (editId) {
+    var updRes = await supabaseClient.from('company_pocs').update(row).eq('id', editId);
+    if (updRes.error) { showToast('Could not save POC: ' + updRes.error.message, '#c0392b'); return; }
+    localPoc._id = editId;
+    _replacePocInMemory(editId, localPoc, isGroupScope ? 'group' : 'company', newKey);
+  } else {
+    var insRes = await supabaseClient.from('company_pocs').insert(row).select().single();
+    if (insRes.error) { showToast('Could not save POC: ' + insRes.error.message, '#c0392b'); return; }
+    localPoc._id = insRes.data.id;
+    if (isGroupScope) { if (!window._pocStore[newKey]) window._pocStore[newKey] = []; window._pocStore[newKey].push(localPoc); }
+    else { if (!clients[newKey].pocs) clients[newKey].pocs = []; clients[newKey].pocs.push(localPoc); }
+  }
 
   document.getElementById('poc-modal').style.display = 'none';
   if (typeof renderClientProfile === 'function') renderClientProfile(window.currentWsGroup || window.currentWsClient);
-  showToast(name + ' added as ' + type + ' contact');
+  showToast(name + (editId ? ' updated' : ' added') + ' as ' + type + ' contact');
 }
 
-function removePOC(subKey, idx) {
-  if (!clients[subKey] || !clients[subKey].pocs) return;
-  var removed = clients[subKey].pocs.splice(idx, 1);
+async function removePOC(scope, key, idx) {
+  var arr = scope === 'group' ? (window._pocStore[key] || []) : ((clients[key] || {}).pocs || []);
+  var poc = arr[idx];
+  if (!poc) return;
+  if (poc._id) {
+    var res = await supabaseClient.from('company_pocs').delete().eq('id', poc._id);
+    if (res.error) { showToast('Could not remove POC: ' + res.error.message, '#c0392b'); return; }
+  }
+  arr.splice(idx, 1);
   if (typeof renderClientProfile === 'function') renderClientProfile(window.currentWsGroup || window.currentWsClient);
-  if (removed[0]) showToast(removed[0].name + ' removed');
+  showToast(poc.name + ' removed');
 }
 
 function openChurnModal() {
@@ -21551,6 +21836,52 @@ function _calScope() {
   var cli = typeof clients !== 'undefined' ? clients[key] : null;
   if (cli && cli.companyId) return { type: 'company', id: cli.companyId };
   return null;
+}
+
+// POCs meant to cover "all subcompanies" share one list per group, keyed exactly like
+// _calStore (_calKey() is generic -- a clientGroups code, real or synthetic self-group), since
+// group-scoped POCs follow the same one-per-group sharing rule calendars already do. A
+// standalone client's _calKey() just resolves to its own short_key, which is fine here too --
+// "all subcompanies" degenerates to "this one company" when there's only one.
+window._pocStore = window._pocStore || {};
+function _pocGet() {
+  var k = _calKey();
+  if (!window._pocStore[k]) window._pocStore[k] = [];
+  return window._pocStore[k];
+}
+
+// Loads every persisted POC into clients[sk].pocs (scope_type 'company') or _pocStore (scope_
+// type 'group', shared across every sub) -- mirrors loadCalendarsFromSupabase's scope_type/
+// scope_id -> short_key/group-code resolution, and must run after loadCompaniesFromSupabase
+// for the same reason (needs companyId/groupId already populated on clients/clientGroups).
+async function loadPocsFromSupabase() {
+  var res = await supabaseClient.from('company_pocs').select('*');
+  if (res.error) { console.warn('Failed to load POCs', res.error); return; }
+  var groupIdToCode = {};
+  Object.keys(clientGroups || {}).forEach(function(gk) { if (clientGroups[gk].groupId) groupIdToCode[clientGroups[gk].groupId] = gk; });
+  var companyIdToShortKey = {};
+  Object.keys(clients || {}).forEach(function(ck) { if (clients[ck].companyId) companyIdToShortKey[clients[ck].companyId] = ck; });
+
+  var byCompanySk = {}, byGroupCode = {};
+  (res.data || []).forEach(function(row) {
+    var poc = {
+      _id: row.id, name: row.name, role: row.role || '', phone: row.phone || '',
+      phoneChannel: row.phone_channel || '', email: row.email || '', notes: row.notes || ''
+    };
+    if (row.scope_type === 'group') {
+      var gc = groupIdToCode[row.group_id];
+      if (gc) (byGroupCode[gc] = byGroupCode[gc] || []).push(poc);
+    } else {
+      var sk = companyIdToShortKey[row.company_id];
+      if (sk) (byCompanySk[sk] = byCompanySk[sk] || []).push(poc);
+    }
+  });
+
+  Object.keys(byGroupCode).forEach(function(gc) { window._pocStore[gc] = byGroupCode[gc]; });
+  // Only overwrite a sub's own list when the DB actually has rows for it -- otherwise this
+  // would wipe out any hardcoded seed pocs (same guard as loadCompaniesFromSupabase uses for
+  // cutoffs) for a client that hasn't had its POCs migrated into Supabase yet.
+  Object.keys(byCompanySk).forEach(function(sk) { if (clients[sk]) clients[sk].pocs = byCompanySk[sk]; });
 }
 
 // Built-in PH holidays (2025 + 2026)
