@@ -6411,30 +6411,25 @@ function renderClientProfile(key) {
   }
 
   // subKeysCsv, when passed, switches this from a read-only display into an editable form.
-  // calMode additionally handles the uploaded-TK-Calendar-derived case -- the client
-  // sometimes moves a payout date or attendance cut-off mid-stream without a new calendar
-  // file being uploaded yet, so this still needs to be editable, just against the calendar's
-  // own stored periods (setCalendarCutoffField) instead of companies.cutoffs
-  // (setClientCutoffField) -- period count there is fixed by the uploaded file, so no add/
-  // remove row controls, and label/note aren't calendar fields so they stay read-only.
-  // attStart/attEnd are already free-form formatted text (e.g. "23rd previous month" for the
-  // manual case, "6/1" for the calendar case), so plain text inputs match how this data has
-  // always looked, no structured day/month picker needed.
-  function cutoffsHtmlFor(cutoffs, subKeysCsv, calMode) {
-    var editable = !!subKeysCsv || !!calMode;
+  // This is always the manually-entered schedule (companies.cutoffs) -- it used to be
+  // overridden by whatever the uploaded TK Calendar contained when one existed, but that
+  // calendar is shared across the whole group and templated semi-monthly regardless of a
+  // given sub's own payroll type, so the override could show the wrong period count/labels
+  // (e.g. a Monthly client seeing "1st"/"2nd" periods spanning two different months) instead
+  // of what was actually set up for it via periodLabelsFor(payrollType).
+  function cutoffsHtmlFor(cutoffs, subKeysCsv) {
+    var editable = !!subKeysCsv;
     function fld(onblurCall, val, placeholder, extraStyle) {
       return '<input type="text" value="' + String(val||'').replace(/"/g,'&quot;') + '" placeholder="' + (placeholder||'') + '" '
         + 'onblur="' + onblurCall + '" '
         + 'style="width:100%;padding:5px 8px;border:1px solid #EBEBEF;border-radius:8px;font-size:12px;font-family:Rubik,sans-serif;box-sizing:border-box;' + (extraStyle||'') + '">';
     }
     var rowsHtml = cutoffs.map(function(co, idx) {
-      var fieldTarget = calMode
-        ? function(field) { return 'setCalendarCutoffField(' + co._calYr + ',' + co._calMonth + ',' + co._calPeriod + ',\'' + field + '\',this.value)'; }
-        : function(field) { return 'setClientCutoffField(\'' + subKeysCsv + '\',' + idx + ',\'' + field + '\',this.value)'; };
-      var labelHtml = (editable && !calMode)
+      var fieldTarget = function(field) { return 'setClientCutoffField(\'' + subKeysCsv + '\',' + idx + ',\'' + field + '\',this.value)'; };
+      var labelHtml = editable
         ? fld(fieldTarget('label'), co.label, 'Period label', 'font-weight:600;color:#32CE13;')
         : '<div style="font-size:12px;font-weight:600;color:#32CE13;margin-bottom:8px;">' + co.label + '</div>';
-      var removeBtn = (editable && !calMode)
+      var removeBtn = editable
         ? '<button onclick="removeClientCutoffRow(\'' + subKeysCsv + '\',' + idx + ')" title="Remove this cut-off period" style="background:none;border:none;color:#9898a6;cursor:pointer;font-size:13px;padding:0;margin-left:8px;flex-shrink:0;"><i class="ti ti-trash"></i></button>'
         : '';
       var payoutHtml = editable
@@ -6443,11 +6438,11 @@ function renderClientProfile(key) {
       var attHtml = editable
         ? '<div style="display:flex;gap:6px;align-items:center;">' + fld(fieldTarget('attStart'), co.attStart, 'e.g. 23rd previous month') + '<span style="color:#9898a6;flex-shrink:0;">\u2013</span>' + fld(fieldTarget('attEnd'), co.attEnd, 'e.g. 8th current month') + '</div>'
         : '<div style="font-size:13px;color:#1a1a2e;">' + co.attStart + ' \u2013 ' + co.attEnd + '</div>';
-      var noteHtml = (editable && !calMode)
+      var noteHtml = editable
         ? fld(fieldTarget('note'), co.note, 'Note', 'margin-top:6px;color:#9898a6;font-size:11px;')
         : '<div style="font-size:11px;color:#9898a6;margin-top:6px;">' + co.note + '</div>';
       return '<div style="background:#F4F4F8;border-radius:14px;padding:14px 16px;">'
-        + '<div style="display:flex;align-items:center;justify-content:space-between;' + (editable && !calMode ? 'margin-bottom:8px;' : '') + '">' + labelHtml + removeBtn + '</div>'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;' + (editable ? 'margin-bottom:8px;' : '') + '">' + labelHtml + removeBtn + '</div>'
         + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
         + '<div><div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;margin-bottom:3px;">Payout Day</div>' + payoutHtml + '</div>'
         + '<div><div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;margin-bottom:3px;">Attendance Cut-off</div>' + attHtml + '</div>'
@@ -6455,53 +6450,10 @@ function renderClientProfile(key) {
         + noteHtml
         + '</div>';
     }).join('');
-    if (editable && !calMode) {
+    if (editable) {
       return rowsHtml + '<button onclick="addClientCutoffRow(\'' + subKeysCsv + '\')" style="grid-column:1/-1;padding:10px;border:1.5px dashed #EBEBEF;border-radius:12px;background:none;color:#32CE13;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">+ Add cut-off period</button>';
     }
     return rowsHtml || '<div style="color:#9898a6;font-size:12px;">No cut-off schedule on file</div>';
-  }
-
-  // Pulls the current + upcoming cut-off periods directly from the client's uploaded TK
-  // Calendar (Calendar tab), instead of relying on manually-typed static values — the
-  // calendar already has the real payout date and attendance cut-off range per period, so
-  // there's no reason to duplicate that by hand. Returns null if no calendar's been uploaded
-  // yet for this workspace, so callers can fall back to the old manual data.
-  function cutoffsFromCalendar() {
-    var store = (typeof _calGet === 'function') ? _calGet() : null;
-    if (!store || !store.calPeriods || !store.calPeriods.length) return null;
-
-    var now = new Date();
-    var sorted = store.calPeriods.slice().sort(function(a,b){ return (a.yr - b.yr) || (a.month - b.month) || (a.period - b.period); });
-
-    function parseAttCov(attCov, yr) {
-      var m = (attCov || '').match(/(\d{1,2})\/(\d{1,2})\s*[-\u2013\u2014]\s*(\d{1,2})\/(\d{1,2})/);
-      if (!m) return null;
-      return { start: new Date(yr, +m[1]-1, +m[2]), end: new Date(yr, +m[3]-1, +m[4]) };
-    }
-
-    // Find the period whose attendance-coverage range actually contains today — this is
-    // "current" for general profile display purposes. (Variance Analysis is the one
-    // exception with a genuinely staggered/lagged relationship — see
-    // findMostRecentlyCompletedPeriodIdx, used specifically there instead.)
-    var todayIdx = sorted.findIndex(function(p) {
-      var r = parseAttCov(p.attCov, p.yr);
-      return r && now >= r.start && now <= r.end;
-    });
-    var toShow = todayIdx >= 0 ? sorted.slice(todayIdx, todayIdx + 2) : sorted.slice(-2);
-
-    return toShow.map(function(p) {
-      var attParts = (p.attCov || '').split('-');
-      return {
-        label: p.monthName + ' ' + (p.period === 1 ? '1st' : '2nd'),
-        payoutDay: p.payout ? p.payout.getDate() : '?',
-        attStart: (attParts[0] || '').trim(),
-        attEnd: (attParts[1] || '').trim(),
-        note: 'From uploaded TK Calendar',
-        // Identifies which store.calPeriods entry this came from, for setCalendarCutoffField
-        // to write back to -- yr/month/period together are unique per period.
-        _calYr: p.yr, _calMonth: p.month, _calPeriod: p.period
-      };
-    });
   }
 
   function taskToggleHtmlFor(clientKey) {
@@ -6542,15 +6494,11 @@ function renderClientProfile(key) {
     }
   }
 
-  // ── Cutoff schedule: prefer the uploaded TK Calendar (real data) over manually-typed
-  // static values. Since one calendar file covers the whole group, all subs share the same
-  // calendar-derived result — the old "differentiate per subcompany" logic only still applies
-  // as a fallback for clients that haven't uploaded a calendar yet.
+  // Cutoff schedule -- always the manually-entered schedule (companies.cutoffs), sized by
+  // payrollType via periodLabelsFor. Subs in a group usually share one schedule, but can
+  // differ, so this still checks for that before falling back to a per-sub breakdown.
   var cutoffSection;
-  var liveCutoffs = cutoffsFromCalendar();
-  if (liveCutoffs) {
-    cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(liveCutoffs, null, true) + '</div>';
-  } else if (subs.length <= 1) {
+  if (subs.length <= 1) {
     cutoffSection = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">' + cutoffsHtmlFor(clients[subs[0]].cutoffs||[], subs[0]) + '</div>';
   } else {
     var firstCutoffs = clients[subs[0]].cutoffs || [];
@@ -6585,18 +6533,15 @@ function renderClientProfile(key) {
   // explicitly — the calendar file only tracks Attendance cut-off directly, so anything that
   // auto-fills Basic Pay cut-off elsewhere (New Hires, Profile Updates, Payroll Instructions)
   // defaults to treating them as the same period unless this is set otherwise.
-  var basicPayOffsetControl = '';
-  if (liveCutoffs) {
-    var currentOffset = clients[subs[0]].basicPayOffset || 0;
-    var offsetLabels = [['-2','2 periods earlier'],['-1','1 period earlier'],['0','Same as Attendance cut-off (default)'],['1','1 period later'],['2','2 periods later']];
-    basicPayOffsetControl = '<div style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:12px 16px;margin-bottom:16px;">'
-      + '<div style="font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Basic Pay Cut-off</div>'
-      + '<div style="font-size:11px;color:#9898a6;margin-bottom:8px;">For clients where Basic Pay cut-off doesn\u2019t line up with Attendance cut-off \u2014 adjust here so New Hires, Profile Updates, and Payroll Instructions auto-fill the right period.</div>'
-      + '<select onchange="setBasicPayOffset(\'' + subs.join(',') + '\', this.value)" style="padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;background:#fff;">'
-      + offsetLabels.map(function(o){ return '<option value="' + o[0] + '"' + (String(currentOffset) === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')
-      + '</select>'
-      + '</div>';
-  }
+  var currentOffset = clients[subs[0]].basicPayOffset || 0;
+  var offsetLabels = [['-2','2 periods earlier'],['-1','1 period earlier'],['0','Same as Attendance cut-off (default)'],['1','1 period later'],['2','2 periods later']];
+  var basicPayOffsetControl = '<div style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:12px 16px;margin-bottom:16px;">'
+    + '<div style="font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Basic Pay Cut-off</div>'
+    + '<div style="font-size:11px;color:#9898a6;margin-bottom:8px;">For clients where Basic Pay cut-off doesn\u2019t line up with Attendance cut-off \u2014 adjust here so New Hires, Profile Updates, and Payroll Instructions auto-fill the right period.</div>'
+    + '<select onchange="setBasicPayOffset(\'' + subs.join(',') + '\', this.value)" style="padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;background:#fff;">'
+    + offsetLabels.map(function(o){ return '<option value="' + o[0] + '"' + (String(currentOffset) === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')
+    + '</select>'
+    + '</div>';
 
   // ── Expanded Scope: optional features some clients have on top of the standard 6 tasks.
   // Built here but rendered AFTER the Applicable Tasks matrix below.
@@ -21665,33 +21610,6 @@ async function loadCalendarsFromSupabase() {
       calHolidays: row.cal_holidays || {},
       calFileName: row.file_name || ''
     };
-  });
-}
-
-// A client sometimes moves a payout date or attendance cut-off mid-stream without a new TK
-// Calendar file being uploaded yet -- lets Client Profile edit the already-uploaded
-// calendar's own period data in place instead of requiring a full reupload just to fix one
-// date. yr/month/period together identify the exact store.calPeriods entry (see
-// cutoffsFromCalendar's _calYr/_calMonth/_calPeriod). Only updates cal_periods, not the
-// stored file itself or its Storage object.
-function setCalendarCutoffField(yr, month, period, field, value) {
-  var store = (typeof _calGet === 'function') ? _calGet() : null;
-  if (!store || !store.calPeriods) return;
-  var p = store.calPeriods.find(function(x){ return x.yr === yr && x.month === month && x.period === period; });
-  if (!p) return;
-  if (field === 'payoutDay') {
-    var day = parseInt(value, 10);
-    if (day && p.payout) p.payout = new Date(p.payout.getFullYear(), p.payout.getMonth(), day);
-  } else if (field === 'attStart' || field === 'attEnd') {
-    var parts = (p.attCov || '').split('-');
-    var newParts = [(parts[0] || '').trim(), (parts[1] || '').trim()];
-    newParts[field === 'attStart' ? 0 : 1] = value.trim();
-    p.attCov = newParts.join('-');
-  }
-  var scope = (typeof _calScope === 'function') ? _calScope() : null;
-  if (!scope) return;
-  supabaseClient.from('calendars').update({ cal_periods: store.calPeriods }).eq('scope_type', scope.type).eq('scope_id', scope.id).then(function(res) {
-    if (res.error) { console.warn('Could not save calendar edit', res.error); if (typeof showToast === 'function') showToast('Could not save calendar edit: ' + res.error.message, '#c0392b'); }
   });
 }
 
