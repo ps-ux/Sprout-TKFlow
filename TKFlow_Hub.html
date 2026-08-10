@@ -7193,12 +7193,12 @@ saveLog = function() {
 
 // ── TAT Logic ─────────────────────────────────────────────────────────────
 function parseTATEmailTime(timeStr) {
-  // e.g. "May 19, 2:30PM"
+  // e.g. "May 19, 2:30PM" -- no year in the string itself, since these always describe a
+  // recent event (a ticket just logged, or an email received a day or two ago).
   if (!timeStr) return null;
   const months = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
   const m = timeStr.match(/([A-Za-z]+)\s+(\d+),\s*(\d+):(\d+)(AM|PM)/);
   if (!m) return null;
-  const year = 2026;
   const month = months[m[1]];
   const day = parseInt(m[2]);
   let hour = parseInt(m[3]);
@@ -7206,7 +7206,18 @@ function parseTATEmailTime(timeStr) {
   const ap = m[5];
   if (ap === 'PM' && hour !== 12) hour += 12;
   if (ap === 'AM' && hour === 12) hour = 0;
-  return new Date(year, month, day, hour, min, 0);
+  // Was hardcoded to 2026 -- every TAT deadline in the app would have silently computed
+  // against the wrong year once 2026 ended. Assumes the current year, except right at a year
+  // boundary: a result landing more than 2 days in the future almost certainly means this
+  // string is actually last December being read in early January, not something newly
+  // scheduled far ahead -- these are TAT deadlines, never real future-dated events.
+  const now = new Date();
+  let year = now.getFullYear();
+  let dt = new Date(year, month, day, hour, min, 0);
+  if (dt - now > 2 * 24 * 60 * 60 * 1000) {
+    dt = new Date(year - 1, month, day, hour, min, 0);
+  }
+  return dt;
 }
 
 function getTATDeadline(emailTimeStr) {
@@ -8751,7 +8762,11 @@ function checkCutoffRollover(key) {
   function doReset(newLabel) {
     taskStatus[key] = {};
     if (window._taskBodyCache) {
-      ['variance','validation','newhires','disputes_summary','payroll_instructions'].forEach(function(tk) {
+      // 'profile' was missing here -- Profile Updates has its own runner (buildProfileRunner)
+      // just like the other five, so its cached HTML survived a Catch Up untouched, meaning
+      // that one task alone kept showing whatever it looked like before the reset instead of
+      // starting fresh like every other task did.
+      ['variance','validation','newhires','disputes_summary','payroll_instructions','profile'].forEach(function(tk) {
         delete window._taskBodyCache[tk + '_' + key];
       });
     }
@@ -8766,7 +8781,10 @@ function checkCutoffRollover(key) {
 
     clientObj.cutoff = newLabel;
     if (typeof showToast === 'function') showToast('Tasks reset for ' + clientObj.name + ' \u2014 ' + newLabel);
-    if (typeof openWorkspace === 'function') openWorkspace(key);
+    // keepSwitcher=true so this reload stays on Tasks (currentWsTab is 'ws-tasks' at this
+    // point, since that's the only tab checkCutoffRollover ever fires from now) instead of
+    // bouncing back to Overview, which is openWorkspace's default with no second argument.
+    if (typeof openWorkspace === 'function') openWorkspace(key, true);
   }
 
   // Prefer the real uploaded TK Calendar — handles any schedule (HDI's subs don't follow a
@@ -9230,6 +9248,11 @@ function closeTaskRunner() {
     window._taskKey = null;
   }
   document.getElementById('task-modal').style.display = 'none';
+  // The Tasks tab list behind this modal (status pill, "N runs" badge) was never refreshed on
+  // close -- marking done/skipped, or undoing and redoing a task, updated taskStatus/
+  // taskRunHistory correctly, but the list itself stayed stale until you switched tabs away
+  // and back, making it look like the change (or the "restart") hadn't registered at all.
+  if (typeof renderWsTasksSections === 'function') renderWsTasksSections(window.currentWsClient || window._wsClient || '');
 }
 document.getElementById('task-modal').addEventListener('click', e => { if (e.target === document.getElementById('task-modal')) closeTaskRunner(); });
 
