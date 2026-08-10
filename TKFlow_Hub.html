@@ -2758,7 +2758,7 @@ function switchTab(tab) {
   if (tab === 'ws-profile')  { setTimeout(function(){ if (typeof renderClientProfile==='function') { var _pk2 = (window.currentWsGroup && typeof clientGroups !== 'undefined' && clientGroups[window.currentWsGroup]) ? window.currentWsGroup : (window.currentWsClient||''); renderClientProfile(_pk2); } if (typeof renderPolicyFiles==='function') renderPolicyFiles(); if (typeof renderTKCalendar==='function') renderTKCalendar(); }, 30); }
   if (tab === 'ws-email')    { setTimeout(function(){ if (typeof _emailRestore==='function') _emailRestore();  }, 30); }
   if (tab === 'ws-logs')    { setTimeout(function(){ if (typeof groupAdhocLogsBySubcompany==='function') groupAdhocLogsBySubcompany(); }, 30); }
-  if (tab === 'ws-tasks')   { if (typeof renderWsTasksSections === 'function') renderWsTasksSections(window.currentWsClient || window._wsClient); }
+  if (tab === 'ws-tasks')   { if (typeof renderWsTasksSections === 'function') renderWsTasksSections(window.currentWsClient || window._wsClient); if (typeof checkCutoffRollover === 'function' && window.currentWsClient) checkCutoffRollover(window.currentWsClient); }
   if (tab === 'ws-overview' && window.currentWsGroup && typeof renderGroupOverview === 'function') { renderGroupOverview(window.currentWsGroup); }
   if (tab === 'ws-leave')   { setTimeout(function(){ if (typeof renderLeaveMonitoringLive === 'function') renderLeaveMonitoringLive(); }, 30); }
   if (tab === 'ws-lcv')     { setTimeout(function(){ if (typeof lcvRenderHome === 'function') lcvRenderHome(); }, 30); }
@@ -2795,7 +2795,9 @@ function openWorkspace(key, keepSwitcher) {
     return (clientGroups[gk].subs || [gk]).indexOf(key) >= 0;
   });
   window.currentWsGroup = detectedGroupKey || null;
-  checkCutoffRollover(key);
+  // Moved to switchTab()'s 'ws-tasks' case -- this used to run on every workspace open
+  // (Overview, Client Profile, anywhere), so just browsing into a client triggered the
+  // "Cut-off has ended" prompt even when you had no intention of touching Tasks yet.
   // Highlight active client in sidebar — the actual rendered elements are keyed by group
   // (sidebar-group-KN), not by individual subcompany, so highlighting must resolve to the
   // group's own row rather than looking for a per-subcompany element that never existed.
@@ -8721,6 +8723,27 @@ function getPeriodClosedDate(period) {
   return addWorkingDays(maxDeadline, 4);
 }
 
+// Persisted to localStorage (per browser, not per account) rather than a plain in-memory
+// object -- declining a "Cut-off has ended" prompt only used to hold for the rest of that
+// browser session, so reloading the page (which happens a lot, just from normal use) brought
+// it right back for the exact same still-unresolved period. Keyed by dedupe key, so it only
+// stops asking about THIS target period specifically -- once the client falls further behind
+// (a new target period = a new key), it asks again as it should.
+function _cutoffPromptDismissedGet() {
+  if (window._cutoffPromptDismissed) return window._cutoffPromptDismissed;
+  try {
+    window._cutoffPromptDismissed = JSON.parse(localStorage.getItem('tkflow_cutoff_prompts_dismissed') || '{}');
+  } catch (e) {
+    window._cutoffPromptDismissed = {};
+  }
+  return window._cutoffPromptDismissed;
+}
+function _cutoffPromptDismiss(dedupeKey) {
+  var store = _cutoffPromptDismissedGet();
+  store[dedupeKey] = true;
+  try { localStorage.setItem('tkflow_cutoff_prompts_dismissed', JSON.stringify(store)); } catch (e) {}
+}
+
 function checkCutoffRollover(key) {
   var clientObj = clients[key];
   if (!clientObj) return;
@@ -8782,9 +8805,8 @@ function checkCutoffRollover(key) {
     if (clientObj.cutoff === realLabel) return; // already on the correct period
 
     var dedupeKeyReal = key + '_real_' + targetPeriod.yr + '-' + targetPeriod.month + '-' + targetPeriod.period;
-    if (!window._cutoffPromptDismissed) window._cutoffPromptDismissed = {};
-    if (window._cutoffPromptDismissed[dedupeKeyReal]) return;
-    window._cutoffPromptDismissed[dedupeKeyReal] = true;
+    if (_cutoffPromptDismissedGet()[dedupeKeyReal]) return;
+    _cutoffPromptDismiss(dedupeKeyReal);
 
     var oldLabelReal = clientObj.cutoff || 'not yet set';
     var behindMsg = periodsBehind > 1
@@ -8812,9 +8834,8 @@ function checkCutoffRollover(key) {
 
   var currentRange = computeCurrentCutoffRange(range, clientObj.payrollType);
   var dedupeKey = key + '_' + currentRange.yr + '-' + currentRange.mon + '-' + currentRange.endDay;
-  if (!window._cutoffPromptDismissed) window._cutoffPromptDismissed = {};
-  if (window._cutoffPromptDismissed[dedupeKey]) return; // already asked about this exact period this session
-  window._cutoffPromptDismissed[dedupeKey] = true;
+  if (_cutoffPromptDismissedGet()[dedupeKey]) return; // already asked about this exact period, ever
+  _cutoffPromptDismiss(dedupeKey);
 
   var oldLabel = clientObj.cutoff;
   var newLabel = formatCutoffLabel(currentRange, clientObj.payrollType);
@@ -18524,17 +18545,62 @@ function toggleClosedRows(closedGroupId, headerEl) {
 
 
 <script>
-function openTicketModal() {
+// formatTicketId/claimNextTicketNumber are also used by the real, live ticket-logging path --
+// openNewDisputeTicket()/nextDisputeTicketId(), wired to the "Log ticket" button in the
+// workspace Disputes tab -- not just the #ticket-modal below. That modal (openTicketModal/
+// saveTicket) has no button anywhere that opens it and appears to predate #dispute-ticket-
+// modal (the one actually in use); left as-is rather than removed, since deleting a whole
+// modal wasn't asked for and carries more risk than benefit right now, but worth knowing it's
+// dead code before spending time debugging it.
+function formatTicketId(year, number) {
+  return '#' + year + '-' + String(number).padStart(3, '0');
+}
+
+// Atomically claims the next ticket number for a scope+year (dispute_ticket_counters), so two
+// people opening "Log dispute ticket" around the same moment never get handed the same number.
+// scopeKey follows the same sharing rule as POCs/calendars -- a real group's code (so KNI and
+// KNLSI share one KN sequence, matching the client's own external tracker) or a standalone
+// client's own short_key. Resets automatically every year since the row is keyed by (scope,
+// year) -- a new year with no row yet just starts at 1.
+async function claimNextTicketNumber(scopeKey, year) {
+  await supabaseClient.from('dispute_ticket_counters')
+    .upsert({ scope_key: scopeKey, year: year, next_number: 1 }, { onConflict: 'scope_key,year', ignoreDuplicates: true });
+  for (var attempt = 0; attempt < 5; attempt++) {
+    var sel = await supabaseClient.from('dispute_ticket_counters').select('next_number').eq('scope_key', scopeKey).eq('year', year).single();
+    if (sel.error) { console.warn('Could not read ticket counter for ' + scopeKey + '/' + year, sel.error); return null; }
+    var current = sel.data.next_number;
+    // Conditional update (WHERE next_number = current) is the atomic claim -- if this affects
+    // zero rows, someone else claimed `current` between our select and this update, so retry.
+    var upd = await supabaseClient.from('dispute_ticket_counters')
+      .update({ next_number: current + 1 })
+      .eq('scope_key', scopeKey).eq('year', year).eq('next_number', current)
+      .select();
+    if (upd.error) { console.warn('Could not claim ticket number for ' + scopeKey + '/' + year, upd.error); return null; }
+    if (upd.data && upd.data.length) return current;
+  }
+  console.warn('Gave up claiming a ticket number for ' + scopeKey + '/' + year + ' after 5 attempts');
+  return null;
+}
+
+async function openTicketModal() {
   ['tkt-id','tkt-cutoff','tkt-name','tkt-sub'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
   const m = document.getElementById('ticket-modal');
   if (m) { m.style.display='flex'; m.style.pointerEvents='auto'; }
+  // Pre-fills a suggested next ID (still editable -- staff can type over it for a manual/
+  // corrected ID) rather than leaving Ticket ID blank with just a placeholder example.
+  var scopeKey = (typeof _calKey === 'function') ? _calKey() : (window.currentWsGroup || window.currentWsClient);
+  if (!scopeKey || scopeKey === '__default__') return;
+  var year = new Date().getFullYear();
+  var claimed = await claimNextTicketNumber(scopeKey, year);
+  var idEl = document.getElementById('tkt-id');
+  if (claimed != null && idEl && !idEl.value) idEl.value = formatTicketId(year, claimed);
 }
 function closeTicketModal() {
   const m = document.getElementById('ticket-modal');
   if (m) { m.style.display='none'; m.style.pointerEvents='none'; }
 }
-function saveTicket() {
-  const id      = document.getElementById('tkt-id').value.trim();
+async function saveTicket() {
+  let id         = document.getElementById('tkt-id').value.trim();
   const cutoff  = document.getElementById('tkt-cutoff').value.trim();
   const name    = document.getElementById('tkt-name').value.trim();
   const sub     = document.getElementById('tkt-sub').value.trim();
@@ -18543,11 +18609,21 @@ function saveTicket() {
 
   if (!name || !sub) { alert('Employee name and description are required'); return; }
 
+  // openTicketModal() already pre-fills a claimed number -- this only re-claims if that failed
+  // (e.g. a network hiccup) or the field got cleared, rather than falling back to a crude
+  // count-based guess that ignored scope/year entirely and could collide across clients.
+  if (!id) {
+    var scopeKey = (typeof _calKey === 'function') ? _calKey() : (window.currentWsGroup || window.currentWsClient);
+    var year = new Date().getFullYear();
+    var claimed = scopeKey && scopeKey !== '__default__' ? await claimNextTicketNumber(scopeKey, year) : null;
+    id = claimed != null ? formatTicketId(year, claimed) : ('#' + (2026000 + allDisputes.length + 1));
+  }
+
   const statusLabels = {'dst-open':'Open','dst-rev':'In Progress','dst-resolved':'Resolved','dst-closed':'Closed'};
   const tatLabels    = {'tat-green':'Within TAT','tat-yellow':'Due soon','tat-red':'TAT overdue','tat-grey':'Resolved'};
 
   const newTicket = {
-    id: id || ('#' + (2026000 + allDisputes.length + 1)),
+    id: id,
     name, sub, cutoff,
     client: currentWsClient,
     status, statusLabel: statusLabels[status],
@@ -20763,20 +20839,36 @@ var dtmTatBgs    = {'tat-red':'#fff0f0','tat-yellow':'#fff4e6','tat-green':'#edf
 var dtmStColors  = {'dst-open':'#c0392b','dst-rev':'#1679FA','dst-resolved':'#7C3AED','dst-closed':'#32CE13'};
 var dtmStBgs     = {'dst-open':'#fff0f0','dst-rev':'#e8f0fe','dst-resolved':'#F3E8FF','dst-closed':'#edfae8'};
 
-function nextDisputeTicketId() {
+// Resolves a client key to the scope its ticket sequence is shared across -- the real group's
+// code if it belongs to one (so every sub in that group shares one sequence, matching how the
+// client's own external tracker numbers things), or just the client's own key otherwise.
+function _disputeScopeKeyFor(clientKey) {
+  var gk = Object.keys(clientGroups).find(function(g){ return (clientGroups[g].subs || [g]).indexOf(clientKey) >= 0; });
+  return gk || clientKey;
+}
+
+// Was: scan allDisputes for the highest #YYYY-NNN found (globally, across every client,
+// ignoring year entirely) and return max+1 under the *current* year -- meaning every client
+// shared one sequence, and a new year didn't actually reset anything, it just relabeled
+// whatever the running global max already was. Now claims an atomic number from
+// dispute_ticket_counters, scoped per client group and per year (see claimNextTicketNumber),
+// so KN's sequence (seeded to start at 119, continuing its prior external tracker) is
+// independent of every other client's, and genuinely resets to 1 each new year.
+async function nextDisputeTicketId(clientKey) {
+  var scopeKey = _disputeScopeKeyFor(clientKey);
   var year = new Date().getFullYear();
+  var claimed = await claimNextTicketNumber(scopeKey, year);
+  if (claimed != null) return formatTicketId(year, claimed);
+  // Fallback if the claim failed (e.g. offline) -- old behavior, better than nothing.
   var maxNum = 0;
   allDisputes.forEach(function(d) {
     var m = String(d.id||'').match(/#(\d{4})-(\d+)/);
-    if (m) {
-      var num = parseInt(m[2], 10);
-      if (num > maxNum) maxNum = num;
-    }
+    if (m) { var num = parseInt(m[2], 10); if (num > maxNum) maxNum = num; }
   });
   return '#' + year + '-' + String(maxNum + 1).padStart(3, '0');
 }
 
-function openNewDisputeTicket(clientKey) {
+async function openNewDisputeTicket(clientKey) {
   clientKey = clientKey || (typeof currentWsClient !== 'undefined' ? currentWsClient : null) || window._wsClient || '';
   var clientObj = clients[clientKey];
   var today = new Date();
@@ -20792,7 +20884,7 @@ function openNewDisputeTicket(clientKey) {
   var initialTatLabel = getTATLabel(nowEmailTime, 'Open');
 
   var stub = {
-    id: nextDisputeTicketId(),
+    id: await nextDisputeTicketId(clientKey),
     empNo: '', name: '', manager: '', location: '', shift: '',
     payrollSchedule: clientObj ? (clientObj.meta || '') : '',
     dateSubmitted: todayISO,
@@ -20875,6 +20967,41 @@ function dtmRemoveDisputeDate(idx) {
   if (d) dtmRenderDisputeDates(d);
 }
 
+// Real subcompany names for whichever group the ticket's client belongs to (or just that one
+// client if standalone) -- feeds the Subcompany dropdown below, so it always lists the actual
+// sibling entities instead of letting someone free-type a misspelled name.
+function dtmSubcompanyOptions(clientKey) {
+  var gk = Object.keys(clientGroups).find(function(g){ return (clientGroups[g].subs || [g]).indexOf(clientKey) >= 0; });
+  var subs = gk ? (clientGroups[gk].subs || [clientKey]) : [clientKey];
+  return subs.filter(function(sk){ return clients[sk]; }).map(function(sk){ return clients[sk].name; });
+}
+
+function dtmSelectOtherToggle(selectEl, otherId) {
+  var other = document.getElementById(otherId);
+  if (other) other.style.display = selectEl.value === 'Others' ? 'block' : 'none';
+}
+
+// Dropdown + "Others" free-text fallback, both saving into the same field -- used for
+// Subcompany and Type of Request so typos/inconsistent phrasing can't creep in, while still
+// preserving whatever a pre-existing ticket already had if it doesn't match any preset (an
+// older free-typed value, or the "unrecognized client" case) rather than silently blanking it.
+function dtmSelectWithOtherHtml(label, fieldKey, currentValue, presetOptions, otherInputId) {
+  var isPreset = presetOptions.indexOf(currentValue) >= 0;
+  var selectValue = currentValue && !isPreset ? 'Others' : (currentValue || '');
+  var optionsHtml = presetOptions.map(function(o) {
+    return '<option value="' + o.replace(/"/g,'&quot;') + '"' + (o === selectValue ? ' selected' : '') + '>' + o + '</option>';
+  }).join('');
+  var showOther = selectValue === 'Others';
+  return '<div style="background:var(--bg-secondary,#F4F4F8);border-radius:12px;padding:8px 12px;">'
+    + '<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">' + label + '</div>'
+    + '<select onchange="dtmSelectOtherToggle(this,\'' + otherInputId + '\');dtmSaveField(\'' + fieldKey + '\', this.value===\'Others\' ? (document.getElementById(\'' + otherInputId + '\').value||\'Others\') : this.value)" style="width:100%;border:none;background:transparent;padding:0;font-size:13px;font-weight:500;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;">'
+    + '<option value=""' + (selectValue === '' ? ' selected' : '') + ' disabled hidden></option>'
+    + optionsHtml
+    + '</select>'
+    + '<input type="text" id="' + otherInputId + '" value="' + (isPreset ? '' : (currentValue||'')).toString().replace(/"/g,'&quot;') + '" placeholder="Type the ' + label.toLowerCase() + '..." oninput="dtmSaveField(\'' + fieldKey + '\', this.value)" style="display:' + (showOther?'block':'none') + ';width:100%;border:none;background:transparent;padding:4px 0 0;font-size:12px;font-weight:500;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;">'
+    + '</div>';
+}
+
 function openDisputeTicket(id, clientContext) {
   var d = allDisputes.find(function(x) { return x.id === id; });
   if (!d) return;
@@ -20894,19 +21021,25 @@ function openDisputeTicket(id, clientContext) {
   // Ensure piLines exists (migrates legacy single-amount records) so the PI editor below has something to render
   if (!Array.isArray(d.piLines)) d.piLines = getPiLines(d);
 
-  // Fields grid — editable inputs, wired to auto-save on change
+  // Fields grid — editable inputs, wired to auto-save on change. Subcompany and Type of
+  // Request are dropdowns (see dtmSelectWithOtherHtml) rather than free text, so they can't
+  // drift from real subcompany names or an inconsistent set of dispute categories.
+  var dtmRequestTypes = ['Payroll Dispute', 'Leave Application', 'Missing / Incorrect Logs', 'Others'];
   var fieldSpecs = [
     ['Employee Name',    'name',            d.name],
     ['Employee No.',     'empNo',           d.empNo],
     ['Employee Email',   'empEmail',        d.empEmail],
-    ['Subcompany',       'entity',          d.entity || d.client],
+    ['Subcompany',       'entity',          d.entity || d.client, 'select', dtmSubcompanyOptions(d.client).concat(['Others'])],
     ['Manager',          'manager',         d.manager],
-    ['Type of Request',  'nature',          d.nature],
+    ['Type of Request',  'nature',          d.nature, 'select', dtmRequestTypes],
     ['Date of Submission', 'dateSubmitted', d.dateSubmitted, 'date'],
     ['Date of Action',     'dateAction',    d.dateAction, 'date'],
     ['Payout Cut-off',     'payoutCutoff',  d.payoutCutoff || d.cutoff],
   ];
   document.getElementById('dtm-fields-grid').innerHTML = fieldSpecs.map(function(f) {
+    if (f[3] === 'select') {
+      return dtmSelectWithOtherHtml(f[0], f[1], f[2], f[4], 'dtm-other-' + f[1]);
+    }
     var isDate = f[3] === 'date';
     var val = isDate ? dtmToDateInputValue(f[2]) : (f[2]||'').toString();
     return '<div style="background:var(--bg-secondary,#F4F4F8);border-radius:12px;padding:8px 12px;">'
