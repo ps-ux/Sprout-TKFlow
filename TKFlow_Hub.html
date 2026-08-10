@@ -645,10 +645,11 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       };
       await loadCompaniesFromSupabase();
       await loadUserRelationsFromSupabase();
-      // All eight depend on clients/clientGroups (companyId/groupId) already being populated above.
+      // All nine depend on clients/clientGroups (companyId/groupId) already being populated above.
       await loadPolicyFilesFromSupabase();
       await loadCalendarsFromSupabase();
       await loadPocsFromSupabase();
+      await loadAdhocLogsFromSupabase();
       await loadDisputesFromSupabase();
       await loadTaskStatusFromSupabase();
       await loadArchivedClientsFromSupabase();
@@ -1159,50 +1160,12 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
             <button onclick="openBulkLogModal()" style="padding:7px 14px;background:#F4F4F8;color:#1a1a2e;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:5px;"><i class="ti ti-list-check" style="font-size:13px;color:#32CE13;"></i> Bulk log</button>
             <button onclick="generateAdhocReport()" style="padding:7px 14px;background:#F4F4F8;color:#1a1a2e;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:5px;"><i class="ti ti-file-export" style="font-size:13px;color:#32CE13;"></i> Generate Report</button>
           </div>
-          <div id="adhoc-log-list">
-            <div class="adhoc-card" data-subcompany="KNI">
-              <div class="adhoc-top">
-                <div style="display:flex;align-items:center;gap:8px;">
-                  <div class="adhoc-type-pill" style="background:#DCFCE7;color:#16A34A;">Shift Management</div>
-                  <div class="adhoc-status done">Done</div>
-                </div>
-                <div style="font-size:11px;color:#9898a6;">May 14, 2026</div>
-              </div>
-              <div class="adhoc-name">Santos, Maria — Normal Shift to Flexi Per Day</div>
-              <div class="adhoc-detail">Client POC requested change via email. Updated shift type in Sprout HR.</div>
-              <div class="adhoc-changes">
-                <div class="change-block"><div class="change-label">Before</div><div class="change-val">Normal Shift</div></div>
-                <div style="color:#9898a6;align-self:center;font-size:18px;">&#x2192;</div>
-                <div class="change-block"><div class="change-label">After</div><div class="change-val" style="color:#32CE13;">Flexi Per Day</div></div>
-              </div>
-              <div class="adhoc-footer" style="justify-content:flex-end;">
-                <div style="display:flex;align-items:center;gap:8px;">
-                  <div style="font-size:11px;color:#32CE13;font-weight:500;">Completed &middot; May 14, 3:45PM</div>
-                  <button onclick="editLog(this)" style="font-size:11px;color:#9898a6;background:none;border:1px solid #EBEBEF;border-radius:7px;padding:2px 8px;cursor:pointer;font-family:Rubik,sans-serif;">Edit</button>
-                </div>
-              </div>
-            </div>
-            <div class="adhoc-card" data-subcompany="KNI" data-cutoff="May 16-31, 2026">
-              <div class="adhoc-top">
-                <div style="display:flex;align-items:center;gap:8px;">
-                  <div class="adhoc-type-pill" style="background:#e8f0fe;color:#1679FA;">Profile Update</div>
-                  <div class="adhoc-status progress">In progress</div>
-                </div>
-                <div style="font-size:11px;color:#9898a6;">May 16, 2026</div>
-              </div>
-              <div class="adhoc-name">Reyes, Alvin — Salary increase update</div>
-              <div class="adhoc-detail">Client requested salary adjustment effective May 15 payout.</div>
-              <div class="adhoc-changes">
-                <div class="change-block"><div class="change-label">Before</div><div class="change-val">PHP 28,000</div></div>
-                <div style="color:#9898a6;align-self:center;font-size:18px;">&#x2192;</div>
-                <div class="change-block"><div class="change-label">After</div><div class="change-val" style="color:#32CE13;">PHP 32,000</div></div>
-              </div>
-              <div class="adhoc-detail adhoc-remarks" style="margin-top:-4px;"><strong>Remarks:</strong> Received via Viber first, official request confirmed by email May 16.</div>
-              <div class="adhoc-footer" style="justify-content:flex-end;">
-                <button onclick="editLog(this)" style="font-size:11px;color:#9898a6;background:none;border:1px solid #EBEBEF;border-radius:7px;padding:2px 8px;cursor:pointer;font-family:Rubik,sans-serif;">Edit</button>
-              </div>
-            </div>
-          </div>
+          <!-- Populated by renderAdhocLogs() from _adhocStore (loaded from Supabase's
+               adhoc_logs table) -- was static demo HTML with no backing data at all.
+               max-width keeps cards at a comfortable reading width instead of stretching
+               across the full workspace pane, which looked like mostly empty space with
+               only a card or two logged. -->
+          <div id="adhoc-log-list" style="max-width:760px;"></div>
         </div>
 
         <div class="tab-content" id="ws-email">
@@ -2757,7 +2720,7 @@ function switchTab(tab) {
   var _tb2 = document.getElementById('tab-bar'); if (_tb2) _tb2.style.display = 'flex';
   if (tab === 'ws-profile')  { setTimeout(function(){ if (typeof renderClientProfile==='function') { var _pk2 = (window.currentWsGroup && typeof clientGroups !== 'undefined' && clientGroups[window.currentWsGroup]) ? window.currentWsGroup : (window.currentWsClient||''); renderClientProfile(_pk2); } if (typeof renderPolicyFiles==='function') renderPolicyFiles(); if (typeof renderTKCalendar==='function') renderTKCalendar(); }, 30); }
   if (tab === 'ws-email')    { setTimeout(function(){ if (typeof _emailRestore==='function') _emailRestore();  }, 30); }
-  if (tab === 'ws-logs')    { setTimeout(function(){ if (typeof groupAdhocLogsBySubcompany==='function') groupAdhocLogsBySubcompany(); }, 30); }
+  if (tab === 'ws-logs')    { setTimeout(function(){ if (typeof renderAdhocLogs==='function') renderAdhocLogs(); }, 30); }
   if (tab === 'ws-tasks')   { if (typeof renderWsTasksSections === 'function') renderWsTasksSections(window.currentWsClient || window._wsClient); if (typeof checkCutoffRollover === 'function' && window.currentWsClient) checkCutoffRollover(window.currentWsClient); }
   if (tab === 'ws-overview' && window.currentWsGroup && typeof renderGroupOverview === 'function') { renderGroupOverview(window.currentWsGroup); }
   if (tab === 'ws-leave')   { setTimeout(function(){ if (typeof renderLeaveMonitoringLive === 'function') renderLeaveMonitoringLive(); }, 30); }
@@ -3730,9 +3693,10 @@ function bulkHandleFile(input) {
   reader.readAsArrayBuffer(file);
 }
 
-function saveBulkLog() {
+async function saveBulkLog() {
   var type     = ((document.getElementById('bulk-log-type')||{}).value||'Other');
-  var channels = window._bulkChannels || {};
+  var channelsObj = window._bulkChannels || {};
+  var channels = ['email','viber','chat'].filter(function(c){ return channelsObj[c]; }).join(',');
   var rows     = (window._bulkRows||[]).filter(function(r){ return r && r.emp && r.emp.trim(); });
 
   if (!rows.length) {
@@ -3740,67 +3704,16 @@ function saveBulkLog() {
     return;
   }
 
-  var typeColors = {
-    'Shift Management':'background:#DCFCE7;color:#16A34A;',
-    'Holiday Setup':'background:#fff4e6;color:#e67e00;',
-    'Profile Update':'background:#e8f0fe;color:#1679FA;',
-    'Payroll ID Sync':'background:#edfae8;color:#32CE13;',
-    'Salary Increase':'background:#edfae8;color:#32CE13;',
-    'Other':'background:#F4F4F8;color:#6b6b80;'
-  };
-  var pilStyle = typeColors[type]||typeColors['Other'];
-  var now=new Date();
-  var dateStr=now.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'})
-    +' '+now.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit'});
-
-  var logList = document.getElementById('adhoc-list')
-    || document.querySelector('.adhoc-cards')
-    || document.querySelector('#ws-adhoc-full');
-
-  rows.forEach(function(r) {
-    var before = r.from||'\u2014';
-    var after  = r.to  ||'\u2014';
-    var hasChange = (before!=='\u2014'||after!=='\u2014');
-
-    var chHtml='';
-    if (channels.email) chHtml+='<div class="channel-tag email"><i class="ti ti-mail" style="font-size:11px;"></i> Email</div>';
-    if (channels.viber) chHtml+='<div class="channel-tag viber"><i class="ti ti-message-circle" style="font-size:11px;"></i> Viber</div>';
-    if (channels.chat)  chHtml+='<div class="channel-tag chat"><i class="ti ti-message" style="font-size:11px;"></i> Chat</div>';
-
-    var changesHtml = hasChange
-      ? '<div class="adhoc-changes">'
-        +'<div class="change-block"><div class="change-label">Before</div><div class="change-val">'+before+'</div></div>'
-        +'<div style="color:#9898a6;align-self:center;font-size:18px;">&#x2192;</div>'
-        +'<div class="change-block"><div class="change-label">After</div><div class="change-val" style="color:#32CE13;">'+after+'</div></div>'
-        +'</div>' : '';
-
-    var card = document.createElement('div');
-    card.className = 'adhoc-card';
-    card.innerHTML = '<div class="adhoc-top">'
-      +'<div style="display:flex;align-items:center;gap:8px;">'
-      +'<div class="adhoc-type-pill" style="'+pilStyle+'">'+type+'</div>'
-      +'<div class="adhoc-status pending">Pending</div>'
-      +'</div>'
-      +'<div style="font-size:11px;color:#9898a6;">'+dateStr+'</div>'
-      +'</div>'
-      +'<div class="adhoc-name">'+r.emp.trim()+'</div>'
-      +(r.desc?'<div class="adhoc-detail">'+r.desc.trim()+'</div>':'')
-      +changesHtml
-      +'<div class="adhoc-footer">'
-      +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'+chHtml+'</div>'
-      +'<div style="display:flex;gap:6px;">'
-      +'<button onclick="toggleAdhocDone(this)" class="adhoc-action-btn done-btn" title="Mark as done"><i class="ti ti-circle-check" style="font-size:14px;"></i></button>'
-      +'<button onclick="toggleAdhocDone(this)" class="adhoc-action-btn done-btn" title="Mark as done"><i class="ti ti-circle-check" style="font-size:14px;"></i></button>'
-      +'<button onclick="editLog(this)" class="adhoc-action-btn"><i class="ti ti-edit" style="font-size:13px;"></i></button>'
-      +'<button onclick="this.closest(\'.adhoc-card\').remove()" class="adhoc-action-btn" style="color:#c0392b;"><i class="ti ti-trash" style="font-size:13px;"></i></button>'
-      +'</div></div>';
-
-    if (logList) logList.insertBefore(card, logList.firstChild);
-    else {
-      var existing=document.querySelector('.adhoc-card');
-      if (existing&&existing.parentNode) existing.parentNode.insertBefore(card,existing);
-    }
-  });
+  // Each row persists through the same buildAndInsertAdhocCard() path as the regular Log
+  // Task modal -- this used to build raw DOM nodes directly with no backing data at all,
+  // same gap the rest of Ad hoc Logs had.
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    await buildAndInsertAdhocCard({
+      type: type, emp: r.emp.trim(), desc: (r.desc||'').trim(), before: r.from||'', after: r.to||'',
+      channels: channels, silent: true
+    });
+  }
 
   closeBulkLogModal();
   if(typeof showToast==='function') showToast('Logged '+rows.length+' employee'+(rows.length!==1?'s':'')+' for '+type);
@@ -7118,77 +7031,58 @@ function filterDisputes(chip, filter) {
 }
 
 // ── Edit Log ───────────────────────────────────────────────────────────────
-function toggleAdhocDone(btn) {
-  var card = btn.closest('.adhoc-card');
-  if (!card) return;
-  var statusEl = card.querySelector('.adhoc-status');
-  var isDone = statusEl && statusEl.classList.contains('done');
-
-  if (isDone) {
-    if (statusEl) { statusEl.className = 'adhoc-status pending'; statusEl.textContent = 'Pending'; }
-    card.style.opacity = '1';
-    card.style.borderColor = '';
-    btn.classList.add('done-btn');
-    btn.innerHTML = '<i class="ti ti-circle-check" style="font-size:14px;"></i>';
-    btn.title = 'Mark as done';
-  } else {
-    if (statusEl) { statusEl.className = 'adhoc-status done'; statusEl.textContent = 'Done'; }
-    card.style.opacity = '0.65';
-    card.style.borderColor = '#A6EB93';
-    btn.classList.remove('done-btn');
-    btn.innerHTML = '<i class="ti ti-circle-check" style="font-size:14px;"></i>';
-    btn.title = 'Mark as pending';
-  }
+async function toggleAdhocDone(id) {
+  var entry = _adhocGet().find(function(e){ return e.id === id; });
+  if (!entry) return;
+  entry.status = entry.status === 'done' ? 'pending' : 'done';
+  renderAdhocLogs();
+  var res = await supabaseClient.from('adhoc_logs').update({ status: entry.status }).eq('id', id);
+  if (res.error) { console.warn('Could not save log status', res.error); if (typeof showToast === 'function') showToast('Could not save status change: ' + res.error.message, '#c0392b'); }
 }
 
-function editLog(btn) {
-  const card = btn.closest('.adhoc-card');
-  // Pre-fill modal with existing card data
-  const typePill = card.querySelector('.adhoc-type-pill');
-  const descEl   = card.querySelector('.adhoc-detail');
-  const nameEl   = card.querySelector('.adhoc-name');
-  const beforeEl = card.querySelectorAll('.change-val')[0];
-  const afterEl  = card.querySelectorAll('.change-val')[1];
-  const remarksEl = card.querySelector('.adhoc-remarks');
+function editLog(id) {
+  var entry = _adhocGet().find(function(e){ return e.id === id; });
+  if (!entry) return;
 
-  if (typePill) {
-    const sel = document.getElementById('log-type');
-    for (let opt of sel.options) { if (opt.value === typePill.textContent.trim()) { sel.value = opt.value; break; } }
-  }
-  // Editing should always allow changing the type freely, regardless of whether this card
-  // was originally created via one of the preset-type buttons.
   var typeGroup = document.getElementById('log-type-group');
   var typePresetLabel = document.getElementById('log-type-preset-label');
+  // Editing should always allow changing the type freely, regardless of whether this log
+  // was originally created via one of the preset-type buttons.
   if (typeGroup) typeGroup.style.display = 'block';
   if (typePresetLabel) typePresetLabel.style.display = 'none';
-  if (nameEl) document.getElementById('log-emp').value = nameEl.textContent;
-  if (descEl) document.getElementById('log-desc').value = descEl.textContent;
-  if (beforeEl) document.getElementById('log-before').value = beforeEl.textContent;
-  if (afterEl)  document.getElementById('log-after').value  = afterEl.textContent;
-  document.getElementById('log-remarks').value = remarksEl ? remarksEl.textContent.replace(/^Remarks:\s*/, '') : '';
+  document.getElementById('log-type').value = entry.type;
+  document.getElementById('log-emp').value = entry.emp;
+  document.getElementById('log-desc').value = entry.desc;
+  document.getElementById('log-before').value = entry.before;
+  document.getElementById('log-after').value = entry.after;
+  document.getElementById('log-date-requested').value = entry.dateRequested || '';
+  document.getElementById('log-remarks').value = entry.remarks || '';
+  var isDisputeEl = document.getElementById('log-is-dispute');
+  if (isDisputeEl) isDisputeEl.checked = !!entry.isDispute;
 
-  // Store reference to card being edited so save replaces it
-  document.getElementById('log-modal')._editCard = card;
+  var grpKey = window.currentWsGroup;
+  var subGroup = document.getElementById('log-subcompany-group');
+  var subSelect = document.getElementById('log-subcompany');
+  if (grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey]) {
+    var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
+    subSelect.innerHTML = '<option value="">All subcompanies</option>'
+      + subs.map(function(k){ return '<option value="' + k + '">' + (clients[k].name||k) + '</option>'; }).join('');
+    subGroup.style.display = 'block';
+    subSelect.value = entry.subKey && subs.indexOf(entry.subKey) >= 0 ? entry.subKey : '';
+    refreshLogCutoffOptions(subSelect.value);
+  } else if (subGroup) {
+    subGroup.style.display = 'none';
+  }
+  var cutoffSelect = document.getElementById('log-cutoff');
+  if (cutoffSelect) cutoffSelect.value = entry.cutoffVal || '';
+
+  // Store which log is being edited so saveLog() updates it in place instead of inserting a
+  // new row -- fieldChanged/effectiveDate (set only via the tailored modals, no input in this
+  // generic form) are carried through unchanged rather than being blanked out by a plain edit.
+  document.getElementById('log-modal')._editId = id;
   document.getElementById('log-modal').style.display = 'flex';
-
-  // Change save button label
   document.querySelector('[onclick="saveLog()"]').textContent = 'Save changes';
 }
-
-// Override saveLog to handle edit mode
-const _origSaveLog = saveLog;
-saveLog = function() {
-  const modal = document.getElementById('log-modal');
-  const editCard = modal._editCard;
-  if (editCard) {
-    // Remove old card, save new one in its place
-    modal._editCard = null;
-    document.querySelector('[onclick="saveLog()"]').textContent = 'Save log';
-    editCard.remove();
-  }
-  _origSaveLog();
-  document.querySelector('[onclick="saveLog()"]').textContent = 'Save log';
-};
 
 
 // ── TAT Logic ─────────────────────────────────────────────────────────────
@@ -7336,7 +7230,10 @@ var LOG_TAILORED_FIELDS = {
   'Holiday Setup': [
     { id: 'holiday', label: 'Holiday Name', placeholder: 'e.g. Company Anniversary', maps: 'emp' },
     { id: 'date', label: 'Date', placeholder: '', type: 'date', maps: 'desc', descPrefix: 'Date' },
-    { id: 'type', label: 'Type', placeholder: 'e.g. Special Non-working / Regular Holiday', maps: 'after' },
+    // Was mapped to 'after' with nothing mapped to 'before' -- a holiday's type isn't a
+    // before/after change, so every Holiday Setup log showed a confusing "— → Special
+    // Non-Working Holiday" block. Plain description field instead.
+    { id: 'type', label: 'Type', placeholder: 'e.g. Special Non-working / Regular Holiday', maps: 'desc', descPrefix: 'Type' },
     { id: 'notes', label: 'Notes (optional)', placeholder: 'Any pay adjustments or exceptions', type: 'textarea', maps: 'desc' },
   ],
   'Profile Update': [
@@ -7379,7 +7276,11 @@ function adHocOpenTailored(type) {
   var defaultClientKey = window.currentWsClient || window._wsClient || '';
   if (grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey]) {
     var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
-    subSelect.innerHTML = subs.map(function(k){ return '<option value="' + k + '">' + (clients[k].name||k) + '</option>'; }).join('');
+    // "All subcompanies" (blank subKey) matters most for things like a company-wide holiday
+    // or shift policy change -- previously you had to pick one specific sub even when the
+    // request genuinely applied to every one of them.
+    subSelect.innerHTML = '<option value="">All subcompanies</option>'
+      + subs.map(function(k){ return '<option value="' + k + '">' + (clients[k].name||k) + '</option>'; }).join('');
     subGroup.style.display = 'block';
     defaultClientKey = subs.indexOf(defaultClientKey) >= 0 ? defaultClientKey : subs[0];
     subSelect.value = defaultClientKey;
@@ -7462,7 +7363,8 @@ function openLogModal(presetType) {
   var defaultClientKey = window.currentWsClient || window._wsClient || '';
   if (grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey]) {
     var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
-    subSelect.innerHTML = subs.map(function(k){ return '<option value="' + k + '">' + (clients[k].name||k) + '</option>'; }).join('');
+    subSelect.innerHTML = '<option value="">All subcompanies</option>'
+      + subs.map(function(k){ return '<option value="' + k + '">' + (clients[k].name||k) + '</option>'; }).join('');
     subGroup.style.display = 'block';
     subSelect.onchange = function(){ refreshLogCutoffOptions(subSelect.value); };
     defaultClientKey = subs.indexOf(defaultClientKey) >= 0 ? defaultClientKey : subs[0];
@@ -7493,139 +7395,179 @@ function closeLogModal() {
 }
 
 
-// ── Ad hoc log grouping by subcompany ───────────────────────────────────────
-// Cards are plain DOM nodes (no backing data array), so grouping means moving
-// nodes into per-subcompany section containers rather than filtering an array.
-function getOrCreateAdhocSection(subKey) {
-  var logsTab = document.getElementById('ws-logs');
-  var listEl = logsTab ? logsTab.querySelector('#adhoc-log-list') : document.getElementById('adhoc-log-list');
-  if (!listEl) return null;
-  if (!subKey) {
-    var flat = listEl.querySelector('#adhoc-cards-flat');
-    if (!flat) { flat = document.createElement('div'); flat.id = 'adhoc-cards-flat'; listEl.insertBefore(flat, listEl.firstChild); }
-    return flat;
-  }
-  var sectionId = 'adhoc-section-' + subKey;
-  var section = listEl.querySelector('#' + sectionId);
-  if (!section) {
-    section = document.createElement('div');
-    section.id = sectionId;
-    section.style.cssText = 'margin-bottom:18px;';
-    var header = document.createElement('div');
-    header.style.cssText = 'font-size:12px;font-weight:700;color:#1a1a2e;margin-bottom:8px;';
-    header.textContent = (clients[subKey] && clients[subKey].name) || subKey;
-    var cardsWrap = document.createElement('div');
-    cardsWrap.id = 'adhoc-cards-' + subKey;
-    cardsWrap.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
-    section.appendChild(header);
-    section.appendChild(cardsWrap);
-    listEl.appendChild(section);
-  }
-  return section.querySelector('#adhoc-cards-' + subKey);
+// ── Ad hoc Logs persistence ──────────────────────────────────────────────────
+// Scoped exactly like POCs (_calGet/_pocGet's pattern) -- one shared list per real group
+// (_calKey() resolves to the group code), or one company's own list otherwise.
+window._adhocStore = window._adhocStore || {};
+function _adhocGet() {
+  var k = _calKey();
+  if (!window._adhocStore[k]) window._adhocStore[k] = [];
+  return window._adhocStore[k];
 }
 
-// Moves any ungrouped cards (loose direct children of #adhoc-log-list, e.g. the initial
-// static sample cards) into their tagged subcompany's section. Safe to call repeatedly.
-function groupAdhocLogsBySubcompany() {
-  var logsTab = document.getElementById('ws-logs');
-  var listEl = logsTab ? logsTab.querySelector('#adhoc-log-list') : document.getElementById('adhoc-log-list');
-  if (!listEl) return;
-  var loose = Array.prototype.slice.call(listEl.querySelectorAll(':scope > .adhoc-card'));
-  loose.forEach(function(card) {
-    var subKey = card.getAttribute('data-subcompany') || '';
-    var container = getOrCreateAdhocSection(subKey);
-    if (container) container.appendChild(card);
+// Loads every persisted ad hoc log into _adhocStore, keyed the same way _calStore/_pocStore
+// are -- must run after loadCompaniesFromSupabase (needs companyId/groupId already populated).
+async function loadAdhocLogsFromSupabase() {
+  var res = await supabaseClient.from('adhoc_logs').select('*');
+  if (res.error) { console.warn('Failed to load ad hoc logs', res.error); return; }
+  var groupIdToCode = {};
+  Object.keys(clientGroups || {}).forEach(function(gk) { if (clientGroups[gk].groupId) groupIdToCode[clientGroups[gk].groupId] = gk; });
+  var companyIdToShortKey = {};
+  Object.keys(clients || {}).forEach(function(ck) { if (clients[ck].companyId) companyIdToShortKey[clients[ck].companyId] = ck; });
+
+  window._adhocStore = {};
+  (res.data || []).forEach(function(row) {
+    var key = row.scope_type === 'group' ? groupIdToCode[row.group_id] : companyIdToShortKey[row.company_id];
+    if (!key) return;
+    if (!window._adhocStore[key]) window._adhocStore[key] = [];
+    window._adhocStore[key].push({
+      id: row.id, subKey: row.sub_short_key || '', type: row.type, emp: row.employee_name,
+      desc: row.description, before: row.before_value, after: row.after_value,
+      dateRequested: row.date_requested || '', cutoffVal: row.cutoff_label || '',
+      isDispute: !!row.is_dispute, remarks: row.remarks || '', fieldChanged: row.field_changed || '',
+      effectiveDate: row.effective_date || '', channels: row.channels || '', status: row.status || 'pending',
+      profilePulled: !!row.profile_pulled, createdAt: row.created_at
+    });
   });
 }
 
-// Builds a real Ad Hoc Log card and inserts it into the right subcompany section — shared
-// by the full log-modal's saveLog() and the lean tailored-task modals, so every entry point
-// produces the exact same tracked card (status, TAT, edit, delete) regardless of which form
-// was used to create it.
-function buildAndInsertAdhocCard(opts) {
-  const type = opts.type;
-  const emp = opts.emp || 'Employee';
-  const desc = opts.desc || '';
-  const before = opts.before || '\u2014';
-  const after = opts.after || '\u2014';
-  const dateRequested = opts.dateRequested || '';
-  const cutoffVal = opts.cutoffVal || '';
-  const subKey = opts.subKey || '';
-  const isDispute = !!opts.isDispute;
-  const remarks = opts.remarks || '';
-  const fieldChanged = opts.fieldChanged || '';
-  const effectiveDate = opts.effectiveDate || '';
-
-  const typeColors = {
+// One card's HTML from a stored entry -- same visual template buildAndInsertAdhocCard used to
+// build directly as a DOM node, now driven by data so a re-render (tab switch, reload) looks
+// identical instead of depending on whatever happened to still be in the DOM.
+function _adhocCardHtml(entry) {
+  var typeColors = {
     'Shift Management':   'background:#DCFCE7;color:#16A34A;',
     'Holiday Setup':      'background:#fff4e6;color:#e67e00;',
     'Profile Update':     'background:#e8f0fe;color:#1679FA;',
     'PYO':                'background:#edfae8;color:#32CE13;',
     'Other':              'background:#F4F4F8;color:#6b6b80;',
   };
+  var dateStr = entry.dateRequested
+    ? new Date(entry.dateRequested + 'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+    : new Date(entry.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  var isDone = entry.status === 'done';
+  var subBadge = entry.subKey ? '<span style="font-size:10px;font-weight:600;background:#F4F4F8;color:#9898a6;padding:2px 8px;border-radius:20px;margin-left:6px;">' + ((clients[entry.subKey]&&clients[entry.subKey].name)||entry.subKey) + '</span>' : '';
+  var cutoffBadge = entry.cutoffVal ? '<span style="font-size:10px;font-weight:600;background:#e8f0fe;color:#1679FA;padding:2px 8px;border-radius:20px;margin-left:6px;">' + entry.cutoffVal + '</span>' : '';
+  var disputeBadge = entry.isDispute ? '<span style="font-size:10px;font-weight:600;background:#fff0f0;color:#c0392b;padding:2px 8px;border-radius:20px;margin-left:6px;"><i class="ti ti-ticket" style="font-size:10px;vertical-align:-1px;"></i> Dispute</span>' : '';
+  var changesHtml = (entry.before || entry.after)
+    ? '<div class="adhoc-changes"><div class="change-block"><div class="change-label">Before</div><div class="change-val">' + (entry.before||'—') + '</div></div><div style="color:#9898a6;align-self:center;font-size:18px;">&#x2192;</div><div class="change-block"><div class="change-label">After</div><div class="change-val" style="color:#32CE13;">' + (entry.after||'—') + '</div></div></div>'
+    : '';
+  var remarksHtml = entry.remarks ? '<div class="adhoc-detail adhoc-remarks" style="margin-top:-4px;"><strong>Remarks:</strong> ' + entry.remarks + '</div>' : '';
+  var channelIcons = { email: 'ti-mail', viber: 'ti-message-circle', chat: 'ti-message' };
+  var channelsHtml = (entry.channels || '').split(',').map(function(c){ return c.trim(); }).filter(Boolean).map(function(c) {
+    return '<div class="channel-tag ' + c + '"><i class="ti ' + (channelIcons[c] || 'ti-message') + '" style="font-size:11px;"></i> ' + (c.charAt(0).toUpperCase() + c.slice(1)) + '</div>';
+  }).join('');
+  return '<div class="adhoc-card" data-log-id="' + entry.id + '" data-subcompany="' + (entry.subKey||'') + '" data-cutoff="' + (entry.cutoffVal||'') + '" data-is-dispute="' + (entry.isDispute?'true':'false') + '" data-field-changed="' + (entry.fieldChanged||'') + '" data-effective-date="' + (entry.effectiveDate||'') + '" data-profile-pulled="' + (entry.profilePulled?'true':'false') + '" style="' + (isDone ? 'opacity:0.65;border-color:#A6EB93;' : '') + '">'
+    + '<div class="adhoc-top"><div style="display:flex;align-items:center;gap:8px;">'
+    + '<div class="adhoc-type-pill" style="' + (typeColors[entry.type] || typeColors['Other']) + '">' + entry.type + '</div>'
+    + '<div class="adhoc-status ' + (isDone?'done':'pending') + '">' + (isDone?'Done':'Pending') + '</div>'
+    + subBadge + cutoffBadge + disputeBadge
+    + '</div><div style="font-size:11px;color:#9898a6;">' + dateStr + '</div></div>'
+    + '<div class="adhoc-name">' + entry.emp + '</div>'
+    + '<div class="adhoc-detail">' + entry.desc + '</div>'
+    + changesHtml + remarksHtml
+    + '<div class="adhoc-footer" style="justify-content:' + (channelsHtml ? 'space-between' : 'flex-end') + ';">'
+    + (channelsHtml ? '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' + channelsHtml + '</div>' : '')
+    + '<div style="display:flex;gap:4px;">'
+    + '<button onclick="toggleAdhocDone(\'' + entry.id + '\')" class="adhoc-action-btn ' + (isDone?'':'done-btn') + '" title="' + (isDone?'Mark as pending':'Mark as done') + '"><i class="ti ti-circle-check" style="font-size:14px;"></i></button>'
+    + '<button onclick="editLog(\'' + entry.id + '\')" class="adhoc-action-btn" title="Edit"><i class="ti ti-edit" style="font-size:13px;"></i></button>'
+    + '<button onclick="removeAdhocLog(\'' + entry.id + '\')" class="adhoc-action-btn" style="color:#c0392b;" title="Delete"><i class="ti ti-trash" style="font-size:13px;"></i></button>'
+    + '</div></div>'
+    + '</div>';
+}
 
-  const now = new Date();
-  const dateStr = dateRequested
-    ? new Date(dateRequested + 'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
-    : now.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+// Rebuilds #adhoc-log-list entirely from _adhocGet() -- replaces the old groupAdhocLogsBySubcompany()/
+// getOrCreateAdhocSection(), which only ever reorganized whatever DOM nodes already happened to
+// exist (fine when cards were pure DOM, not once they're driven by real, reloadable data).
+function renderAdhocLogs() {
+  var logsTab = document.getElementById('ws-logs');
+  var listEl = logsTab ? logsTab.querySelector('#adhoc-log-list') : document.getElementById('adhoc-log-list');
+  if (!listEl) return;
+  var entries = _adhocGet().slice().sort(function(a,b){ return new Date(b.createdAt) - new Date(a.createdAt); });
+  if (!entries.length) { listEl.innerHTML = '<div style="padding:20px;color:#9898a6;font-size:12px;text-align:center;">No ad hoc logs yet.</div>'; return; }
+  var grpKey = window.currentWsGroup;
+  var isGroup = grpKey && clientGroups[grpKey];
+  if (!isGroup) { listEl.innerHTML = entries.map(_adhocCardHtml).join(''); return; }
+  var bySub = {}, ungrouped = [];
+  entries.forEach(function(e) { if (e.subKey) { (bySub[e.subKey] = bySub[e.subKey] || []).push(e); } else { ungrouped.push(e); } });
+  var html = ungrouped.map(_adhocCardHtml).join('');
+  Object.keys(bySub).forEach(function(sk) {
+    html += '<div style="margin-bottom:18px;"><div style="font-size:12px;font-weight:700;color:#1a1a2e;margin-bottom:8px;">' + ((clients[sk]&&clients[sk].name)||sk) + '</div><div style="display:flex;flex-direction:column;gap:10px;">' + bySub[sk].map(_adhocCardHtml).join('') + '</div></div>';
+  });
+  listEl.innerHTML = html;
+}
 
-  const card = document.createElement('div');
-  card.className = 'adhoc-card';
-  if (subKey) card.setAttribute('data-subcompany', subKey);
-  if (cutoffVal.trim()) card.setAttribute('data-cutoff', cutoffVal.trim());
-  if (isDispute) card.setAttribute('data-is-dispute', 'true');
-  if (fieldChanged) card.setAttribute('data-field-changed', fieldChanged);
-  if (effectiveDate) card.setAttribute('data-effective-date', effectiveDate);
-  const subBadge = subKey ? '<span style="font-size:10px;font-weight:600;background:#F4F4F8;color:#9898a6;padding:2px 8px;border-radius:20px;margin-left:6px;">' + ((clients[subKey]&&clients[subKey].name)||subKey) + '</span>' : '';
-  const cutoffBadge = cutoffVal.trim() ? '<span style="font-size:10px;font-weight:600;background:#e8f0fe;color:#1679FA;padding:2px 8px;border-radius:20px;margin-left:6px;">' + cutoffVal.trim() + '</span>' : '';
-  const disputeBadge = isDispute ? '<span style="font-size:10px;font-weight:600;background:#fff0f0;color:#c0392b;padding:2px 8px;border-radius:20px;margin-left:6px;"><i class="ti ti-ticket" style="font-size:10px;vertical-align:-1px;"></i> Dispute</span>' : '';
-  card.innerHTML = '\n    <div class="adhoc-top">\n      <div style="display:flex;align-items:center;gap:8px;">\n        <div class="adhoc-type-pill" style="' + (typeColors[type] || typeColors['Other']) + '">' + (type) + '</div>\n        <div class="adhoc-status pending">Pending</div>\n        ' + subBadge + cutoffBadge + disputeBadge + '\n      </div>\n      <div style="font-size:11px;color:#9898a6;">' + (dateStr) + '</div>\n    </div>\n    <div class="adhoc-name">' + (emp) + '</div>\n    <div class="adhoc-detail">' + (desc) + '</div>\n    ' + ((before !== '\u2014' || after !== '\u2014') ? '\n    <div class="adhoc-changes">\n      <div class="change-block"><div class="change-label">Before</div><div class="change-val">' + (before) + '</div></div>\n      <div style="color:#9898a6;align-self:center;font-size:18px;">&#x2192;</div>\n      <div class="change-block"><div class="change-label">After</div><div class="change-val" style="color:#32CE13;">' + (after) + '</div></div>\n    </div>' : '') + '\n    ' + (remarks ? '<div class="adhoc-detail adhoc-remarks" style="margin-top:-4px;"><strong>Remarks:</strong> ' + (remarks) + '</div>' : '') + '\n    <div class="adhoc-footer">\n    </div>';
+// Persists a new log or an edit (opts.editId) to Supabase, updates _adhocStore, and
+// re-renders -- shared by the full log-modal's saveLog() and the lean tailored-task modals so
+// every entry point produces the exact same tracked, persisted record.
+async function buildAndInsertAdhocCard(opts) {
+  var editId = opts.editId || '';
+  var scope = (typeof _calScope === 'function') ? _calScope() : null;
+  if (!scope) { if (typeof showToast === 'function') showToast('No client selected', '#e67e00'); return; }
 
-  const footer = card.querySelector('.adhoc-footer');
-  if (footer) {
-    // No left-side content left in the footer now that the channel/TAT badges are gone --
-    // space-between (the card's default) would otherwise collapse a single flex child to the
-    // left instead of the right.
-    footer.style.justifyContent = 'flex-end';
-    const actWrap = document.createElement('div');
-    actWrap.style.cssText = 'display:flex;gap:4px;';
-    const doneBtn = document.createElement('button');
-    doneBtn.className = 'adhoc-action-btn done-btn';
-    doneBtn.title = 'Mark as done';
-    doneBtn.innerHTML = '<i class="ti ti-circle-check" style="font-size:14px;"></i>';
-    doneBtn.onclick = function() { toggleAdhocDone(this); };
-    const editBtn = document.createElement('button');
-    editBtn.className = 'adhoc-action-btn';
-    editBtn.title = 'Edit';
-    editBtn.innerHTML = '<i class="ti ti-edit" style="font-size:13px;"></i>';
-    editBtn.onclick = function() { editLog(this); };
-    const delBtn = document.createElement('button');
-    delBtn.className = 'adhoc-action-btn';
-    delBtn.title = 'Delete';
-    delBtn.style.color = '#c0392b';
-    delBtn.innerHTML = '<i class="ti ti-trash" style="font-size:13px;"></i>';
-    delBtn.onclick = function() { this.closest('.adhoc-card').remove(); };
-    actWrap.appendChild(doneBtn);
-    actWrap.appendChild(editBtn);
-    actWrap.appendChild(delBtn);
-    footer.appendChild(actWrap);
+  var row = {
+    scope_type: scope.type, group_id: scope.type === 'group' ? scope.id : null, company_id: scope.type === 'company' ? scope.id : null,
+    sub_short_key: opts.subKey || '', type: opts.type || 'Other', employee_name: opts.emp || 'Employee',
+    description: opts.desc || '', before_value: opts.before || '', after_value: opts.after || '',
+    date_requested: opts.dateRequested || null, cutoff_label: opts.cutoffVal || '', is_dispute: !!opts.isDispute,
+    remarks: opts.remarks || '', field_changed: opts.fieldChanged || '', effective_date: opts.effectiveDate || null,
+    channels: opts.channels || ''
+  };
+  var localEntry = {
+    subKey: row.sub_short_key, type: row.type, emp: row.employee_name, desc: row.description,
+    before: row.before_value, after: row.after_value, dateRequested: row.date_requested || '',
+    cutoffVal: row.cutoff_label, isDispute: row.is_dispute, remarks: row.remarks,
+    fieldChanged: row.field_changed, effectiveDate: row.effective_date || '', channels: row.channels,
+    status: 'pending', profilePulled: false
+  };
+
+  var arr = _adhocGet();
+  if (editId) {
+    var idx = arr.findIndex(function(e){ return e.id === editId; });
+    if (idx >= 0) { localEntry.status = arr[idx].status; localEntry.profilePulled = arr[idx].profilePulled; localEntry.createdAt = arr[idx].createdAt; }
+    var updRes = await supabaseClient.from('adhoc_logs').update(row).eq('id', editId);
+    if (updRes.error) { if (typeof showToast === 'function') showToast('Could not save log: ' + updRes.error.message, '#c0392b'); return; }
+    localEntry.id = editId;
+    if (idx >= 0) arr[idx] = localEntry; else arr.push(localEntry);
+  } else {
+    var insRes = await supabaseClient.from('adhoc_logs').insert(row).select().single();
+    if (insRes.error) { if (typeof showToast === 'function') showToast('Could not save log: ' + insRes.error.message, '#c0392b'); return; }
+    localEntry.id = insRes.data.id;
+    localEntry.createdAt = insRes.data.created_at;
+    arr.push(localEntry);
   }
-  var targetContainer = getOrCreateAdhocSection(subKey);
-  targetContainer.prepend(card);
 
-  const toast = document.createElement('div');
-  toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#1a1a2e;color:#fff;padding:12px 20px;border-radius:14px;font-size:13px;font-family:Rubik,sans-serif;z-index:9999;display:flex;align-items:center;gap:8px;box-shadow:0 4px 20px rgba(0,0,0,0.2);';
-  toast.innerHTML = '<i class="ti ti-circle-check" style="color:#32CE15;font-size:18px;"></i> Task logged successfully!';
-  document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 2500);
+  renderAdhocLogs();
+  // silent: true for saveBulkLog's per-row loop, which shows its own single summary toast
+  // afterward instead of one toast per employee.
+  if (!opts.silent && typeof showToast === 'function') showToast(editId ? 'Log updated' : 'Task logged successfully!');
+}
+
+async function removeAdhocLog(id) {
+  var arr = _adhocGet();
+  var idx = arr.findIndex(function(e){ return e.id === id; });
+  if (idx < 0) return;
+  var removed = arr.splice(idx, 1)[0];
+  renderAdhocLogs();
+  var res = await supabaseClient.from('adhoc_logs').delete().eq('id', id);
+  if (res.error) {
+    console.warn('Could not delete log', res.error);
+    if (typeof showToast === 'function') showToast('Could not delete: ' + res.error.message, '#c0392b');
+    arr.splice(idx, 0, removed); // put it back -- the delete didn't actually happen
+    renderAdhocLogs();
+  }
 }
 
 function saveLog() {
+  var modal = document.getElementById('log-modal');
+  var editId = modal._editId || '';
+  var existing = editId ? _adhocGet().find(function(e){ return e.id === editId; }) : null;
+
   const type = document.getElementById('log-type').value;
   const emp  = document.getElementById('log-emp').value || 'Employee';
   const desc = document.getElementById('log-desc').value || '';
-  const before = document.getElementById('log-before').value || '\u2014';
-  const after  = document.getElementById('log-after').value || '\u2014';
+  const before = document.getElementById('log-before').value || '';
+  const after  = document.getElementById('log-after').value || '';
   const dateRequested = document.getElementById('log-date-requested').value || '';
   const cutoffVal = (document.getElementById('log-cutoff') || {}).value || '';
   const subGroupEl = document.getElementById('log-subcompany-group');
@@ -7633,7 +7575,13 @@ function saveLog() {
   const isDispute = (document.getElementById('log-is-dispute') || {}).checked || false;
   const remarks = (document.getElementById('log-remarks') || {}).value || '';
 
-  buildAndInsertAdhocCard({ type, emp, desc, before, after, dateRequested, cutoffVal, subKey, isDispute, remarks });
+  buildAndInsertAdhocCard({
+    type, emp, desc, before, after, dateRequested, cutoffVal, subKey, isDispute, remarks,
+    fieldChanged: existing ? existing.fieldChanged : '', effectiveDate: existing ? existing.effectiveDate : '',
+    editId: editId
+  });
+  modal._editId = null;
+  document.querySelector('[onclick="saveLog()"]').textContent = 'Save log';
   closeLogModal();
 }
 
@@ -15405,8 +15353,8 @@ function parseSingleLogDate(str) {
 // Increase, everything else into Change in Personal Info. Skips cards already pulled (marked
 // via data-profile-pulled) so re-clicking doesn't duplicate rows.
 function profilePullFromAdhocLogs() {
-  var listEl = document.getElementById('adhoc-log-list');
-  if (!listEl) { if (typeof showToast==='function') showToast('No ad hoc logs found', '#e67e00'); return; }
+  var entries = _adhocGet();
+  if (!entries.length) { if (typeof showToast==='function') showToast('No ad hoc logs found', '#e67e00'); return; }
 
   var attInput = (document.getElementById('prof-att') || {}).value || '';
   var basicInput = (document.getElementById('prof-basic') || {}).value || '';
@@ -15421,39 +15369,35 @@ function profilePullFromAdhocLogs() {
   if (basicRange) periods.push({ start: new Date(basicRange.yr, basicRange.mon, basicRange.startDay), end: new Date(basicRange.yr, basicRange.mon, basicRange.endDay), label: basicInput.trim() });
 
   var ck = window.currentWsClient || window._wsClient || '';
-  var cards = Array.prototype.slice.call(listEl.querySelectorAll('.adhoc-card'));
-  // Filter to this subcompany's cards when the workspace is grouped; otherwise take all
-  var relevant = cards.filter(function(card) {
-    var sub = card.getAttribute('data-subcompany');
-    return !sub || !ck || sub === ck;
+  // Filter to this subcompany's entries when the workspace is grouped; otherwise take all
+  var relevant = entries.filter(function(e) {
+    return !e.subKey || !ck || e.subKey === ck;
   });
 
   if (!window.profileData) window.profileData = {resigned:[], changes:[], salaryIncrease:[]};
   var pulledChanges = 0, pulledSalary = 0, pulledResigned = 0, skippedOutOfPeriod = 0;
+  var justPulledIds = [];
 
-  relevant.forEach(function(card) {
-    if (card.getAttribute('data-profile-pulled') === 'true') return; // already imported
-    var typeEl = card.querySelector('.adhoc-type-pill');
-    var type = typeEl ? typeEl.textContent.trim() : '';
-    if (type !== 'Profile Update') return; // only pull profile-update-tagged logs
+  relevant.forEach(function(e) {
+    if (e.profilePulled) return; // already imported
+    if (e.type !== 'Profile Update') return; // only pull profile-update-tagged logs
 
-    var dateEl = card.querySelector('.adhoc-top > div[style*="color:#9898a6"]');
-    var requestedDate = dateEl ? dateEl.textContent.trim() : '';
+    var requestedDate = e.dateRequested
+      ? new Date(e.dateRequested + 'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+      : (e.createdAt ? new Date(e.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '');
 
-    // effectiveDateAttr is the date the change actually takes effect (set from the tailored
+    // effectiveDate is the date the change actually takes effect (set from the tailored
     // Profile Update modal's own "Effective Date" field) -- distinct from requestedDate (when
     // the log was submitted), which is all older logs had to go on. Prefer it for BOTH period
     // matching and the displayed "Date of Effectivity" whenever it's present.
-    var effectiveDateAttr = card.getAttribute('data-effective-date');
-    var explicitCutoff = card.getAttribute('data-cutoff');
     var periodLabelsSet = periods.map(function(p){ return p.label; });
     var inAnyPeriod, matchDate = null;
-    if (effectiveDateAttr) {
-      matchDate = new Date(effectiveDateAttr + 'T00:00:00');
+    if (e.effectiveDate) {
+      matchDate = new Date(e.effectiveDate + 'T00:00:00');
       inAnyPeriod = periods.some(function(p){ return matchDate >= p.start && matchDate <= p.end; });
-    } else if (explicitCutoff) {
+    } else if (e.cutoffVal) {
       // Explicit tag on the log -- exact match against either entered cut-off field
-      inAnyPeriod = periodLabelsSet.indexOf(explicitCutoff) >= 0;
+      inAnyPeriod = periodLabelsSet.indexOf(e.cutoffVal) >= 0;
     } else {
       // No explicit tag or effective date (older log) -- fall back to matching by the date the
       // log was requested falling within the range
@@ -15466,20 +15410,17 @@ function profilePullFromAdhocLogs() {
     }
     var effectivity = matchDate ? matchDate.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : requestedDate;
 
-    var nameEl = card.querySelector('.adhoc-name');
-    var fullName = nameEl ? nameEl.textContent.split('\u2014')[0].trim() : '';
-    var detailEl = card.querySelector('.adhoc-detail');
-    var remarks = detailEl ? detailEl.textContent.trim() : '';
-    var changeVals = card.querySelectorAll('.adhoc-changes .change-val');
-    var before = changeVals[0] ? changeVals[0].textContent.trim() : '';
-    var after = changeVals[1] ? changeVals[1].textContent.trim() : '';
+    var fullName = (e.emp || '').split('—')[0].trim();
+    var remarks = e.desc || '';
+    var before = e.before || '';
+    var after = e.after || '';
 
     // Field Changed (set from the tailored modal) is the reliable signal for routing when
     // present -- e.g. "Employment Status" changing to "Resigned" was previously falling
     // through to Change in Personal Info because nothing ever checked for resignations at
     // all. Falls back to sniffing before/after text for logs without a Field Changed value
     // (generic "Other Requests" log modal has no such field, only Before/After).
-    var fieldChanged = card.getAttribute('data-field-changed') || '';
+    var fieldChanged = e.fieldChanged || '';
     var isResignation = /resign/i.test(fieldChanged) || /resign/i.test(after) || /resign/i.test(before);
     // Salary-looking values (e.g. "PHP 28,000") go to Salary Increase; broadened to also
     // catch plain integers (e.g. "5000" -> "100000") when Field Changed itself says salary/
@@ -15506,8 +15447,17 @@ function profilePullFromAdhocLogs() {
       });
       pulledChanges++;
     }
-    card.setAttribute('data-profile-pulled', 'true');
+    e.profilePulled = true;
+    justPulledIds.push(e.id);
   });
+
+  // Persist the pulled flag so these don't get re-imported on a future pull or after a
+  // reload -- was only ever a DOM attribute on the (non-persisted) card before.
+  if (justPulledIds.length) {
+    supabaseClient.from('adhoc_logs').update({ profile_pulled: true }).in('id', justPulledIds).then(function(res) {
+      if (res.error) console.warn('Could not persist profile_pulled flag', res.error);
+    });
+  }
 
   var total = pulledChanges + pulledSalary + pulledResigned;
   if (!total) {
