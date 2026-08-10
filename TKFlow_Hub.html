@@ -2485,15 +2485,23 @@ function openGroupWorkspace(grpKey) {
   switchPage('workspace');
   var _ttl = document.getElementById('topbar-title'); if (_ttl) _ttl.textContent = grp ? grp.name : grpKey;
   buildWsSwitcher(subs, subs[0]);
-  openWorkspace(subs[0], true);
+  // Not keepSwitcher=true -- this is a genuinely fresh group open, not a same-group switcher
+  // click (that's switchWsCompany's job), so it must NOT preserve whatever tab was left active
+  // from browsing a completely different client earlier. Passing true here used to leave
+  // openWorkspace's internal switchTab() call activating that stale tab (e.g. Client Profile),
+  // which the block below then only half-corrected -- it reset CSS classes but never the
+  // inline display:block/none styles switchTab() had already set, so the stale tab's content
+  // stayed visibly on screen underneath the "corrected" Overview tab button.
+  openWorkspace(subs[0]);
 
   // Directly activate overview tab and render group overview
   // Do NOT use switchTab (avoids any hook that might override with wrong key)
   var tabEls = document.querySelectorAll('.tab-content[id^="ws-"]');
-  tabEls.forEach(function(el){ el.classList.remove('active'); });
+  tabEls.forEach(function(el){ el.classList.remove('active'); el.style.display = 'none'; });
   var ovEl = document.getElementById('ws-overview');
   if (ovEl) {
     ovEl.classList.add('active');
+    ovEl.style.display = 'block';
     ovEl.innerHTML = '<div style="padding:40px;text-align:center;color:#9898a6;"><i class="ti ti-loader" style="font-size:24px;"></i></div>';
   }
   document.querySelectorAll('.tab-bar .tab').forEach(function(el, idx){
@@ -3353,6 +3361,43 @@ function closeWorkspace() {
     <div style="padding:14px 22px;border-top:1px solid #EBEBEF;display:flex;gap:8px;justify-content:flex-end;position:sticky;bottom:0;background:#fff;border-radius:0 0 16px 16px;">
       <button onclick="closeAddSubcompanyModal()" style="padding:9px 18px;border:1px solid #EBEBEF;border-radius:12px;background:#fff;color:#6b6b80;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Cancel</button>
       <button onclick="saveSubcompany()" style="padding:9px 18px;border:none;border-radius:12px;background:linear-gradient(135deg,#32CE15,#1fa80e);color:#fff;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Add subcompany ✓</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Subcompany modal — the short code stays locked (it's the FK everything else in the
+     app is keyed off of), but name/headcount/payroll type can all change after creation. -->
+<div id="edit-subcompany-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:2000;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:16px;width:440px;max-width:95vw;box-shadow:0 24px 64px rgba(0,0,0,0.25);">
+    <div style="padding:18px 22px 14px;border-bottom:1px solid #EBEBEF;display:flex;align-items:center;justify-content:space-between;">
+      <div style="font-size:15px;font-weight:600;color:#1a1a2e;">Edit Subcompany</div>
+      <div onclick="closeEditSubcompanyModal()" style="width:30px;height:30px;border-radius:12px;border:1px solid #EBEBEF;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9898a6;font-size:16px;"><i class="ti ti-x"></i></div>
+    </div>
+    <div style="padding:20px 22px;">
+      <input type="hidden" id="es-short-key">
+      <div style="margin-bottom:14px;">
+        <div class="field-label">Entity name *</div>
+        <input class="modal-input" type="text" id="es-entity-name" style="width:100%;">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+        <div>
+          <div class="field-label">Headcount</div>
+          <input class="modal-input" type="number" min="0" id="es-headcount" placeholder="e.g. 126" style="width:100%;">
+        </div>
+        <div>
+          <div class="field-label">Payroll type</div>
+          <select class="modal-input" id="es-payroll-type" style="width:100%;">
+            <option value="Semi-monthly">Semi-monthly</option>
+            <option value="Monthly">Monthly</option>
+            <option value="Weekly">Weekly</option>
+          </select>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#9898a6;background:#F8F8FA;padding:8px 12px;border-radius:12px;"><i class="ti ti-info-circle" style="font-size:12px;vertical-align:-2px;"></i> Changing payroll type resets this subcompany's Cut-off Schedule to blank rows matching the new period count — same as changing it from Client Profile.</div>
+    </div>
+    <div style="padding:14px 22px;border-top:1px solid #EBEBEF;display:flex;gap:8px;justify-content:flex-end;">
+      <button onclick="closeEditSubcompanyModal()" style="padding:9px 18px;border:1px solid #EBEBEF;border-radius:12px;background:#fff;color:#6b6b80;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Cancel</button>
+      <button onclick="saveSubcompanyEdit()" style="padding:9px 18px;border:none;border-radius:12px;background:linear-gradient(135deg,#32CE15,#1fa80e);color:#fff;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Save changes</button>
     </div>
   </div>
 </div>
@@ -5586,17 +5631,22 @@ function renderClientAssignments() {
       + '</div>'
       + '</div>'
       + '<div id="' + domId + '" style="display:none;border-top:1px solid #EBEBEF;">'
-      + (subKeys.length > 1 ? (
-          '<div style="padding:10px 14px;background:#FFFCF2;border-bottom:1px solid #EBEBEF;">'
-          + '<div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Subcompanies</div>'
-          + subKeys.filter(function(sk){ return clients[sk] && !clients[sk]._churned; }).map(function(sk) {
-              return '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;">'
-                + '<div style="font-size:12px;color:#1a1a2e;">' + (clients[sk].name || sk) + '</div>'
-                + '<button onclick="event.stopPropagation();churnSubcompany(\'' + gk + '\',\'' + sk + '\')" title="Churn just this subcompany" style="padding:3px 8px;background:#fff;color:#c0392b;border:1px solid #f0b8b3;border-radius:6px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;">Churn this one</button>'
-                + '</div>';
-            }).join('')
-          + '</div>'
-        ) : '')
+      // Shown for every client, not just real multi-entity groups -- Edit is the only way to
+      // change a subcompany's own name/headcount/payroll type post-creation, so a standalone
+      // client needs this row just as much as a group's individual subs do. "Churn this one"
+      // only makes sense with siblings to fall back to, so that button stays group-only.
+      + '<div style="padding:10px 14px;background:#FFFCF2;border-bottom:1px solid #EBEBEF;">'
+      + '<div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">' + (subKeys.length > 1 ? 'Subcompanies' : 'Entity details') + '</div>'
+      + subKeys.filter(function(sk){ return clients[sk] && !clients[sk]._churned; }).map(function(sk) {
+          return '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;gap:8px;">'
+            + '<div style="font-size:12px;color:#1a1a2e;">' + (clients[sk].name || sk) + '</div>'
+            + '<div style="display:flex;gap:6px;flex-shrink:0;">'
+            + '<button onclick="event.stopPropagation();openEditSubcompanyModal(\'' + sk + '\')" title="Edit this subcompany" style="padding:3px 8px;background:#fff;color:#6b6b80;border:1px solid #EBEBEF;border-radius:6px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;">Edit</button>'
+            + (subKeys.length > 1 ? '<button onclick="event.stopPropagation();churnSubcompany(\'' + gk + '\',\'' + sk + '\')" title="Churn just this subcompany" style="padding:3px 8px;background:#fff;color:#c0392b;border:1px solid #f0b8b3;border-radius:6px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;">Churn this one</button>' : '')
+            + '</div>'
+            + '</div>';
+        }).join('')
+      + '</div>'
       + '<div style="display:grid;grid-template-columns:' + cols + ';padding:8px 14px;background:#FAFAFA;border-bottom:1px solid #EBEBEF;">'
       + '<div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;">Team member</div>'
       + '<div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;text-align:center;">Specialist</div>'
@@ -5647,6 +5697,61 @@ function churnClientFromAssignments(groupKey) {
 
 // Churns just ONE subcompany while the rest of the main company stays active — e.g. one
 // entity pulls out of a multi-entity client but the parent company keeps going.
+function openEditSubcompanyModal(sk) {
+  var c = clients[sk];
+  if (!c) return;
+  document.getElementById('es-short-key').value = sk;
+  document.getElementById('es-entity-name').value = c.name || '';
+  document.getElementById('es-headcount').value = (c.hc != null ? c.hc : '');
+  document.getElementById('es-payroll-type').value = c.payrollType || 'Semi-monthly';
+  var modal = document.getElementById('edit-subcompany-modal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeEditSubcompanyModal() {
+  var modal = document.getElementById('edit-subcompany-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+// Short code is deliberately not editable here -- it's the FK (short_key) every other part of
+// the app, and Supabase, is keyed off of. Name/headcount persist directly; a payroll type
+// change is handed off to setPayrollType() instead of duplicated here, since it already knows
+// to reset this sub's Cut-off Schedule to the new type's period count and persists + re-renders
+// on its own.
+function saveSubcompanyEdit() {
+  var sk = document.getElementById('es-short-key').value;
+  var c = clients[sk];
+  if (!c) return;
+  var name = (document.getElementById('es-entity-name').value || '').trim();
+  var headcountRaw = document.getElementById('es-headcount').value;
+  var headcount = headcountRaw === '' ? null : parseInt(headcountRaw, 10);
+  var newPayrollType = document.getElementById('es-payroll-type').value;
+  if (!name) { if (typeof showToast === 'function') showToast('Entity name is required', '#e67e00'); return; }
+
+  var oldPayrollType = c.payrollType || 'Semi-monthly';
+  c.name = name;
+  c.hc = headcount;
+
+  if (c.companyId) {
+    supabaseClient.from('companies').update({ name: name, headcount: headcount }).eq('id', c.companyId).then(function(res) {
+      if (res.error) { console.warn('Could not save subcompany edit for ' + sk, res.error); if (typeof showToast === 'function') showToast('Could not save changes: ' + res.error.message, '#c0392b'); }
+    });
+  }
+
+  closeEditSubcompanyModal();
+  var typeChanged = newPayrollType !== oldPayrollType;
+  if (typeChanged && typeof setPayrollType === 'function') {
+    setPayrollType(sk, newPayrollType); // handles its own re-render, persistence, and toast
+  } else {
+    if (typeof renderClientProfile === 'function' && window.currentWsGroup) renderClientProfile(window.currentWsGroup);
+    else if (typeof renderClientProfile === 'function' && window.currentWsClient) renderClientProfile(window.currentWsClient);
+  }
+  if (typeof renderClientCards === 'function') renderClientCards();
+  if (typeof renderSidebarClients === 'function') renderSidebarClients();
+  if (typeof renderClientAssignments === 'function') renderClientAssignments();
+  if (!typeChanged && typeof showToast === 'function') showToast(name + ' updated');
+}
+
 function churnSubcompany(groupKey, subKey) {
   var grp = clientGroups[groupKey];
   var c = clients[subKey];
@@ -6535,7 +6640,9 @@ function renderClientProfile(key) {
       return '<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid #F4F4F8;">'
         + '<div style="width:36px;height:36px;border-radius:50%;background:#DCFCE7;color:#32CE13;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;">'
         + p.name.split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase() + '</div>'
-        + '<div style="flex:1;"><div style="font-size:13px;font-weight:500;color:#1a1a2e;">' + p.name + '</div>'
+        + '<div style="flex:1;"><div style="font-size:13px;font-weight:500;color:#1a1a2e;">' + p.name
+        + (p.contactType ? ' <span style="font-size:10px;font-weight:600;background:#DCFCE7;color:#1F7A0A;padding:2px 8px;border-radius:20px;margin-left:4px;">' + p.contactType + '</span>' : '')
+        + '</div>'
         + '<div style="font-size:11px;color:#9898a6;margin-top:2px;">' + p.role + '</div>'
         + (p.notes ? '<div style="font-size:11px;color:#9898a6;margin-top:2px;font-style:italic;">' + p.notes + '</div>' : '')
         + '</div>'
@@ -17370,12 +17477,15 @@ function openAuditFromDashboard() {
           </select>
         </div>
         <div><label class="task-field-label">Type</label>
-          <select class="task-input" id="poc-type">
-            <option value="Primary">Primary contact</option>
-            <option value="Secondary">Secondary contact</option>
-            <option value="Billing">Billing contact</option>
-            <option value="Technical">Technical contact</option>
+          <select class="task-input" id="poc-type" onchange="_pocTypeOtherToggle()">
+            <option value="Primary Contact">Primary Contact</option>
+            <option value="Secondary Contact">Secondary Contact</option>
+            <option value="Timekeeping Contact">Timekeeping Contact</option>
+            <option value="Payroll Contact">Payroll Contact</option>
+            <option value="Manager">Manager</option>
+            <option value="Others">Others</option>
           </select>
+          <input class="task-input" type="text" id="poc-type-other" placeholder="Type the contact type" style="display:none;width:100%;margin-top:6px;">
         </div>
       </div>
       <div style="margin-bottom:12px;">
@@ -17574,14 +17684,23 @@ function _populatePocScopeOptions(selectedValue) {
   sel.value = selectedValue || (isRealGroup ? 'group' : (subs[0] || ''));
 }
 
+// Shows/hides the free-text field backing the Type dropdown's "Others" option.
+function _pocTypeOtherToggle() {
+  var sel = document.getElementById('poc-type');
+  var other = document.getElementById('poc-type-other');
+  if (!sel || !other) return;
+  other.style.display = sel.value === 'Others' ? 'block' : 'none';
+}
+
 function openAddPOCModal() {
-  ['poc-name','poc-position','poc-email','poc-phone','poc-notes'].forEach(id => {
+  ['poc-name','poc-position','poc-email','poc-phone','poc-notes','poc-type-other'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
   document.getElementById('poc-edit-id').value = '';
   document.getElementById('poc-phone-channel').value = '';
-  document.getElementById('poc-type').value = 'Primary';
+  document.getElementById('poc-type').value = 'Primary Contact';
+  _pocTypeOtherToggle();
   _populatePocScopeOptions();
   document.getElementById('poc-modal-title').textContent = 'Add point of contact';
   document.getElementById('poc-save-btn').textContent = 'Save POC';
@@ -17600,7 +17719,22 @@ function openEditPOCModal(scope, key, idx) {
   document.getElementById('poc-phone-channel').value = poc.phoneChannel || '';
   document.getElementById('poc-notes').value = poc.notes || '';
   document.getElementById('poc-edit-id').value = poc._id || '';
-  document.getElementById('poc-type').value = 'Primary';
+  // contact_type is a real, independently-stored field (see the contact_type migration), so
+  // this can correctly round-trip on edit -- select it directly if it's one of the presets,
+  // otherwise fall back to "Others" with the actual stored value in the free-text field.
+  var presetTypes = ['Primary Contact', 'Secondary Contact', 'Timekeeping Contact', 'Payroll Contact', 'Manager'];
+  var storedType = poc.contactType || '';
+  if (presetTypes.indexOf(storedType) >= 0) {
+    document.getElementById('poc-type').value = storedType;
+    document.getElementById('poc-type-other').value = '';
+  } else if (storedType) {
+    document.getElementById('poc-type').value = 'Others';
+    document.getElementById('poc-type-other').value = storedType;
+  } else {
+    document.getElementById('poc-type').value = 'Primary Contact';
+    document.getElementById('poc-type-other').value = '';
+  }
+  _pocTypeOtherToggle();
   _populatePocScopeOptions(scope === 'group' ? 'group' : key);
   document.getElementById('poc-modal-title').textContent = 'Edit point of contact';
   document.getElementById('poc-save-btn').textContent = 'Save changes';
@@ -17638,7 +17772,8 @@ async function savePOC() {
   const email       = document.getElementById('poc-email').value.trim();
   const phone       = document.getElementById('poc-phone').value.trim();
   const phoneChannel = document.getElementById('poc-phone-channel').value;
-  const type        = document.getElementById('poc-type').value;
+  const typeSelected = document.getElementById('poc-type').value;
+  const type        = typeSelected === 'Others' ? (document.getElementById('poc-type-other').value.trim() || 'Others') : typeSelected;
   const notes       = document.getElementById('poc-notes').value.trim();
   const scopeVal    = document.getElementById('poc-scope').value;
   const editId      = document.getElementById('poc-edit-id').value;
@@ -17650,7 +17785,7 @@ async function savePOC() {
   var grpKey = window.currentWsGroup;
   var grp = grpKey && clientGroups[grpKey];
   var row = {
-    name: name, role: position || type, phone: phone, phone_channel: phoneChannel,
+    name: name, role: position, phone: phone, phone_channel: phoneChannel, contact_type: type,
     email: email, notes: notes, scope_type: isGroupScope ? 'group' : 'company',
     company_id: isGroupScope ? null : ((clients[scopeVal] || {}).companyId || null),
     group_id: isGroupScope ? ((grp && grp.groupId) || null) : null
@@ -17658,7 +17793,7 @@ async function savePOC() {
   if (isGroupScope && !row.group_id) { showToast('This client has no group to share a POC across', '#e67e00'); return; }
   if (!isGroupScope && !row.company_id) { showToast('Could not resolve that subcompany', '#e67e00'); return; }
 
-  var localPoc = { name: name, role: position || type, phone: phone, phoneChannel: phoneChannel, email: email, notes: notes };
+  var localPoc = { name: name, role: position, phone: phone, phoneChannel: phoneChannel, contactType: type, email: email, notes: notes };
   var newKey = isGroupScope ? _calKey() : scopeVal;
 
   if (editId) {
@@ -21866,7 +22001,8 @@ async function loadPocsFromSupabase() {
   (res.data || []).forEach(function(row) {
     var poc = {
       _id: row.id, name: row.name, role: row.role || '', phone: row.phone || '',
-      phoneChannel: row.phone_channel || '', email: row.email || '', notes: row.notes || ''
+      phoneChannel: row.phone_channel || '', contactType: row.contact_type || '',
+      email: row.email || '', notes: row.notes || ''
     };
     if (row.scope_type === 'group') {
       var gc = groupIdToCode[row.group_id];
