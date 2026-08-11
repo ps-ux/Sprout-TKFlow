@@ -601,7 +601,13 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       return;
     }
     var shortKeyByUid = {};
-    (usersRes.data || []).forEach(function(u) { if (u.short_key) shortKeyByUid[u.id] = u.short_key; });
+    (usersRes.data || []).forEach(function(u) {
+      if (!u.short_key) return;
+      shortKeyByUid[u.id] = u.short_key;
+      // Needed so toggleUserPermission() can write permission changes back to this person's
+      // real users row -- absent for anyone without a Supabase Auth account yet.
+      if (USERS[u.short_key]) USERS[u.short_key].id = u.id;
+    });
 
     Object.keys(USERS).forEach(function(uk) {
       USERS[uk].assignedClients = [];
@@ -1333,7 +1339,10 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
               <div style="font-size:13px;font-weight:600;color:#1a1a2e;">Client profile</div>
               <div style="font-size:11px;color:#9898a6;margin-top:2px;">Full client details, POCs, and cut-off schedule</div>
             </div>
-            <button onclick="openEditProfileModal()" style="padding:7px 14px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:flex;align-items:center;gap:5px;"><i class="ti ti-edit"></i> Edit profile</button>
+            <div style="display:flex;gap:8px;">
+              <button onclick="openChurnModal()" title="Churn / archive this client" style="padding:7px 14px;background:#fff;color:#c0392b;border:1px solid #f0b8b3;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:flex;align-items:center;gap:5px;"><i class="ti ti-archive"></i> Churn</button>
+              <button onclick="openEditProfileModal()" style="padding:7px 14px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:flex;align-items:center;gap:5px;"><i class="ti ti-edit"></i> Edit profile</button>
+            </div>
           </div>
           <div id="ws-profile-content">
             <div style="padding:40px;text-align:center;color:#9898a6;font-size:13px;">
@@ -19414,6 +19423,13 @@ function renderMemberPermissions() {
   container.innerHTML = '<div style="background:var(--bg-card,#fff);border:1px solid var(--border,#EBEBEF);border-radius:16px;overflow:hidden;overflow-x:auto;">' + headerRow + bodyRows + '</div>';
 }
 
+var PERM_FLAG_TO_COLUMN = {
+  canServiceView: 'can_service_view',
+  canManageAccess: 'can_manage_access',
+  canArchive: 'can_archive',
+  canAssign: 'can_assign'
+};
+
 function toggleUserPermission(userKey, flagKey, value) {
   if (USERS[userKey]) {
     USERS[userKey][flagKey] = value;
@@ -19422,6 +19438,23 @@ function toggleUserPermission(userKey, flagKey, value) {
       updateDashboardMetrics();
     }
     showToast(USERS[userKey].name.split(' ')[0] + ' access updated!');
+
+    // Persist to the real users row -- without this, the toggle only ever lived on the
+    // in-memory USERS[] object, so it reverted on the next reload/login and never actually
+    // reached the OTHER person's session (their own currentUser is built straight from their
+    // users row on login, not from this admin's USERS[] object).
+    var dbCol = PERM_FLAG_TO_COLUMN[flagKey];
+    var uid = USERS[userKey].id;
+    if (dbCol && uid) {
+      var patch = {};
+      patch[dbCol] = value;
+      supabaseClient.from('users').update(patch).eq('id', uid).then(function(res) {
+        if (res.error) {
+          console.warn('Could not save permission change', res.error);
+          if (typeof showToast === 'function') showToast('Could not save permission change: ' + res.error.message, '#c0392b');
+        }
+      });
+    }
   }
 }
 
