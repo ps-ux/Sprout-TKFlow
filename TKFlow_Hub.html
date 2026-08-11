@@ -18699,6 +18699,50 @@ function toggleWsClosedDisputes(suffix) {
         <label class="settings-label">Certifications (comma-separated)</label>
         <input class="field-group" type="text" id="nm-certs" placeholder="e.g. PHRi, Sprout Certified Payroll Specialist" style="width:100%;margin-top:4px;">
       </div>
+
+      <div style="height:1px;background:var(--border,#EBEBEF);margin:4px 0;"></div>
+
+      <!-- Login access -- the actual account creation can't happen from the browser (it needs
+           the service-role key, which never touches this machine), so this is a two-step
+           manual + form flow: create the Auth account in the Dashboard first, then this form
+           records their real TKFlow profile against it. -->
+      <div style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:12px;padding:12px 14px;">
+        <div style="font-size:12px;font-weight:600;color:#1a1a2e;margin-bottom:6px;">Login access</div>
+        <div style="font-size:11px;color:#9898a6;line-height:1.6;margin-bottom:10px;">
+          1. Supabase Dashboard → Authentication → Users → Add user (or Invite) with their work email.<br>
+          2. Copy their User UID from that row and paste it below.
+        </div>
+        <label class="settings-label">Supabase Auth User ID *</label>
+        <input class="field-group" type="text" id="nm-auth-id" placeholder="e.g. 3fa85f64-5717-4562-b3fc-2c963f66afa6" style="width:100%;margin-top:4px;">
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <label class="settings-label">Short key</label>
+          <input class="field-group" type="text" id="nm-short-key" placeholder="auto-generated from name" style="width:100%;margin-top:4px;">
+        </div>
+        <div>
+          <label class="settings-label">Account type</label>
+          <select class="field-group" id="nm-role-type" style="width:100%;margin-top:4px;">
+            <option value="member" selected>Member</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label class="settings-label">Reports to</label>
+        <select class="field-group" id="nm-reports-to" style="width:100%;margin-top:4px;"></select>
+      </div>
+      <div>
+        <label class="settings-label" style="display:block;margin-bottom:6px;">Permissions</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;color:#1a1a2e;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="nm-perm-service-view"> Admin page access</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="nm-perm-all-disputes"> See all disputes</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="nm-perm-manage-access"> Manage team access</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="nm-perm-assign"> Assign clients</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="nm-perm-archive"> Archive clients</label>
+        </div>
+      </div>
     </div>
     <div class="log-modal-ftr">
       <button class="settings-btn" onclick="closeAddMemberModal()">Cancel</button>
@@ -18812,9 +18856,19 @@ let newMemberAvTxt   = '#32CE13';
 function openAddMemberModal() {
   // Reset form
   ['nm-name','nm-role','nm-email','nm-phone',
-   'nm-sprout-started','nm-hr-started','nm-certs'].forEach(id => {
+   'nm-sprout-started','nm-hr-started','nm-certs','nm-auth-id','nm-short-key'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
+  var roleTypeEl = document.getElementById('nm-role-type'); if (roleTypeEl) roleTypeEl.value = 'member';
+  ['nm-perm-service-view','nm-perm-all-disputes','nm-perm-manage-access','nm-perm-assign','nm-perm-archive'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.checked = false;
+  });
+  var reportsToEl = document.getElementById('nm-reports-to');
+  if (reportsToEl) {
+    var leadKey = Object.keys(orgStructure).find(function(k){ return orgStructure[k].isLead; });
+    reportsToEl.innerHTML = '<option value="">No one (top of chart)</option>'
+      + Object.keys(USERS).map(function(uk){ return '<option value="' + uk + '"' + (uk === leadKey ? ' selected' : '') + '>' + USERS[uk].name + '</option>'; }).join('');
+  }
   newMemberAvClass = 'av-p'; newMemberAvBg = '#DCFCE7'; newMemberAvTxt = '#32CE13';
   updateNewMemberPreview();
   const m = document.getElementById('add-member-modal');
@@ -18843,21 +18897,68 @@ function updateNewMemberPreview() {
   if (avRole) avRole.textContent = role || 'Role not set';
 }
 
-function saveNewMember() {
-  const name  = document.getElementById('nm-name')?.value.trim();
-  const role  = document.getElementById('nm-role')?.value.trim();
+// Creating the actual login (Supabase Auth account) can't happen from the browser -- that
+// needs the service-role key, which never touches this machine -- so this expects it to
+// already exist (created via the Dashboard) and just records the real TKFlow profile against
+// it. Mirrors the result into USERS/teamProfiles/orgStructure too, so the rest of the app
+// (which reads those in-memory objects directly, not a fresh Supabase query) reflects the new
+// member immediately without a reload.
+async function saveNewMember() {
+  const name   = document.getElementById('nm-name')?.value.trim();
+  const role   = document.getElementById('nm-role')?.value.trim();
+  const authId = document.getElementById('nm-auth-id')?.value.trim();
   if (!name || !role) { alert('Name and role are required'); return; }
+  if (!authId) { alert('Supabase Auth User ID is required — create their login in the Supabase Dashboard first (Authentication → Users → Add user), then paste their User UID here.'); return; }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(authId)) {
+    if (!window.confirm('That doesn\'t look like a Supabase User UID — continue anyway?')) return;
+  }
 
   const get = id => document.getElementById(id)?.value.trim() || '';
   const initials = name.split(' ').filter(Boolean).map(w => w[0]).join('').slice(0,2).toUpperCase();
-  const key = 'member_' + Date.now();
 
-  // Add to teamProfiles
-  teamProfiles[key] = {
+  // Short key defaults to the first name, lowercased -- matches the existing convention
+  // ('zona'/'arianne'/'paula'/'mhae'), de-duplicated if it collides with an existing one.
+  var shortKey = get('nm-short-key').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!shortKey) shortKey = (name.split(' ')[0] || 'member').toLowerCase().replace(/[^a-z0-9]/g, '') || 'member';
+  var baseKey = shortKey, n = 1;
+  while (USERS[shortKey]) { n++; shortKey = baseKey + n; }
+
+  const roleType = document.getElementById('nm-role-type')?.value || 'member';
+  const reportsToKey = document.getElementById('nm-reports-to')?.value || '';
+  const email = get('nm-email');
+  const perms = {
+    canServiceView: !!document.getElementById('nm-perm-service-view')?.checked,
+    canSeeAllDisputes: !!document.getElementById('nm-perm-all-disputes')?.checked,
+    canManageAccess: !!document.getElementById('nm-perm-manage-access')?.checked,
+    canAssign: !!document.getElementById('nm-perm-assign')?.checked,
+    canArchive: !!document.getElementById('nm-perm-archive')?.checked
+  };
+
+  // reports_to is a real FK to another users.id -- resolve the picked USERS[] key to that
+  // real Supabase id via short_key, the same reconciliation loadUserRelationsFromSupabase() uses.
+  var reportsToId = null;
+  if (reportsToKey) {
+    var lookupRes = await supabaseClient.from('users').select('id').eq('short_key', reportsToKey).maybeSingle();
+    if (lookupRes.error) { if (typeof showToast === 'function') showToast('Could not resolve "Reports to": ' + lookupRes.error.message, '#c0392b'); return; }
+    reportsToId = lookupRes.data ? lookupRes.data.id : null;
+  }
+
+  var insRes = await supabaseClient.from('users').insert({
+    id: authId, short_key: shortKey, name: name, initials: initials, email: email,
+    role_type: roleType, role: role, org_role: role, reports_to: reportsToId,
+    can_service_view: perms.canServiceView, can_see_all_disputes: perms.canSeeAllDisputes,
+    can_manage_access: perms.canManageAccess, can_assign: perms.canAssign, can_archive: perms.canArchive
+  });
+  if (insRes.error) {
+    if (typeof showToast === 'function') showToast('Could not save team member: ' + insRes.error.message, '#c0392b');
+    return;
+  }
+
+  teamProfiles[shortKey] = {
     name, initials, role,
     team: 'OTK Team',
-    email:         get('nm-email'),
-    phone:         get('nm-phone'),
+    email: email,
+    phone: get('nm-phone'),
     sproutStarted: get('nm-sprout-started'),
     hrStarted:     get('nm-hr-started'),
     certifications: get('nm-certs').split(',').map(s=>s.trim()).filter(Boolean),
@@ -18870,25 +18971,23 @@ function saveNewMember() {
     avClass: newMemberAvClass
   };
 
-  // Add to USERS
-  if (typeof USERS !== 'undefined') {
-    USERS[key] = {
-      name, initials, role,
-      canSeeAllDisputes: false,
-      canAssign: false,
-      canArchive: false,
-      assignedClients: []
-    };
-  }
+  USERS[shortKey] = {
+    name, initials, email, roleType: roleType, role: role, orgRole: role,
+    reportsTo: reportsToKey || null,
+    canServiceView: perms.canServiceView, canSeeAllDisputes: perms.canSeeAllDisputes,
+    canManageAccess: perms.canManageAccess, canAssign: perms.canAssign, canArchive: perms.canArchive,
+    assignedClients: [], processClients: [], auditClients: []
+  };
 
-  // Add orgStructure entry for new member — reports to whoever is marked lead by default,
-  // and gets ordered after existing siblings (order:99) so it appears last among them.
-  orgStructure[key] = {
+  // Reports to whatever was picked, falling back to whoever is marked lead, and gets ordered
+  // after existing siblings (order:99) so it appears last among them.
+  orgStructure[shortKey] = {
     isLead: false,
-    reportsTo: Object.keys(orgStructure).find(k => orgStructure[k].isLead) || 'zona',
+    reportsTo: reportsToKey || (Object.keys(orgStructure).find(k => orgStructure[k].isLead) || null),
     showInChart: true,
     order: 99
   };
+
   closeAddMemberModal();
   renderTeamMembers();
   renderOrgChart();
