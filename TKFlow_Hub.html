@@ -430,6 +430,14 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
     </form>
   </div>
 </div>
+
+<div id="idle-warning-modal" style="display:none;position:fixed;inset:0;z-index:6500;background:rgba(15,23,42,0.45);align-items:center;justify-content:center;font-family:Rubik,sans-serif;">
+  <div style="width:340px;max-width:90vw;background:#fff;border-radius:20px;padding:28px 26px;text-align:center;">
+    <div style="font-size:15px;font-weight:600;margin-bottom:6px;color:var(--text-primary);">Still there?</div>
+    <div style="font-size:12px;color:var(--text-muted,#9898a6);margin-bottom:18px;">You'll be signed out due to inactivity in <span id="idle-warning-countdown" style="font-weight:600;color:var(--text-primary);">60</span> seconds.</div>
+    <button onclick="dismissIdleWarning()" class="login-btn">Stay signed in</button>
+  </div>
+</div>
 <style>
   .login-input{width:100%;padding:11px 14px;border-radius:12px;border:1.5px solid var(--n-200);font-size:13px;font-family:Rubik,sans-serif;box-sizing:border-box;outline:none;transition:border-color .12s,box-shadow .12s;}
   .login-input:focus{border-color:var(--kk-500);box-shadow:0 0 0 3px rgba(50,206,19,0.15);}
@@ -668,6 +676,7 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       // picks up the actual assigned clients and their uploaded calendars.
       if (typeof renderMiniCal === 'function') renderMiniCal();
       if (typeof filterClientGrid === 'function') filterClientGrid();
+      if (typeof startIdleTimeoutMonitor === 'function') startIdleTimeoutMonitor();
       loginOverlay.style.display = 'none';
       return true;
     } catch (err) {
@@ -710,6 +719,81 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
     console.error('Session check failed', err);
     showLoginForm();
   });
+})();
+
+// Auto-logout after inactivity: warns 60s before actually signing out, so an idle tab doesn't
+// leave payroll/employee data on-screen indefinitely. Only runs once signed in (started from
+// loadCurrentUserFromSession) -- the login screen itself has nothing sensitive to protect.
+(function() {
+  var IDLE_LIMIT_MS = 10 * 60 * 1000;
+  var WARNING_MS = 60 * 1000;
+  var idleTimer = null, countdownTimer = null, active = false, lastReset = 0;
+
+  function clearTimers() {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+  }
+
+  function hideWarning() {
+    var modal = document.getElementById('idle-warning-modal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function doAutoLogout() {
+    clearTimers();
+    hideWarning();
+    active = false;
+    if (typeof supabaseClient !== 'undefined') {
+      supabaseClient.auth.signOut().then(function() { location.reload(); });
+    } else {
+      location.reload();
+    }
+  }
+
+  function showWarning() {
+    var modal = document.getElementById('idle-warning-modal');
+    var countdownEl = document.getElementById('idle-warning-countdown');
+    if (!modal) { doAutoLogout(); return; }
+    var remaining = Math.ceil(WARNING_MS / 1000);
+    if (countdownEl) countdownEl.textContent = remaining;
+    modal.style.display = 'flex';
+    countdownTimer = setInterval(function() {
+      remaining--;
+      if (countdownEl) countdownEl.textContent = Math.max(remaining, 0);
+      if (remaining <= 0) doAutoLogout();
+    }, 1000);
+  }
+
+  window.dismissIdleWarning = function() {
+    if (!active) return;
+    clearTimers();
+    hideWarning();
+    idleTimer = setTimeout(showWarning, IDLE_LIMIT_MS);
+    lastReset = Date.now();
+  };
+
+  // Throttled so every mousemove doesn't churn a clearTimeout/setTimeout pair -- a few seconds
+  // of slop on a 15-minute timer is irrelevant.
+  function onActivity() {
+    if (!active) return;
+    if (Date.now() - lastReset < 5000) return;
+    window.dismissIdleWarning();
+  }
+  ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'].forEach(function(evt) {
+    document.addEventListener(evt, onActivity, { passive: true });
+  });
+
+  window.startIdleTimeoutMonitor = function() {
+    active = true;
+    clearTimers();
+    idleTimer = setTimeout(showWarning, IDLE_LIMIT_MS);
+    lastReset = Date.now();
+  };
+  window.stopIdleTimeoutMonitor = function() {
+    active = false;
+    clearTimers();
+    hideWarning();
+  };
 })();
 </script>
 <svg width="0" height="0" style="position:absolute;">
@@ -3942,6 +4026,7 @@ let currentUser = USERS.zona;
 
 function signOut() {
   appConfirm('Sign out?', 'Sign out of TKFlow?', function() {
+    if (typeof stopIdleTimeoutMonitor === 'function') stopIdleTimeoutMonitor();
     supabaseClient.auth.signOut().then(function(){ location.reload(); });
   }, { okLabel: 'Sign out' });
 }
