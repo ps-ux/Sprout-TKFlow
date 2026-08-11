@@ -592,7 +592,7 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
   // assignment was silently dropped. `users.short_key` exists specifically to map a Supabase
   // Auth account back to its USERS[] key for this reconciliation.
   async function loadUserRelationsFromSupabase() {
-    var usersRes = await supabaseClient.from('users').select('id, short_key').not('short_key', 'is', null);
+    var usersRes = await supabaseClient.from('users').select('id, short_key, can_service_view, can_manage_access, can_archive, can_assign').not('short_key', 'is', null);
     var relsRes = await supabaseClient
       .from('user_company_relations')
       .select('user_id, relation_type, companies(short_key)');
@@ -606,7 +606,16 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       shortKeyByUid[u.id] = u.short_key;
       // Needed so toggleUserPermission() can write permission changes back to this person's
       // real users row -- absent for anyone without a Supabase Auth account yet.
-      if (USERS[u.short_key]) USERS[u.short_key].id = u.id;
+      if (!USERS[u.short_key]) return;
+      USERS[u.short_key].id = u.id;
+      // Without this, the admin's own permissions matrix always showed the hardcoded USERS[]
+      // seed defaults after a reload -- toggleUserPermission()'s write to Supabase could be
+      // working perfectly and this checkbox would still look reverted, since nothing ever
+      // read the real value back in for anyone but the currently logged-in user.
+      USERS[u.short_key].canServiceView = u.can_service_view;
+      USERS[u.short_key].canManageAccess = u.can_manage_access;
+      USERS[u.short_key].canArchive = u.can_archive;
+      USERS[u.short_key].canAssign = u.can_assign;
     });
 
     Object.keys(USERS).forEach(function(uk) {
