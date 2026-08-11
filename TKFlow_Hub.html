@@ -19445,13 +19445,23 @@ function toggleUserPermission(userKey, flagKey, value) {
     // users row on login, not from this admin's USERS[] object).
     var dbCol = PERM_FLAG_TO_COLUMN[flagKey];
     var uid = USERS[userKey].id;
-    if (dbCol && uid) {
+    if (!uid) {
+      console.warn('No Supabase user id for ' + userKey + ' -- permission change is in-memory only for this session', flagKey, value);
+      if (typeof showToast === 'function') showToast(USERS[userKey].name.split(' ')[0] + ' has no linked account yet -- this change will not survive a reload', '#e67e00');
+    } else if (dbCol) {
       var patch = {};
       patch[dbCol] = value;
-      supabaseClient.from('users').update(patch).eq('id', uid).then(function(res) {
+      supabaseClient.from('users').update(patch).eq('id', uid).select().then(function(res) {
         if (res.error) {
           console.warn('Could not save permission change', res.error);
           if (typeof showToast === 'function') showToast('Could not save permission change: ' + res.error.message, '#c0392b');
+          return;
+        }
+        // RLS silently reports success with zero rows affected rather than an error when a
+        // policy blocks the write -- without this check that looked identical to it working.
+        if (!res.data || !res.data.length) {
+          console.warn('Permission change did not persist -- 0 rows affected (RLS?)', patch, uid);
+          if (typeof showToast === 'function') showToast('Permission change did not save -- please tell Zona/engineering', '#c0392b');
         }
       });
     }
