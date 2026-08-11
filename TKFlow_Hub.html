@@ -538,6 +538,10 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       // company_groups row exists for those), so calendar scoping falls back to companyId.
       existingGroup.groupId = g.id;
       existingGroup.name = g.name;
+      // Only overwrite when the DB actually has something saved -- matches the cutoffs guard
+      // above, since every pre-existing row defaults to '{}' and would otherwise wipe out any
+      // in-memory profileMeta set earlier this same session.
+      if (g.profile_meta && Object.keys(g.profile_meta).length) existingGroup.profileMeta = g.profile_meta;
       var subs = (companiesRes.data || []).filter(function(c){ return c.group_id === g.id; });
       existingGroup.subs = subs.map(function(c){ return c.short_key; });
       existingGroup.subNames = {};
@@ -565,6 +569,7 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       clientGroups[c.short_key].name = c.name;
       clientGroups[c.short_key].subs = [c.short_key];
       clientGroups[c.short_key].subNames[c.short_key] = c.name;
+      if (c.profile_meta && Object.keys(c.profile_meta).length) clientGroups[c.short_key].profileMeta = c.profile_meta;
     });
   }
 
@@ -4807,6 +4812,19 @@ async function _saveClientConfirmed() {
       return { name: USERS[a.mk].name, startDate: new Date().toISOString().slice(0, 10), endDate: null };
     })
   };
+
+  // Persist profileMeta right away (same scope rule as _calScope(): real group row when one
+  // exists, else the single company row), so it survives a reload instead of only living in
+  // the clientGroups[key] object just built above.
+  var profileMetaScopeId = newGroupId || companyIdByShortKey[key];
+  if (profileMetaScopeId) {
+    supabaseClient.from(newGroupId ? 'company_groups' : 'companies')
+      .update({ profile_meta: clientGroups[key].profileMeta })
+      .eq('id', profileMetaScopeId)
+      .then(function(res) {
+        if (res.error) console.warn('Could not save profile meta', res.error);
+      });
+  }
 
   // Apply the calendar uploaded during this flow (if any) — parse it into the new client's
   // own calendar store (not wherever the admin happened to be browsing before opening this
@@ -17942,6 +17960,17 @@ function saveProfile() {
     if (handoff) {
       if (!target.obj.profileMeta.handoffLog) target.obj.profileMeta.handoffLog = [];
       target.obj.profileMeta.handoffLog.unshift({ note: handoff, date: new Date().toISOString() });
+    }
+    // Same scope rule as calendars/POCs -- a real company_groups row when this client is part
+    // of a true multi-entity group, else the single companies row.
+    var scope = typeof _calScope === 'function' ? _calScope() : null;
+    if (scope) {
+      supabaseClient.from(scope.type === 'group' ? 'company_groups' : 'companies')
+        .update({ profile_meta: target.obj.profileMeta })
+        .eq('id', scope.id)
+        .then(function(res) {
+          if (res.error) { console.warn('Could not save profile meta', res.error); if (typeof showToast === 'function') showToast('Could not save profile changes: ' + res.error.message, '#c0392b'); }
+        });
     }
   }
 
