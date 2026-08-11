@@ -11337,6 +11337,27 @@ var tkActiveGroupIdx = -1;
 // patches the ORIGINAL files' own bytes to build the final output -- it can't be rebuilt from
 // tkReviewRows data alone.
 
+// Identifies which cutoff a client is currently in, from its own calendar -- the date of the
+// first scheduled event after the Attendance Cutoff/Payout column (whatever that event is
+// actually called for this client, e.g. Attendance Generation for KN, Attendance Variance
+// processing for HDI, New Hires instruction for Nippon -- calPeriods.deadlines is already in
+// column order, so deadlines[0] is always that first event regardless of its label). Returns
+// null when there's no calendar to read, so callers should treat that as "unknown -- allow"
+// rather than "no cutoff", or every un-calendared client would be blocked from ever restoring.
+function tkCurrentCutoffKeyForClient(clientKey) {
+  var grpKey = Object.keys(clientGroups).find(function(gk){ return (clientGroups[gk].subs||[gk]).indexOf(clientKey) >= 0; });
+  var store = grpKey && window._calStore && window._calStore[grpKey];
+  if (!store || !store.calPeriods || !store.calPeriods.length) return null;
+  var now = new Date(), active = null, activeFirstDl = null;
+  store.calPeriods.forEach(function(p) {
+    var firstDl = p.deadlines && p.deadlines[0] && p.deadlines[0].date;
+    if (!firstDl || firstDl > now) return;
+    if (!activeFirstDl || firstDl > activeFirstDl) { active = p; activeFirstDl = firstDl; }
+  });
+  if (!active) return null;
+  return active.payout ? active.payout.toISOString().slice(0, 10) : (active.yr + '-' + active.month + '-' + active.period);
+}
+
 function tkUploadValidationFile(companyId, slot, arrayBuffer) {
   var path = companyId + '/' + slot + '.xlsx';
   return supabaseClient.storage.from('validation-uploads').upload(path, new Blob([arrayBuffer]), { upsert: true }).then(function(res) {
@@ -11378,6 +11399,7 @@ async function tkSaveFullSnapshot(clientKey) {
     company_id: companyId, task_key: 'validation',
     data: { tkReviewRows: reviewRowsSnapshot, tkSummaryEmployees: summaryEmployeesSnapshot },
     att_storage_path: attPath, ac_storage_path: acPath, bio_storage_path: bioPath,
+    cutoff_key: tkCurrentCutoffKeyForClient(clientKey),
     updated_at: new Date().toISOString()
   }, { onConflict: 'company_id,task_key' });
   if (res.error) console.warn('Could not save Validation review state for ' + clientKey, res.error);
@@ -11453,6 +11475,19 @@ async function tkTryRestoreFromSupabase(gi) {
   if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending') return;
 
   var row = res.data;
+
+  // A snapshot from an already-closed cutoff should never auto-restore into a new one --
+  // only enforced when BOTH keys are known (calendar-derived), so clients with no calendar
+  // yet, or rows saved before this field existed (cutoff_key null), keep the old always-
+  // restore behavior rather than being silently blocked with no way to tell why.
+  var liveCutoffKey = tkCurrentCutoffKeyForClient(clientKeyAtStart);
+  if (liveCutoffKey && row.cutoff_key && liveCutoffKey !== row.cutoff_key) {
+    supabaseClient.from('task_review_state').delete().eq('company_id', companyId).eq('task_key', 'validation').then(function(delRes) {
+      if (delRes.error) console.warn('Could not clear stale-cutoff Validation state for ' + clientKeyAtStart, delRes.error);
+    });
+    if (typeof showToast === 'function') showToast('A new cutoff has started for ' + (g.name || clientKeyAtStart) + ' -- starting fresh');
+    return;
+  }
   var attBuf = null, acBuf = null, bioBuf = null;
   try {
     if (row.att_storage_path) attBuf = await tkDownloadValidationFile(row.att_storage_path);
@@ -11517,9 +11552,21 @@ function buildValidationRunner(body) {
 
 // Explicit reset — clears cached files/results for this task and starts a blank run
 function tkResetAll() {
-    appConfirm('Reset Current Attendance Validation', 'This clears all uploaded files and processed results for this workspace.', function() {
+    appConfirm('Reset Current Attendance Validation', 'This clears all uploaded files and processed results for this workspace, including anything saved to the cloud -- selecting a subcompany afterward will not restore what you just cleared.', function() {
+  // Without this, resetting only cleared local state -- the snapshot saved in Supabase for
+  // each subcompany (tkSaveFullSnapshot) was untouched, so simply re-selecting the same
+  // subcompany from the dropdown immediately pulled it right back via
+  // tkTryRestoreFromSupabase, silently undoing the reset the moment it was touched.
+  tkBatchGroups.map(function(g){ return g.clientKey; }).filter(Boolean).forEach(function(ck) {
+    var companyId = clients[ck] && clients[ck].companyId;
+    if (!companyId) return;
+    supabaseClient.from('task_review_state').delete().eq('company_id', companyId).eq('task_key', 'validation').then(function(res) {
+      if (res.error) console.warn('Could not clear saved Validation state for ' + ck, res.error);
+    });
+  });
   Object.keys(taskFiles).forEach(function(k) { if (k.indexOf('tk-') === 0) delete taskFiles[k]; });
   window.tkLegacyFormat = false;
+  tkReviewRows.length = 0;
   var _defaultSubsTk = subOptionsForCurrentGroup();
   var _defaultKeyTk = _defaultSubsTk.length === 1 ? _defaultSubsTk[0] : null;
   tkBatchGroups = [{ name: _defaultKeyTk ? (clients[_defaultKeyTk].name||_defaultKeyTk) : 'Subcompany 1', clientKey: _defaultKeyTk, tkReviewRows: [], tkSummaryEmployees: [], _tkRaw: null, status: 'pending', errorMsg: '' }];
@@ -11572,6 +11619,10 @@ function tkRenderUploadGroups() {
     + '<input type="checkbox" id="tk-legacy-format-toggle" ' + (window.tkLegacyFormat ? 'checked' : '') + ' onchange="window.tkLegacyFormat=this.checked;">'
     + 'Use this client\u2019s older Summary-tab format (Dates of Absences + Sprout Remarks columns) instead of the Validation Details tab'
     + '</label>'
+    + '<label style="display:flex;align-items:center;gap:7px;padding:9px 10px;margin-bottom:12px;border:1px solid var(--border);border-radius:12px;font-size:11px;color:var(--text-secondary);cursor:pointer;">'
+    + '<input type="checkbox" id="tk-detect-late-ut-toggle" ' + (window.tkDetectLateUndertime !== false ? 'checked' : '') + ' onchange="window.tkDetectLateUndertime=this.checked;">'
+    + 'Detect Late / Undertime (uncheck to flag absences only for this client)'
+    + '</label>'
     + '<button class="task-run-btn" id="tk-run-btn" onclick="runValidationBatch()">'
     + '<i class="ti ti-clock-check"></i> Process all</button>';
 }
@@ -11613,7 +11664,8 @@ function renderTKReview() {
     resultDiv.innerHTML = '<div style="padding:32px;text-align:center;color:var(--text-muted);font-size:13px;">'
       + '<i class="ti ti-circle-check" style="font-size:32px;display:block;margin-bottom:8px;color:#A6EB93;"></i>No absences detected.'
       + '<div style="margin-top:12px;"><button onclick="tkReviewRows.push({id:\'\',name:\'\',daysAbsent:1,dates:[],remarks:[],evidence:[],biologs:[],checked:false,allDetailedRows:[],bioByDate:{},appsByDate:[]});renderTKReview();" '
-      + 'style="color:#32CE13;background:none;border:1px dashed #BBF7D0;border-radius:12px;padding:6px 14px;cursor:pointer;font-size:12px;font-family:Rubik,sans-serif;">+ Add row manually</button></div></div>';
+      + 'style="color:#32CE13;background:none;border:1px dashed #BBF7D0;border-radius:12px;padding:6px 14px;cursor:pointer;font-size:12px;font-family:Rubik,sans-serif;">+ Add row manually</button> '
+      + '<button onclick="tkBackToUpload()" style="color:var(--text-secondary);background:none;border:1px solid var(--border);border-radius:12px;padding:6px 14px;cursor:pointer;font-size:12px;font-family:Rubik,sans-serif;">Back to upload</button></div></div>';
     return;
   }
 
@@ -11788,7 +11840,11 @@ function renderTKReview() {
     // direct pass/fail equivalence like the absence check — this is shown as reference
     // context (does the reported total look plausible against how many instances got
     // flagged?) rather than a strict mismatch banner.
-    var fileUTVal = (typeof r.fileUndertimeMins === 'number' && r.fileUndertimeMins > 0) ? r.fileUndertimeMins : null;
+    // fileUndertimeMins comes straight from the Summary tab's own reported total, parsed
+    // independently of the day-by-day scan above -- the "Detect Late/Undertime" checkbox
+    // gates that scan (so lateCount/lateEvs are already 0 when it's off), but this separate
+    // reference figure needs its own explicit check or it kept showing regardless.
+    var fileUTVal = (window.tkDetectLateUndertime !== false && typeof r.fileUndertimeMins === 'number' && r.fileUndertimeMins > 0) ? r.fileUndertimeMins : null;
 
     return '<div style="background:'+cardBg+';border:1.5px solid '+borderCol+';border-radius:16px;overflow:hidden;margin-bottom:10px;">'
       + '<div style="display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--border);background:var(--bg-secondary);">'
@@ -11828,6 +11884,10 @@ function renderTKReview() {
 
   resultDiv.innerHTML = ''
     + summaryPanel
+    + '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0 6px;">'
+    + '<div style="font-size:11px;color:var(--text-muted,#9898a6);"><i class="ti ti-history" style="font-size:12px;vertical-align:-1px;"></i> Showing saved results from the last time this subcompany was processed.</div>'
+    + '<button onclick="tkBackToUpload()" style="flex-shrink:0;margin-left:10px;padding:4px 10px;background:none;border:1px solid var(--border);border-radius:10px;color:var(--text-secondary);font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;">Back to upload</button>'
+    + '</div>'
     + '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0 10px;">'
     + '<div style="font-size:13px;font-weight:600;color:#1a1a2e;">' + confirmed + '/' + total + ' confirmed</div>'
     + '<div style="font-size:11px;color:'+(allDone?'#32CE13':'#9898a6')+';font-weight:'+(allDone?'600':'400')+';">' + (allDone ? '✓ All done' : 'Click ✓ to confirm each employee') + '</div>'
@@ -13108,6 +13168,33 @@ function renderTKBatchList() {
         : '');
 }
 
+// Re-shows the upload form (dropzones + Detect Late/Undertime + legacy-format checkboxes,
+// Process all button) for a already-processed run, without wiping tkBatchGroups/taskFiles the
+// way tkResetAll() does -- that button nukes every subcompany's results just to change one
+// setting and reprocess. Files already picked earlier this session are still in taskFiles
+// (never cleared after a successful process), so re-populate each dropzone's "has-file" look
+// here too -- otherwise they'd appear empty even though clicking Process all would silently
+// reuse them.
+function tkBackToUpload() {
+  var body = document.getElementById('task-modal-body');
+  if (!body) return;
+  body.innerHTML = tkRenderUploadGroups()
+    + '<button onclick="tkResetAll()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:12px;background:none;color:#9898a6;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;margin-bottom:10px;"><i class="ti ti-refresh" style="font-size:12px;"></i> Reset and start over</button>'
+    + '<div id="tk-batch-list"></div>'
+    + '<div id="tk-result" style="display:none;"></div>';
+  tkBatchGroups.forEach(function(g, gi) {
+    ['att', 'ac', 'bio'].forEach(function(kind) {
+      var id = 'tk-' + kind + '-' + gi;
+      var f = taskFiles[id];
+      if (!f) return;
+      var dz = document.getElementById('dz-' + id), fn = document.getElementById('fn-' + id);
+      if (dz) dz.classList.add('has-file');
+      if (fn) fn.textContent = f.name;
+    });
+  });
+  renderTKBatchList();
+}
+
 function tkSwitchGroup(gi) {
   var g = tkBatchGroups[gi];
   if (!g || g.status !== 'done') return;
@@ -13581,7 +13668,10 @@ function runValidation(opts) {
       var empId=normalizeId(clean(row[cID])); if(!empId) continue;
       _tkFullHeadcount++;
       var daysAbsent=parseFloat(clean(row[cAbsent]))||0;
-      var summUTMins = cSummUT>=0 ? (parseFloat(clean(row[cSummUT]))||0) : 0;
+      // Skip the Summary-reported undertime total entirely when Late/Undertime detection is
+      // off -- otherwise an employee with zero absences and only undertime would still get
+      // included below (and rendered as an otherwise-empty card with nothing actually flagged).
+      var summUTMins = (cSummUT>=0 && window.tkDetectLateUndertime !== false) ? (parseFloat(clean(row[cSummUT]))||0) : 0;
       // Include this employee if they have absences OR any Summary-reported undertime/late —
       // otherwise employees with undertime but zero absences never get scanned at all.
       if (daysAbsent<=0 && summUTMins<=0) continue;
@@ -13733,9 +13823,14 @@ function runValidation(opts) {
       var isFullAbsent = isMarkedAbsentInSummary || (bioU === 'NO LOGS');
       var isHalfDayAbsent = !isFullAbsent && !!halfDayResult;
       var isAbsent = isFullAbsent || isHalfDayAbsent;
-      // Late/Undertime are independent — can coexist with absent on same day
-      var isLate      = lateMins > 0;
-      var isUndertime = undertimeMins > 0;
+      // Late/Undertime are independent — can coexist with absent on same day. Gated by the
+      // "Detect Late/Undertime" checkbox (tkRenderUploadGroups) -- some clients only want
+      // absences flagged, so leaving both false here when it's off is enough to suppress
+      // every downstream late/undertime evidence row, badge, and column without needing to
+      // touch each of those render sites individually.
+      var detectLateUT = window.tkDetectLateUndertime !== false;
+      var isLate      = detectLateUT && lateMins > 0;
+      var isUndertime = detectLateUT && undertimeMins > 0;
 
       if (isLate || isUndertime) {
         var ltRemark = buildLateUndertimeReason(shift, biologs, lateMins, undertimeMins, totalHrs);
