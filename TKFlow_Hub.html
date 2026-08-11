@@ -5042,12 +5042,6 @@ function renderDashSchedule() {
     });
   });
 
-  // Static schedule items (standup, EOD)
-  var standup = new Date(now); standup.setHours(9,0,0,0);
-  var eod     = new Date(now); eod.setHours(18,0,0,0);
-  items.push({time:standup, timeStr:'9:00 AM', label:'Team standup', sub:'Daily sync', color:'var(--text-muted)', icon:'ti-users'});
-  items.push({time:eod,     timeStr:'6:00 PM', label:'End of day', sub:'TAT deadline cutoff', color:'#e67e00', icon:'ti-clock'});
-
   // Sort by time
   items.sort(function(a,b){ return a.time - b.time; });
 
@@ -12918,7 +12912,11 @@ function renderTKBatchList() {
           badge = '<span style="font-size:11px;background:var(--kk-100);color:var(--kk-700);padding:2px 9px;border-radius:20px;font-weight:600;"><i class="ti ti-circle-check" style="font-size:10px;"></i> All clear</span>';
         } else if (g.status === 'done') {
           var confirmed = g.tkReviewRows.filter(function(r){return r.checked;}).length;
-          badge = '<span style="font-size:11px;background:var(--tm-50);color:var(--tm-600);padding:2px 9px;border-radius:20px;font-weight:600;">' + confirmed + '/' + g.tkReviewRows.length + ' confirmed</span>';
+          // Was always red/danger-colored (--tm-*) regardless of progress -- a subcompany
+          // sitting at "2/2 confirmed" (fully done) looked identical in color to one still
+          // at "0/2", giving no visual signal that it's actually finished.
+          var allConfirmed = confirmed === g.tkReviewRows.length;
+          badge = '<span style="font-size:11px;background:' + (allConfirmed ? 'var(--kk-100)' : 'var(--tm-50)') + ';color:' + (allConfirmed ? 'var(--kk-700)' : 'var(--tm-600)') + ';padding:2px 9px;border-radius:20px;font-weight:600;">' + confirmed + '/' + g.tkReviewRows.length + ' confirmed</span>';
         } else {
           badge = '<span style="font-size:11px;color:var(--text-muted);">Pending</span>';
         }
@@ -20950,6 +20948,20 @@ async function nextDisputeTicketId(clientKey) {
 }
 
 async function openNewDisputeTicket(clientKey) {
+  // Guards against a double-click (or an accidental second tap before the modal has visually
+  // opened) firing this twice -- each call independently claims a real ticket number and
+  // inserts a real row, so two rapid clicks used to create two distinct blank tickets rather
+  // than one. The lock releases once this call finishes opening its ticket (success or not).
+  if (window._creatingNewDisputeTicket) return;
+  window._creatingNewDisputeTicket = true;
+  try {
+    await _openNewDisputeTicketInner(clientKey);
+  } finally {
+    window._creatingNewDisputeTicket = false;
+  }
+}
+
+async function _openNewDisputeTicketInner(clientKey) {
   clientKey = clientKey || (typeof currentWsClient !== 'undefined' ? currentWsClient : null) || window._wsClient || '';
   var clientObj = clients[clientKey];
   var today = new Date();
@@ -20964,8 +20976,13 @@ async function openNewDisputeTicket(clientKey) {
   var initialTat = 'tat-' + getTATClass(nowEmailTime, 'Open');
   var initialTatLabel = getTATLabel(nowEmailTime, 'Open');
 
+  // A real ticket number is NOT claimed here -- claiming it immediately meant an opened-but-
+  // never-filled-in ticket permanently burned that number (closing without saving skipped it
+  // forever). Instead this gets a local-only placeholder id and _isDraft:true; dtmSaveField()
+  // claims the real number and inserts the row the first time the ticket actually has real
+  // content, so an abandoned draft never consumes a number at all. See dtmSaveField.
   var stub = {
-    id: await nextDisputeTicketId(clientKey),
+    id: '#DRAFT-' + Date.now(), _isDraft: true,
     empNo: '', name: '', manager: '', location: '', shift: '',
     payrollSchedule: clientObj ? (clientObj.meta || '') : '',
     dateSubmitted: todayISO,
@@ -20983,10 +21000,7 @@ async function openNewDisputeTicket(clientKey) {
   };
   allDisputes.unshift(stub);
   openDisputeTicket(stub.id, clientKey);
-  if (typeof showToast === 'function') showToast('New ticket ' + stub.id + ' started \u2014 fill in the details');
-  supabaseClient.from('disputes').insert(Object.assign({ id: stub.id, source: 'manual' }, dtmBuildDisputeRow(stub))).then(function(res) {
-    if (res.error) dtmReportSaveError('Could not save new ticket ' + stub.id, res.error);
-  });
+  if (typeof showToast === 'function') showToast('New ticket started \u2014 fill in the details to save it');
 }
 
 // Converts whatever's stored (ISO "2026-07-19", or older display-format strings like
@@ -21089,7 +21103,9 @@ function openDisputeTicket(id, clientContext) {
   dtmCurrentId = id;
   dtmCurrentClient = clientContext || d.client || null;
 
-  document.getElementById('dtm-id').textContent = d.id;
+  // Draft tickets haven't claimed a real number yet (see dtmSaveField) -- show that plainly
+  // rather than the internal placeholder id, which would look like a broken/garbage number.
+  document.getElementById('dtm-id').textContent = d._isDraft ? 'Draft — not yet saved' : d.id;
 
   var tb = document.getElementById('dtm-tat-badge');
   tb.textContent = d.tatLabel;
@@ -21330,14 +21346,41 @@ function refreshWsDisputesBadgesAndList(key) {
   var elTab = document.getElementById('tab-disputes-badge'); if (elTab) elTab.textContent = liveOpenDisp.length;
 }
 
+// Ticket numbers/rows for a NEW ticket are now only ever claimed/inserted by clicking Save
+// (dtmSaveAll -> _dtmGraduateDraft) -- so closing a still-_isDraft ticket never has anything to
+// delete from Supabase regardless of blank/non-blank; it just discards the in-memory stub.
+// The only thing worth guarding against is silently losing real typed content because someone
+// clicked the X/backdrop instead of Save -- that's the one case this confirms first.
 function closeDisputeTicket() {
+  if (dtmCurrentId) {
+    var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
+    if (d && d._isDraft && !_isDisputeBlank(d)) {
+      appConfirm(
+        'Discard this ticket?',
+        'You’ve entered details but haven’t clicked Save — closing now won’t create a ticket and none of this will be kept.',
+        function() { _reallyCloseDisputeTicket(); },
+        { okLabel: 'Discard', cancelLabel: 'Keep editing' }
+      );
+      return;
+    }
+  }
+  _reallyCloseDisputeTicket();
+}
+
+function _reallyCloseDisputeTicket() {
   if (dtmCurrentId) {
     var idx = allDisputes.findIndex(function(x) { return x.id === dtmCurrentId; });
     if (idx >= 0) {
       var d = allDisputes[idx];
-      var isBlankDraft = !d.name && !d.fullDetails && !d.empNo;
-      if (isBlankDraft) {
+      if (d._isDraft) {
+        allDisputes.splice(idx, 1); // never claimed a number or touched Supabase -- pure discard
+      } else if (_isDisputeBlank(d)) {
+        // An already-saved real ticket that got cleared back to blank before closing -- this
+        // one DOES have a row to clean up (it graduated at some point), unlike a plain draft.
         allDisputes.splice(idx, 1);
+        supabaseClient.from('disputes').delete().eq('id', d.id).then(function(res) {
+          if (res.error) console.warn('Could not delete unsaved draft ticket ' + d.id, res.error);
+        });
       } else if (typeof currentWsClient !== 'undefined' && currentWsClient) {
         refreshWsDisputesBadgesAndList(currentWsClient); // refresh the disputes list/badges without switching tabs
       }
@@ -21367,12 +21410,48 @@ function dtmSwitchTab(tab) {
   if (tab === 'summary') dtmRenderSummary(dtmCurrentClient || 'all');
 }
 
+// Shared with closeDisputeTicket()'s abandoned-draft check -- keeps both in sync on what
+// "actually has real content" means for a dispute ticket.
+function _isDisputeBlank(d) {
+  return !d.name && !d.fullDetails && !d.empNo;
+}
+
+// While a ticket is still a draft, every field edit is held in memory only -- nothing is
+// claimed or persisted until Save is explicitly clicked (see _dtmGraduateDraft, called from
+// dtmSaveAll). This is deliberately simple: no per-keystroke autosave logic to reason about
+// for a not-yet-real ticket, and no way for typing alone to burn a ticket number.
 function dtmSaveField(field, value) {
   if (!dtmCurrentId) return;
   var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
   if (!d) return;
+
   d[field] = value;
+  if (d._isDraft) return;
   dtmScheduleDisputeSave(dtmCurrentId);
+}
+
+// Claims a real ticket number and inserts the row -- the ONE place a draft ticket turns into a
+// real, persisted one. Only called from dtmSaveAll (the explicit Save button), never as a side
+// effect of typing, so nothing is claimed/created unless the user deliberately clicks Save.
+// Returns the new id, or null if the draft is still blank (nothing worth saving yet).
+async function _dtmGraduateDraft(d) {
+  if (_isDisputeBlank(d)) return null;
+  var oldId = d.id;
+  var newId = await nextDisputeTicketId(d.client);
+  d.id = newId;
+  d._isDraft = false;
+  if (dtmCurrentId === oldId) {
+    dtmCurrentId = newId;
+    var idEl = document.getElementById('dtm-id');
+    if (idEl) idEl.textContent = newId;
+  }
+  // Any payroll-instruction lines added while this was still a draft (dtmSyncPiLines skips
+  // them for exactly this reason) only exist in memory until now -- sync them for real under
+  // the newly-claimed id.
+  if (Array.isArray(d.piLines) && d.piLines.some(function(l){ return l.code; })) dtmSyncPiLines(newId);
+  var insRes = await supabaseClient.from('disputes').insert(Object.assign({ id: newId, source: 'manual' }, dtmBuildDisputeRow(d)));
+  if (insRes.error) dtmReportSaveError('Could not save new ticket ' + newId, insRes.error);
+  return newId;
 }
 
 // Fixed list of dispute-detail codes used in the Payroll Instructions table (matches the real KNI tracker)
@@ -21440,9 +21519,24 @@ function dtmRemovePiLine(idx) {
   dtmSyncPiLines(dtmCurrentId);
 }
 
-function dtmSaveAll() {
+// The explicit "Save" button -- the only place a draft ticket's number gets claimed and its
+// row gets inserted (see _dtmGraduateDraft). Always closes via _reallyCloseDisputeTicket()
+// directly, not the guarded closeDisputeTicket() wrapper -- clicking Save is itself the
+// deliberate confirmation, so there's nothing left to double-check before closing.
+async function dtmSaveAll() {
+  var d = dtmCurrentId ? allDisputes.find(function(x) { return x.id === dtmCurrentId; }) : null;
+  if (d && d._isDraft) {
+    var newId = await _dtmGraduateDraft(d);
+    if (newId == null) {
+      if (typeof showToast === 'function') showToast('Nothing entered — ticket not saved', '#e67e00');
+    } else if (typeof showToast === 'function') {
+      showToast('Ticket ' + newId + ' saved');
+    }
+    _reallyCloseDisputeTicket();
+    return;
+  }
   if (typeof showToast === 'function') showToast('Ticket saved');
-  closeDisputeTicket();
+  _reallyCloseDisputeTicket();
 }
 
 function dtmUpdateStatus(newStatus) {
@@ -21642,7 +21736,11 @@ function dtmSyncPiLines(id) {
   _dtmPiSaveTimers[id] = setTimeout(function() {
     delete _dtmPiSaveTimers[id];
     var d = allDisputes.find(function(x) { return x.id === id; });
-    if (!d) return;
+    // A still-draft ticket has no disputes row yet (see dtmSaveField) -- inserting into
+    // dispute_payroll_instructions with a dispute_id that doesn't exist would fail its FK
+    // constraint. Whatever lines are in d.piLines already are re-synced once the ticket
+    // actually graduates (dtmSaveField calls this again with the real id at that point).
+    if (!d || d._isDraft) return;
     supabaseClient.from('dispute_payroll_instructions').delete().eq('dispute_id', id).then(function(delRes) {
       if (delRes.error) { dtmReportSaveError('Could not sync payroll-instruction lines for ' + id, delRes.error); return; }
       var lines = (d.piLines || []).filter(function(l) { return l.code; });
