@@ -2262,7 +2262,7 @@ function renderGroupOverview(grpKey) {
   // semi-monthly math — this banner previously never got updated to use it, so it could
   // show a different, wrong period than Client Profile / Payroll Instructions / etc.
   var realPeriodsForBanner = getRealCalendarPeriods();
-  var realIdxForBanner = realPeriodsForBanner.length ? findCurrentCalendarPeriodIdx(realPeriodsForBanner) : -1;
+  var realIdxForBanner = realPeriodsForBanner.length ? findCurrentCutoffStartedIdx(realPeriodsForBanner) : -1;
   var realCurrentForBanner = realIdxForBanner >= 0 ? realPeriodsForBanner[realIdxForBanner] : null;
 
   var subPeriods = subs.map(function(sk) {
@@ -8701,7 +8701,18 @@ function findCurrentCalendarPeriodIdx(periods) {
     var r = parseAttCov(p.attCov, p.yr);
     return r && now >= r.start && now <= r.end;
   });
-  return idx >= 0 ? idx : periods.length - 1;
+  if (idx >= 0) return idx;
+  // No period's attendance window contains today exactly (e.g. a gap in the calendar) --
+  // fall back to the most recently COMPLETED period, never a future one. Falling back to
+  // periods.length-1 (the LAST, i.e. most future, period) was the actual bug: every consumer
+  // of this function could end up suggesting a payout whose attendance coverage hadn't even
+  // happened yet.
+  var fallbackIdx = -1;
+  for (var i = 0; i < periods.length; i++) {
+    var r = parseAttCov(periods[i].attCov, periods[i].yr);
+    if (r && r.end <= now) fallbackIdx = i;
+  }
+  return fallbackIdx >= 0 ? fallbackIdx : 0;
 }
 
 // Used ONLY by Variance Analysis: its whole purpose is validating the attendance of the
@@ -8723,6 +8734,25 @@ function findMostRecentlyCompletedPeriodIdx(periods) {
     if (r && r.end <= now) idx = i;
   }
   return idx >= 0 ? idx : periods.length - 1;
+}
+
+// A new cutoff doesn't actually start the moment today's date rolls into its raw attendance-
+// coverage range -- it starts once ITS OWN first scheduled milestone (the deadline right after
+// the Attendance Cutoff/Payout column -- e.g. Attendance Generation for KN, Attendance Variance
+// processing for HDI, New Hires instruction for Nippon, whatever that step is actually called
+// for this client) has actually begun. Until then, we're still in the PREVIOUS cutoff, even
+// though the next one's attendance-coverage date range has technically already begun on the
+// calendar. Returns -1 if no period's first deadline has started yet (e.g. before the very
+// first cutoff in an uploaded calendar).
+function findCurrentCutoffStartedIdx(periods) {
+  var now = new Date();
+  var idx = -1, idxFirstDl = null;
+  periods.forEach(function(p, i) {
+    var firstDl = p.deadlines && p.deadlines[0] && p.deadlines[0].date;
+    if (!firstDl || firstDl > now) return;
+    if (!idxFirstDl || firstDl > idxFirstDl) { idx = i; idxFirstDl = firstDl; }
+  });
+  return idx;
 }
 
 function generateCutoffOptions(clientKey) {
@@ -8935,7 +8965,7 @@ function checkCutoffRollover(key) {
     // in one step, rather than requiring a separate confirmation per skipped period — if
     // several periods have quietly gone by, this surfaces exactly how many and lets you
     // catch up in one action instead of clicking through each one individually.
-    var targetIdx = findCurrentCalendarPeriodIdx(realPeriods);
+    var targetIdx = findCurrentCutoffStartedIdx(realPeriods);
     if (targetIdx <= currentIdx) return; // nothing further to catch up to
     var targetPeriod = realPeriods[targetIdx];
     var periodsBehind = targetIdx - currentIdx;
@@ -9879,20 +9909,10 @@ function buildPayrollInstructionsRunner(body) {
   var calPeriodsSorted = (calStore && calStore.calPeriods && calStore.calPeriods.length)
     ? calStore.calPeriods.slice().sort(function(a,b){ return (a.yr-b.yr)||(a.month-b.month)||(a.period-b.period); })
     : [];
-  var piCurrentIdx = -1;
-  if (calPeriodsSorted.length) {
-    var _now = new Date();
-    function _parseAttCovPI(attCov, yr) {
-      var m = (attCov || '').match(/(\d{1,2})\/(\d{1,2})\s*[-\u2013\u2014]\s*(\d{1,2})\/(\d{1,2})/);
-      if (!m) return null;
-      return { start: new Date(yr, +m[1]-1, +m[2]), end: new Date(yr, +m[3]-1, +m[4]) };
-    }
-    piCurrentIdx = calPeriodsSorted.findIndex(function(p) {
-      var r = _parseAttCovPI(p.attCov, p.yr);
-      return r && _now >= r.start && _now <= r.end;
-    });
-    if (piCurrentIdx === -1) piCurrentIdx = calPeriodsSorted.length - 1;
-  }
+  // Payroll Instructions references whichever payout's attendance cutoff has just completed
+  // (same reasoning as Variance Analysis, not "containing today" -- a payout whose attendance
+  // window hasn't finished yet has nothing final to report on).
+  var piCurrentIdx = calPeriodsSorted.length ? findMostRecentlyCompletedPeriodIdx(calPeriodsSorted) : -1;
   window._piCalPeriods = calPeriodsSorted; // read by piApplyPeriod()
 
   var periodPickerHtml = calPeriodsSorted.length
@@ -10402,6 +10422,11 @@ function buildVarCard(co, index, showRemove, gi) {
     var _idx = findMostRecentlyCompletedPeriodIdx(_periods) + (index - 1);
     var _p = _periods[_idx];
     if (_p && _p.payout) _varPayoutVal = _p.payout.toLocaleDateString('en-US', {month:'long', day:'numeric', year:'numeric'});
+    // The output file name references the payout one period earlier than the one shown here --
+    // Variance reviews the most recently completed attendance cutoff, but by established
+    // convention the output file is named after the PREVIOUS payout run's cycle.
+    var _pEarlier = _periods[_idx - 1];
+    if (_pEarlier && _pEarlier.payout) co._filenamePayout = _pEarlier.payout.toLocaleDateString('en-US', {month:'long', day:'numeric'});
   }
   return '<div class="var-cutoff-card" id="var-co-' + id + '" style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:14px;margin-bottom:10px;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
@@ -11103,7 +11128,7 @@ function varDownload(coId) {
     + '</styleSheet>';
 
   function doDownload(arrayBuf) {
-    var fname = (varActiveSubShortName() + '_Attendance Variance Analysis_' + co._payout).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx';
+    var fname = (varActiveSubShortName() + '_Attendance Variance Analysis_' + (co._filenamePayout || co._payout)).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx';
     var blob = new Blob([arrayBuf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
@@ -12903,7 +12928,7 @@ function tkDownloadOutput() {
     var _tkPayoutForName = '';
     var _tkPeriods = getRealCalendarPeriods();
     if (_tkPeriods.length) {
-      var _tkP = _tkPeriods[findCurrentCalendarPeriodIdx(_tkPeriods)];
+      var _tkP = _tkPeriods[findCurrentCutoffStartedIdx(_tkPeriods)];
       if (_tkP && _tkP.payout) _tkPayoutForName = _tkP.payout.toLocaleDateString('en-US', {month:'long', day:'numeric'});
     }
     var filename = ((subName || clientKey) + '_Current Attendance' + (_tkPayoutForName ? '_' + _tkPayoutForName : '')).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx';
@@ -14103,7 +14128,7 @@ function buildNewHiresRunner(body) {
   (function() {
     var periods = getRealCalendarPeriods();
     if (!periods.length) return;
-    var idx = findCurrentCalendarPeriodIdx(periods);
+    var idx = findCurrentCutoffStartedIdx(periods);
     var p = periods[idx];
     if (!p) return;
     var ckForOffset = window.currentWsClient || window._wsClient || '';
@@ -15656,7 +15681,7 @@ function buildProfileRunner(body) {
   (function() {
     var periods = getRealCalendarPeriods();
     if (!periods.length) return;
-    var p = periods[findCurrentCalendarPeriodIdx(periods)];
+    var p = periods[findCurrentCutoffStartedIdx(periods)];
     if (p && p.payout) _profPayoutVal = p.payout.toLocaleDateString('en-US', {month:'long', day:'numeric', year:'numeric'});
   })();
 
@@ -15847,7 +15872,7 @@ function profCutoffOptionsHtml(fieldType) {
   var periods = getRealCalendarPeriods();
   var selectedIdx = -1;
   if (periods.length) {
-    var currentIdx = findCurrentCalendarPeriodIdx(periods);
+    var currentIdx = findCurrentCutoffStartedIdx(periods);
     if (fieldType === 'basic') {
       var offset = (clients[ck] && clients[ck].basicPayOffset) || 0;
       selectedIdx = currentIdx + offset;
@@ -16089,6 +16114,15 @@ function profileDownloadXLSX() {
 
 // ── TASK 4: Dispute Summary ─────────────────────────────────────────────────
 function dsApplicableCutoffKey(clientObj) {
+  // Prefer the real uploaded TK Calendar's own currently-started cutoff over the static
+  // clientObj.cutoff seed field -- that field is set once at client creation and nothing ever
+  // advances it, so relying on it alone drifts further from reality every cutoff that passes.
+  var realPeriods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
+  if (realPeriods.length) {
+    var idx = findCurrentCutoffStartedIdx(realPeriods);
+    var p = idx >= 0 ? realPeriods[idx] : null;
+    if (p) return p.monthName + ' ' + (p.period === 1 ? '1st' : '2nd');
+  }
   if (!clientObj || !clientObj.cutoff) return null;
   // e.g. "2nd Payout · May 16–31" -> "May 2nd" (matches allDisputes[].cutoff format)
   var m = clientObj.cutoff.match(/(\d+)(st|nd|rd|th)\s*Payout\s*\u00b7\s*([A-Za-z]+)/);
@@ -22973,6 +23007,13 @@ function _parseTKCalWb(wb, fileName) {
           colTimes[ci] = {h: hh, m: mm};
         }
         var cleaned = s.replace(/(\d{1,2})(?::(\d{2}))?\s*[AP]M/gi, '').replace(/\s+/g, ' ').trim();
+        // A purely numeric value here is never a real header label -- it means this "extra"
+        // scanned row (this loop deliberately looks 2 rows past the header row too, in case a
+        // multi-row-merged header pushed the real label text down) turned out to actually be a
+        // DATA row, and raw:true made its date cell show up as an unconverted Excel serial
+        // number (e.g. "46035") instead of a real label. Reject it so a real column header (or
+        // the DLABELS/'Step N' fallback) wins instead of a garbage number.
+        if (/^\d+(\.\d+)?$/.test(cleaned)) return null;
         return cleaned || null;
       }
       var maxCi = 0;
@@ -23015,9 +23056,15 @@ function _parseTKCalWb(wb, fileName) {
       }
     }
 
-    // Collect deadline dates — time comes from column header label (e.g. "1 PM", "6 PM")
+    // Collect deadline dates — time comes from column header label (e.g. "1 PM", "6 PM").
+    // Starts at cPayout+2, not cPayout+1 -- some calendars (e.g. HDI's) format the Payout
+    // column's paired weekday-display cell (cPayout+1) as a duplicate of the payout date's
+    // own raw serial value rather than literal weekday text, so starting the scan one column
+    // too early was picking up the payout date itself as "deadlines[0]" instead of the real
+    // first task after it -- which, being the same date as (or later than) the payout, made a
+    // just-started cutoff look like it hadn't started yet.
     var deadlines=[], dli=0;
-    for (var ci2=cPayout+1; ci2<row.length; ci2++) {
+    for (var ci2=cPayout+2; ci2<row.length; ci2++) {
       var dd = _xlsDate(row[ci2]);
       if (dd) {
         var label = colHeaderLabels[ci2] || DLABELS[dli] || ('Step '+(dli+1));
