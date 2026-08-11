@@ -13395,7 +13395,7 @@ function runValidation(opts) {
     return h12 + ':' + (m < 10 ? '0' : '') + m + ' ' + ap;
   }
   // Returns null (not a half day) or {half, reason} for review
-  function detectHalfDay(shiftStr, biologsStr) {
+  function detectHalfDay(shiftStr, biologsStr, totalHrs, undertimeMins) {
     var shift = parseShiftRange(shiftStr);
     if (!shift) return null; // no defined shift window to compare against
 
@@ -13404,11 +13404,20 @@ function runValidation(opts) {
     var shiftDur = ((shift.end - shift.start) % 1440 + 1440) % 1440;
     if (shiftDur === 0) shiftDur = 1440;
     var midpointRel = shiftDur / 2;
-    var shiftHrs = shiftDur / 60;
 
     var bio = parseBiologRange(biologsStr);
     if (!bio) {
       return { half: 'full-missing', reason: 'No logs against a defined shift window (' + shiftStr.trim() + ')' };
+    }
+
+    // The Attendance Report already tags this date's shift with an approved Half Day Leave --
+    // the shift string's own time range is just the remaining WORKING half, truncated to that,
+    // not the employee's full regular shift. Comparing logged time against ITS midpoint
+    // misreports a plain late arrival on the working half as "morning half not covered" --
+    // flag it plainly as the leave it already is instead of running the coverage math on a
+    // window that was never meant to represent a full day.
+    if (/half\s*day/i.test(shiftStr)) {
+      return { half: 'leave', reason: 'Approved Half Day Leave on file for this date' };
     }
 
     // Arrival: nearest occurrence relative to shift start (can be negative = early).
@@ -13418,25 +13427,51 @@ function runValidation(opts) {
     var bioEndRel = ((bio.end - shift.start) % 1440 + 1440) % 1440;
     if (bioEndRel < bioStartRel) bioEndRel += 1440;
 
+    // Most PH companies run a standard 8-hr workday + 1-hr lunch = 9 required hours/day. When
+    // someone logs well past their printed shift's own end time (here, over an hour), that
+    // shift string is acting as a nominal/reference window rather than a real hard boundary --
+    // comparing logged time against ITS coverage ratio is meaningless (can even read "100%+
+    // covered" on a day they actually fell short, since logs simply extend past the window).
+    // Falls back to comparing total hours against the standard 9-hr day instead, applied
+    // generally (any client/company), not scoped to one -- this is a general PH labor-standard
+    // check, not a one-off client quirk.
+    //
+    // Only when the file itself has NO real Undertime figure for this day -- when it does,
+    // that's already the file's own authoritative say on this exact shortfall, and this check
+    // would otherwise double-flag the same gap as both Undertime AND Half Day Absent.
+    var REQUIRED_HRS_FALLBACK = 9;
+    var overrunPastShiftEnd = bioEndRel - shiftDur;
+    var fileHasRealUndertime = undertimeMins > 0;
+    if (!fileHasRealUndertime && overrunPastShiftEnd > 60 && totalHrs > 0 && totalHrs < REQUIRED_HRS_FALLBACK - 1) {
+      return { half: 'short-total', reason: 'short of the required work hours' };
+    }
+
     var coveredStart = Math.max(bioStartRel, 0);
     var coveredEnd   = Math.min(bioEndRel, shiftDur);
     var coveredMin   = Math.max(0, coveredEnd - coveredStart);
     var coverageRatio = coveredMin / shiftDur;
 
-    var missedMorning   = bioStartRel >= midpointRel;
-    var missedAfternoon = bioEndRel   <= midpointRel;
+    // 30-min buffer on both sides of the exact midpoint -- an OUT log landing just past
+    // midpoint (e.g. 55 min) was previously missed entirely (needed to be AT/before it), even
+    // though leaving barely past the halfway point on a 9-hr shift is still a real half-day
+    // concern, not ordinary lateness.
+    var HALF_DAY_MIDPOINT_BUFFER_MIN = 30;
+    var missedMorning   = bioStartRel >= (midpointRel - HALF_DAY_MIDPOINT_BUFFER_MIN);
+    var missedAfternoon = bioEndRel   <= (midpointRel + HALF_DAY_MIDPOINT_BUFFER_MIN);
     var midpointClock = fmtClock(shift.start + midpointRel);
 
-    if (missedMorning)   return { half: 'morning',   reason: 'Logged in at/after shift midpoint (' + midpointClock + ') \u2014 morning half not covered' };
-    if (missedAfternoon) return { half: 'afternoon', reason: 'Logged out at/before shift midpoint (' + midpointClock + ') \u2014 afternoon half not covered' };
-    if (coverageRatio < 0.6) {
+    if (missedMorning)   return { half: 'morning',   reason: 'Logged in at/near shift midpoint (' + midpointClock + ') \u2014 morning half not covered' };
+    if (missedAfternoon) return { half: 'afternoon', reason: 'Logged out at/near shift midpoint (' + midpointClock + ') \u2014 afternoon half not covered' };
+    // Raised from 60% -- a case covering just barely over 60% of the shift (e.g. 60.2%) was
+    // still a real half-day concern (e.g. leaving well before the shift's actual end), not a
+    // near-full day.
+    if (coverageRatio < 0.7) {
       return { half: 'partial', reason: 'Logs overlap shift midpoint but cover only ' + Math.round(coverageRatio*100) + '% of the shift' };
     }
-    // Shift window itself is unusually short (a half-day-length shift) — even full
-    // attendance against it is worth flagging for review.
-    if (shiftHrs <= 6) {
-      return { half: 'short-shift', reason: 'Shift window is only ' + shiftHrs.toFixed(1) + ' hrs (half-day-length shift) \u2014 review even though fully covered' };
-    }
+    // A shift window that's genuinely short by design (a half-day-length shift) and is fully
+    // covered is not itself a half-day absence -- flagging it for review just because the
+    // shift is short produced false Half Day Absent + "No Pending Application" tags on days
+    // the employee actually worked their whole (short) shift.
     return null;
   }
 
@@ -13669,7 +13704,11 @@ function runValidation(opts) {
       }
       for (var ai2=1; ai2<acRows.length; ai2++) {
         var ar = acRows[ai2].map(clean);
-        var aId = ar[acCols.empId]; if (!aId) continue;
+        // Every other employee-ID read in this function goes through normalizeId() (strips a
+        // stray leading apostrophe/whitespace Excel often adds to ID columns) -- this one
+        // didn't, so a formatting mismatch here silently broke the appsByEmp[_curKey] lookup
+        // below, making every absence show "No Pending Application" even when a real one existed.
+        var aId = normalizeId(ar[acCols.empId]); if (!aId) continue;
         var fromObj = parseDate(ar[acCols.dateFrom]);
         var toObj   = parseDate(ar[acCols.dateTo]) || fromObj;
         if (!appsByEmp[aId]) appsByEmp[aId] = [];
@@ -13859,7 +13898,7 @@ function runValidation(opts) {
       // half-day absence if they only cover the afternoon and missed the whole morning.
       var halfDayResult = null;
       if (!isSameTime && bioU !== 'NO LOGS') {
-        halfDayResult = detectHalfDay(shift, biologs, totalHrs);
+        halfDayResult = detectHalfDay(shift, biologs, totalHrs, undertimeMins);
       }
 
       var isFullAbsent = isMarkedAbsentInSummary || (bioU === 'NO LOGS');
