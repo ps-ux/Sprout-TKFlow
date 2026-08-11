@@ -5618,6 +5618,11 @@ function renderMemberMetrics() {
 function renderClientAssignments() {
   var container = document.getElementById('assignments-list');
   if (!container) return;
+  // canServiceView only unlocks the Admin section for viewing (all-client metrics, team
+  // capacity) -- it does NOT imply canAssign, so someone with just Service overview could
+  // otherwise freely tick these checkboxes and reassign clients despite Assign clients being
+  // off. The checkboxes/Save button below are disabled entirely in that case.
+  var canEditAssignments = !!currentUser.canAssign;
   var groupKeys = Object.keys(clientGroups).filter(function(gk) {
     var subs = clientGroups[gk].subs || [gk];
     return subs.some(function(sk){ return clients[sk] && !clients[sk]._churned; });
@@ -5650,8 +5655,8 @@ function renderClientAssignments() {
       return '<div class="assign-row" data-user-key="' + uk + '" style="display:grid;grid-template-columns:' + cols + ';padding:10px 14px;border-bottom:1px solid #EBEBEF;align-items:center;">'
         + '<div class="assign-member"><div class="cap-av" style="width:26px;height:26px;font-size:9px;background:#F4F4F8;color:#6b6b80;">' + u.initials + '</div>'
         + '<div style="font-size:12px;color:#1a1a2e;">' + u.name + '</div>' + adminBadge + '</div>'
-        + '<div style="text-align:center;"><input type="checkbox" class="check-box" ' + (isSpec?'checked':'') + '></div>'
-        + (AUDITOR_ROLE_ENABLED ? '<div style="text-align:center;"><input type="checkbox" class="check-box" ' + (isAud?'checked':'') + '></div>' : '')
+        + '<div style="text-align:center;"><input type="checkbox" class="check-box" ' + (isSpec?'checked':'') + (canEditAssignments?'':' disabled style="cursor:not-allowed;opacity:0.5;"') + '></div>'
+        + (AUDITOR_ROLE_ENABLED ? '<div style="text-align:center;"><input type="checkbox" class="check-box" ' + (isAud?'checked':'') + (canEditAssignments?'':' disabled style="cursor:not-allowed;opacity:0.5;"') + '></div>' : '')
         + '</div>';
     }).join('');
 
@@ -5665,8 +5670,8 @@ function renderClientAssignments() {
       + '</div>'
       + '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">'
       + '<button onclick="event.stopPropagation();renameClientGroup(\'' + gk + '\')" title="Rename this client" style="padding:6px 10px;background:#fff;color:#6b6b80;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:flex;align-items:center;gap:5px;"><i class="ti ti-pencil" style="font-size:13px;"></i> Rename</button>'
-      + '<button onclick="event.stopPropagation();churnClientFromAssignments(\'' + gk + '\')" title="Churn / archive this client" style="padding:6px 10px;background:#fff;color:#c0392b;border:1px solid #f0b8b3;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:flex;align-items:center;gap:5px;"><i class="ti ti-archive" style="font-size:13px;"></i> Churn</button>'
-      + '<button onclick="event.stopPropagation();saveClientAssignment(\'' + gk + '\')" style="padding:6px 14px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Save changes</button>'
+      + (currentUser.canArchive ? '<button onclick="event.stopPropagation();churnClientFromAssignments(\'' + gk + '\')" title="Churn / archive this client" style="padding:6px 10px;background:#fff;color:#c0392b;border:1px solid #f0b8b3;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:flex;align-items:center;gap:5px;"><i class="ti ti-archive" style="font-size:13px;"></i> Churn</button>' : '')
+      + (canEditAssignments ? '<button onclick="event.stopPropagation();saveClientAssignment(\'' + gk + '\')" style="padding:6px 14px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Save changes</button>' : '')
       + '</div>'
       + '</div>'
       + '<div id="' + domId + '" style="display:none;border-top:1px solid #EBEBEF;">'
@@ -5681,7 +5686,7 @@ function renderClientAssignments() {
             + '<div style="font-size:12px;color:#1a1a2e;">' + (clients[sk].name || sk) + '</div>'
             + '<div style="display:flex;gap:6px;flex-shrink:0;">'
             + '<button onclick="event.stopPropagation();openEditSubcompanyModal(\'' + sk + '\')" title="Edit this subcompany" style="padding:3px 8px;background:#fff;color:#6b6b80;border:1px solid #EBEBEF;border-radius:6px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;">Edit</button>'
-            + (subKeys.length > 1 ? '<button onclick="event.stopPropagation();churnSubcompany(\'' + gk + '\',\'' + sk + '\')" title="Churn just this subcompany" style="padding:3px 8px;background:#fff;color:#c0392b;border:1px solid #f0b8b3;border-radius:6px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;">Churn this one</button>' : '')
+            + (subKeys.length > 1 && currentUser.canArchive ? '<button onclick="event.stopPropagation();churnSubcompany(\'' + gk + '\',\'' + sk + '\')" title="Churn just this subcompany" style="padding:3px 8px;background:#fff;color:#c0392b;border:1px solid #f0b8b3;border-radius:6px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;">Churn this one</button>' : '')
             + '</div>'
             + '</div>';
         }).join('')
@@ -5713,6 +5718,7 @@ function _persistCompanyStatus(shortKeys, status) {
 // needing to navigate into that client's own workspace first. Archives every subcompany in
 // the group individually, matching how the rest of the app tracks clients at the sub level.
 function churnClientFromAssignments(groupKey) {
+  if (!currentUser.canArchive) { if (typeof showToast === 'function') showToast('You do not have permission to archive clients', '#c0392b'); return; }
   var grp = clientGroups[groupKey];
   if (!grp) return;
   var subs = (grp.subs || [groupKey]).filter(function(sk){ return clients[sk] && !clients[sk]._churned; });
@@ -5792,6 +5798,7 @@ function saveSubcompanyEdit() {
 }
 
 function churnSubcompany(groupKey, subKey) {
+  if (!currentUser.canArchive) { if (typeof showToast === 'function') showToast('You do not have permission to archive clients', '#c0392b'); return; }
   var grp = clientGroups[groupKey];
   var c = clients[subKey];
   if (!grp || !c) return;
@@ -6014,6 +6021,7 @@ function filterClientAssignments(q) {
 // the previous assignment (rather than only adding), so passing a client off entirely — e.g.
 // removing yourself and giving it to someone else — is a single Save, not a two-step process.
 async function saveClientAssignment(groupKey) {
+  if (!currentUser.canAssign) { if (typeof showToast === 'function') showToast('You do not have permission to assign clients', '#c0392b'); return; }
   var grp = clientGroups[groupKey];
   if (!grp) return;
   var subKeys = grp.subs || [groupKey];
