@@ -9715,8 +9715,7 @@ function buildVarianceRunner(body) {
 
   body.innerHTML = varRenderGroups()
     + '<button onclick="varResetAll()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:12px;background:none;color:#9898a6;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;margin-bottom:10px;"><i class="ti ti-refresh" style="font-size:12px;"></i> Reset and start over</button>'
-    + '<div id="var-batch-list"></div>'
-    + '<div id="var-result" style="display:none;"></div>';
+    + '<div id="var-batch-list"></div>';
   renderVarBatchList();
   if (hasExistingResults && sameWorkspace && varActiveGroupIdx >= 0) {
     varSwitchGroup(varActiveGroupIdx); // redisplay last-viewed subcompany's results (uses cached files, no reprocessing needed)
@@ -9737,8 +9736,7 @@ function varResetAll() {
   if (body) {
     body.innerHTML = varRenderGroups()
       + '<button onclick="varResetAll()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:12px;background:none;color:#9898a6;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;margin-bottom:10px;"><i class="ti ti-refresh" style="font-size:12px;"></i> Reset and start over</button>'
-      + '<div id="var-batch-list"></div>'
-      + '<div id="var-result" style="display:none;"></div>';
+      + '<div id="var-batch-list"></div>';
   }
   var ck = window.currentWsClient || window._wsClient || '';
   if (window._taskBodyCache) window._taskBodyCache['variance_' + ck] = null;
@@ -10671,9 +10669,15 @@ function runVariance(opts) {
   });
 
   Promise.all(promises).then(function(results) {
-    var resultDiv = document.getElementById('var-result');
-    resultDiv.style.display = 'block';
-    resultDiv.innerHTML = '';
+    // var-result only exists now when a subcompany's row is actually expanded in the
+    // accordion -- during silent/batch processing (runVarianceBatch, opts.onDone set) nothing
+    // is expanded yet, so this must not assume the div exists the way it used to when it was
+    // a permanent placeholder always present in the DOM.
+    var resultDiv = opts.onDone ? null : document.getElementById('var-result');
+    if (resultDiv) {
+      resultDiv.style.display = 'block';
+      resultDiv.innerHTML = '';
+    }
     window.varResults = {};
 
     results.forEach(function(res, cutoffIdx) {
@@ -10837,6 +10841,9 @@ function runVariance(opts) {
       co._finalized = false;
       co._attData = attData;
 
+      // Always call this, even with no live var-result to draw into -- it computes and stores
+      // co._withVar/_adds/_deds/_nc/_total (what the batch-list badge and Disputes tab both
+      // read) before its own internal check skips the DOM-card-building part.
       varRenderResultCard(co, cutoffIdx, attData);
       varSaveCutoffSnapshot((varBatchGroups[varActiveGroupIdx] || {}).clientKey, co);
     });
@@ -10964,15 +10971,33 @@ function renderVarBatchList() {
           badge = '<span style="font-size:11px;color:var(--text-muted);">Pending</span>';
         }
         var canOpen = g.status === 'done';
-        return '<div onclick="' + (canOpen ? 'varSwitchGroup(' + gi + ')' : '') + '" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid ' + (isActive?'var(--kk-500)':'var(--border)') + ';border-radius:12px;margin-bottom:6px;cursor:' + (canOpen?'pointer':'default') + ';background:' + (isActive?'var(--kk-50)':'var(--bg-card,#fff)') + ';">'
+        // Accordion, not a separate results area below everything -- expanding a subcompany
+        // renders its results inline right here, under its own row, and collapses whichever
+        // other one was open (only varActiveGroupIdx can ever be expanded at once).
+        var rowHtml = '<div onclick="' + (canOpen ? 'varToggleGroupInline(' + gi + ')' : '') + '" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid ' + (isActive?'var(--kk-500)':'var(--border)') + ';border-radius:12px;margin-bottom:6px;cursor:' + (canOpen?'pointer':'default') + ';background:' + (isActive?'var(--kk-50)':'var(--bg-card,#fff)') + ';">'
           + '<span style="font-size:12px;font-weight:600;color:var(--text-primary);">' + name + '</span>'
           + '<span style="margin-left:auto;">' + badge + '</span>'
-          + (canOpen ? '<i class="ti ti-chevron-right" style="font-size:13px;color:var(--text-muted);"></i>' : '')
+          + (canOpen ? '<i class="ti ti-chevron-' + (isActive?'down':'right') + '" style="font-size:13px;color:var(--text-muted);"></i>' : '')
           + '</div>';
+        return rowHtml + (isActive ? '<div id="var-result" style="display:block;margin:-2px 0 14px;"></div>' : '');
       }).join('')
     + (varBatchGroups.some(function(g){return g.status==='done';})
         ? '<button onclick="varDownloadAllGroups()" class="dl-btn" style="margin-top:8px;"><i class="ti ti-download"></i> Download all processed subcompanies</button>'
         : '');
+}
+
+// Row click handler for the accordion -- clicking the already-open subcompany collapses it;
+// clicking any other one hands off to varSwitchGroup, which (via renderVarBatchList) renders
+// that subcompany's results inline under its own row, implicitly closing whatever was open.
+function varToggleGroupInline(gi) {
+  var g = varBatchGroups[gi];
+  if (!g || g.status !== 'done') return;
+  if (gi === varActiveGroupIdx) {
+    varActiveGroupIdx = -1;
+    renderVarBatchList();
+    return;
+  }
+  varSwitchGroup(gi);
 }
 
 function varSwitchGroup(gi) {
@@ -11542,8 +11567,7 @@ function buildValidationRunner(body) {
 
   body.innerHTML = tkRenderUploadGroups()
     + '<button onclick="tkResetAll()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:12px;background:none;color:#9898a6;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;margin-bottom:10px;"><i class="ti ti-refresh" style="font-size:12px;"></i> Reset and start over</button>'
-    + '<div id="tk-batch-list"></div>'
-    + '<div id="tk-result" style="display:none;"></div>';
+    + '<div id="tk-batch-list"></div>';
   renderTKBatchList();
   if (hasExistingResultsTk && sameWorkspaceTk && tkActiveGroupIdx >= 0) {
     tkSwitchGroup(tkActiveGroupIdx); // redisplay last-viewed subcompany's results (uses cached data, no reprocessing needed)
@@ -11576,8 +11600,7 @@ function tkResetAll() {
   if (body) {
     body.innerHTML = tkRenderUploadGroups()
       + '<button onclick="tkResetAll()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:12px;background:none;color:#9898a6;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;margin-bottom:10px;"><i class="ti ti-refresh" style="font-size:12px;"></i> Reset and start over</button>'
-      + '<div id="tk-batch-list"></div>'
-      + '<div id="tk-result" style="display:none;"></div>';
+      + '<div id="tk-batch-list"></div>';
   }
   var ck = window.currentWsClient || window._wsClient || '';
   if (window._taskBodyCache) window._taskBodyCache['validation_' + ck] = null;
@@ -13157,11 +13180,16 @@ function renderTKBatchList() {
           badge = '<span style="font-size:11px;color:var(--text-muted);">Pending</span>';
         }
         var canOpen = g.status === 'done';
-        return '<div onclick="' + (canOpen ? 'tkSwitchGroup(' + gi + ')' : '') + '" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid ' + (isActive?'var(--kk-500)':'var(--border)') + ';border-radius:12px;margin-bottom:6px;cursor:' + (canOpen?'pointer':'default') + ';background:' + (isActive?'var(--kk-50)':'var(--bg-card,#fff)') + ';">'
+        // Accordion, not a separate results area below everything -- expanding a subcompany
+        // renders its review inline right here, under its own row, and collapses whichever
+        // other one was open (only tkActiveGroupIdx can ever be expanded at once), so getting
+        // to the next subcompany never means scrolling back up to a list further up the page.
+        var rowHtml = '<div onclick="' + (canOpen ? 'tkToggleGroupInline(' + gi + ')' : '') + '" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid ' + (isActive?'var(--kk-500)':'var(--border)') + ';border-radius:12px;margin-bottom:6px;cursor:' + (canOpen?'pointer':'default') + ';background:' + (isActive?'var(--kk-50)':'var(--bg-card,#fff)') + ';">'
           + '<span style="font-size:12px;font-weight:600;color:var(--text-primary);">' + name + '</span>'
           + '<span style="margin-left:auto;">' + badge + '</span>'
-          + (canOpen ? '<i class="ti ti-chevron-right" style="font-size:13px;color:var(--text-muted);"></i>' : '')
+          + (canOpen ? '<i class="ti ti-chevron-' + (isActive?'down':'right') + '" style="font-size:13px;color:var(--text-muted);"></i>' : '')
           + '</div>';
+        return rowHtml + (isActive ? '<div id="tk-result" style="display:block;margin:-2px 0 14px;"></div>' : '');
       }).join('')
     + (tkBatchGroups.some(function(g){return g.status==='done';})
         ? '<button onclick="tkDownloadAllGroups()" class="dl-btn" style="margin-top:8px;"><i class="ti ti-download"></i> Download all processed subcompanies</button>'
@@ -13180,8 +13208,7 @@ function tkBackToUpload() {
   if (!body) return;
   body.innerHTML = tkRenderUploadGroups()
     + '<button onclick="tkResetAll()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:12px;background:none;color:#9898a6;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;margin-bottom:10px;"><i class="ti ti-refresh" style="font-size:12px;"></i> Reset and start over</button>'
-    + '<div id="tk-batch-list"></div>'
-    + '<div id="tk-result" style="display:none;"></div>';
+    + '<div id="tk-batch-list"></div>';
   tkBatchGroups.forEach(function(g, gi) {
     ['att', 'ac', 'bio'].forEach(function(kind) {
       var id = 'tk-' + kind + '-' + gi;
@@ -13193,6 +13220,21 @@ function tkBackToUpload() {
     });
   });
   renderTKBatchList();
+}
+
+// Row click handler for the accordion -- clicking the already-open subcompany collapses it;
+// clicking any other one hands off to tkSwitchGroup, which (via renderTKBatchList) will render
+// that subcompany's review inline under its own row and implicitly close whatever was open
+// before, since only one row's tk-result placeholder ever exists at a time.
+function tkToggleGroupInline(gi) {
+  var g = tkBatchGroups[gi];
+  if (!g || g.status !== 'done') return;
+  if (gi === tkActiveGroupIdx) {
+    tkActiveGroupIdx = -1;
+    renderTKBatchList();
+    return;
+  }
+  tkSwitchGroup(gi);
 }
 
 function tkSwitchGroup(gi) {
@@ -16134,7 +16176,6 @@ function buildDisputeSummaryRunner(body) {
     + '</div>'
     + '<button class="task-run-btn green" id="ds-run-btn" onclick="runDisputeSummaryBatch()"><i class="ti ti-file-description"></i> Run</button>'
     + '<div id="ds-batch-list"></div>'
-    + '<div id="ds-result" style="display:none;"></div>'
     + '<button onclick="dsResetAll()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:12px;background:none;color:#9898a6;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;margin-top:14px;"><i class="ti ti-refresh" style="font-size:12px;"></i> Reset and start over</button>';
 }
 
@@ -16195,15 +16236,33 @@ function renderDsBatchList() {
           : (g.finalized
               ? '<span style="font-size:11px;background:var(--kk-100);color:var(--kk-700);padding:2px 9px;border-radius:20px;font-weight:600;">Finalized \u2014 ' + g.included.length + ' ticket' + (g.included.length>1?'s':'') + '</span>'
               : '<span style="font-size:11px;background:var(--tm-50);color:var(--tm-600);padding:2px 9px;border-radius:20px;font-weight:600;">' + g.included.length + ' ticket' + (g.included.length>1?'s':'') + '</span>');
-        return '<div onclick="dsSwitchGroup(' + gi + ')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid ' + (isActive?'var(--kk-500)':'var(--border)') + ';border-radius:12px;margin-bottom:6px;cursor:pointer;background:' + (isActive?'var(--kk-50)':'var(--bg-card,#fff)') + ';">'
+        // Accordion, not a separate results area below everything -- expanding a subcompany
+        // renders its results inline right here, under its own row, and collapses whichever
+        // other one was open (only dsActiveGroupIdx can ever be expanded at once).
+        var rowHtml = '<div onclick="dsToggleGroupInline(' + gi + ')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid ' + (isActive?'var(--kk-500)':'var(--border)') + ';border-radius:12px;margin-bottom:6px;cursor:pointer;background:' + (isActive?'var(--kk-50)':'var(--bg-card,#fff)') + ';">'
           + '<span style="font-size:12px;font-weight:600;color:var(--text-primary);">' + g.name + '</span>'
           + '<span style="margin-left:auto;">' + badge + '</span>'
-          + '<i class="ti ti-chevron-right" style="font-size:13px;color:var(--text-muted);"></i>'
+          + '<i class="ti ti-chevron-' + (isActive?'down':'right') + '" style="font-size:13px;color:var(--text-muted);"></i>'
           + '</div>';
+        return rowHtml + (isActive ? '<div id="ds-result" style="display:block;margin:-2px 0 14px;"></div>' : '');
       }).join('')
     + (dsBatchGroups.some(function(g){ return g.status==='done' && g.finalized; })
         ? '<button onclick="dsGenerateAll()" class="dl-btn" style="margin-top:8px;"><i class="ti ti-download"></i> Generate all finalized subcompanies</button>'
         : '');
+}
+
+// Row click handler for the accordion -- clicking the already-open subcompany collapses it;
+// clicking any other one hands off to dsSwitchGroup, which (via renderDsBatchList) renders
+// that subcompany's results inline under its own row, implicitly closing whatever was open.
+function dsToggleGroupInline(gi) {
+  var g = dsBatchGroups[gi];
+  if (!g || g.status !== 'done') return;
+  if (gi === dsActiveGroupIdx) {
+    dsActiveGroupIdx = -1;
+    renderDsBatchList();
+    return;
+  }
+  dsSwitchGroup(gi);
 }
 
 function dsSwitchGroup(gi) {
