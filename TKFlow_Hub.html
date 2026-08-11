@@ -592,7 +592,7 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
   // assignment was silently dropped. `users.short_key` exists specifically to map a Supabase
   // Auth account back to its USERS[] key for this reconciliation.
   async function loadUserRelationsFromSupabase() {
-    var usersRes = await supabaseClient.from('users').select('id, short_key, can_service_view, can_manage_access, can_archive, can_assign').not('short_key', 'is', null);
+    var usersRes = await supabaseClient.from('users').select('id, short_key, name, role, email, initials, phone, sprout_started, hr_started, certifications, can_service_view, can_manage_access, can_archive, can_assign').not('short_key', 'is', null);
     var relsRes = await supabaseClient
       .from('user_company_relations')
       .select('user_id, relation_type, companies(short_key)');
@@ -616,6 +616,24 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       USERS[u.short_key].canManageAccess = u.can_manage_access;
       USERS[u.short_key].canArchive = u.can_archive;
       USERS[u.short_key].canAssign = u.can_assign;
+
+      // Same reasoning: saveMemberProfile()'s edits (Team page) now persist to these columns,
+      // so read them back in too -- otherwise the Team page always showed the hardcoded
+      // teamProfiles[] seed after a reload regardless of what was actually saved. Only
+      // overwrite a field when the DB actually has something in it, so a person who's never
+      // had their profile edited keeps their richer hardcoded seed values instead of being
+      // blanked out by empty-string/empty-array defaults.
+      if (typeof teamProfiles !== 'undefined' && teamProfiles[u.short_key]) {
+        var tp = teamProfiles[u.short_key];
+        if (u.name) tp.name = u.name;
+        if (u.role) tp.role = u.role;
+        if (u.email) tp.email = u.email;
+        if (u.phone) tp.phone = u.phone;
+        if (u.sprout_started) tp.sproutStarted = u.sprout_started;
+        if (u.hr_started) tp.hrStarted = u.hr_started;
+        if (u.certifications && u.certifications.length) tp.certifications = u.certifications;
+        tp.initials = tp.name.split(' ').filter(Boolean).map(function(w){ return w[0]; }).join('').slice(0,2).toUpperCase();
+      }
     });
 
     Object.keys(USERS).forEach(function(uk) {
@@ -8117,10 +8135,39 @@ function saveMemberProfile() {
   m.hrStarted      = get('mp-hr-started');
   m.certifications = get('mp-certs').split(',').map(s=>s.trim()).filter(Boolean);
   m.initials       = m.name.split(' ').filter(Boolean).map(w=>w[0]).join('').slice(0,2).toUpperCase();
-  if (typeof USERS !== 'undefined' && USERS[currentMemberKey]) USERS[currentMemberKey].name = m.name;
+  var u = (typeof USERS !== 'undefined') ? USERS[currentMemberKey] : null;
+  if (u) {
+    u.name = m.name;
+    u.role = m.role;
+    u.email = m.email;
+    u.initials = m.initials;
+  }
   closeMemberModal();
   renderTeamMembers();
   showToast(m.name + ' profile saved!');
+
+  // Persist -- without this, every field above reverted to the hardcoded teamProfiles[] seed
+  // on the next reload since nothing ever wrote it back to Supabase.
+  var uid = u && u.id;
+  if (!uid) {
+    console.warn('No Supabase user id for ' + currentMemberKey + ' -- profile edit is in-memory only for this session');
+    return;
+  }
+  supabaseClient.from('users').update({
+    name: m.name, role: m.role, email: m.email, initials: m.initials,
+    phone: m.phone, sprout_started: m.sproutStarted, hr_started: m.hrStarted,
+    certifications: m.certifications
+  }).eq('id', uid).select().then(function(res) {
+    if (res.error) {
+      console.warn('Could not save member profile', res.error);
+      if (typeof showToast === 'function') showToast('Profile change did not save: ' + res.error.message, '#c0392b');
+      return;
+    }
+    if (!res.data || !res.data.length) {
+      console.warn('Member profile did not persist -- 0 rows affected (RLS?)', uid);
+      if (typeof showToast === 'function') showToast('Profile change did not save -- please tell Zona/engineering', '#c0392b');
+    }
+  });
 }
 
 </script>
