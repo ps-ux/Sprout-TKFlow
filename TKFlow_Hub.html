@@ -577,6 +577,10 @@ function assignAvClass(shortKey, siblingClasses) {
       existing._churned = c.status === 'Churned';
       if (existing._churned) existing.status = 'Churned';
       if (group) { existing.group = group.code; existing.groupName = group.name; }
+      // A manual color pick (see setCompanyAvClass) always wins over the automatic
+      // hash-based assignment ensureClientTaskScaffold's fallback would otherwise apply --
+      // must be set before that call so its "only fill in if missing" guard sees it.
+      if (c.av_class) existing.avClass = c.av_class;
       ensureClientTaskScaffold(existing, c.short_key);
     });
 
@@ -3587,6 +3591,13 @@ function closeWorkspace() {
           </select>
         </div>
       </div>
+      <div style="margin-bottom:16px;">
+        <div class="field-label">Color</div>
+        <!-- Applies immediately on click (see setCompanyAvClass) rather than waiting on Save
+             changes below -- same instant-apply pattern as the sidebar/avatar swatches
+             elsewhere, and it needs to persist even if the rest of the form is untouched. -->
+        <div id="es-color-swatches" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+      </div>
       <div style="font-size:11px;color:#9898a6;background:#F8F8FA;padding:8px 12px;border-radius:12px;"><i class="ti ti-info-circle" style="font-size:12px;vertical-align:-2px;"></i> Changing payroll type resets this subcompany's Cut-off Schedule to blank rows matching the new period count — same as changing it from Client Profile.</div>
     </div>
     <div style="padding:14px 22px;border-top:1px solid #EBEBEF;display:flex;gap:8px;justify-content:flex-end;">
@@ -5894,8 +5905,43 @@ function openEditSubcompanyModal(sk) {
   document.getElementById('es-entity-name').value = c.name || '';
   document.getElementById('es-headcount').value = (c.hc != null ? c.hc : '');
   document.getElementById('es-payroll-type').value = c.payrollType || 'Semi-monthly';
+  renderEsColorSwatches(sk);
   var modal = document.getElementById('edit-subcompany-modal');
   if (modal) modal.style.display = 'flex';
+}
+
+// Renders one swatch per AV_PALETTE entry -- pulls from the same global palette everything
+// else (sidebar, calendars) reads from, so this picker automatically covers any color added
+// there later without needing its own separate hardcoded list.
+function renderEsColorSwatches(sk) {
+  var el = document.getElementById('es-color-swatches');
+  if (!el) return;
+  var current = clients[sk] && clients[sk].avClass;
+  el.innerHTML = AV_PALETTE.map(function(cls) {
+    var isActive = cls === current;
+    return '<div onclick="setCompanyAvClass(\'' + sk + '\',\'' + cls + '\')" title="' + cls + '" style="width:24px;height:24px;border-radius:50%;background:' + AV_TEXT_COLORS[cls] + ';cursor:pointer;border:2px solid ' + (isActive ? '#1a1a2e' : 'transparent') + ';box-shadow:0 0 0 1px ' + (isActive ? '#1a1a2e' : '#EBEBEF') + ';"></div>';
+  }).join('');
+}
+
+// Applies immediately (not gated behind the modal's Save changes button) since a color pick
+// is a complete action on its own -- persisted to companies.av_class so it survives a reload
+// instead of falling back to the automatic hash-based assignment (see assignAvClass).
+function setCompanyAvClass(key, avClass) {
+  var c = clients[key];
+  if (!c) return;
+  c.avClass = avClass;
+  renderEsColorSwatches(key);
+  if (typeof renderSidebarClients === 'function') renderSidebarClients();
+  if (typeof renderClientCards === 'function') renderClientCards();
+  if (typeof renderClientProfile === 'function') renderClientProfile(window.currentWsGroup || window.currentWsClient || key);
+  var wsAv = document.getElementById('ws-av');
+  if (wsAv && window.currentWsClient === key) wsAv.className = 'ws-av ' + avClass;
+  if (!c.companyId) return;
+  supabaseClient.from('companies').update({ av_class: avClass }).eq('id', c.companyId).select().then(function(res) {
+    if (res.error) { console.warn('Could not save company color for ' + key, res.error); if (typeof showToast === 'function') showToast('Could not save color: ' + res.error.message, '#c0392b'); return; }
+    if (!res.data || !res.data.length) { if (typeof showToast === 'function') showToast('Color did not save for ' + c.name + ' (permissions issue)', '#c0392b'); return; }
+    if (typeof showToast === 'function') showToast('Color updated for ' + c.name);
+  });
 }
 
 function closeEditSubcompanyModal() {
