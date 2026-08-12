@@ -1298,15 +1298,15 @@ function assignAvClass(shortKey, siblingClasses) {
 
         <!-- WS Tasks -->
         <div class="tab-content" id="ws-tasks">
-          <div class="ws-card" style="margin-bottom:14px">
+          <div class="ws-card" style="margin-bottom:14px" id="ws-tasks-card1">
             <div class="ws-card-hdr"><span class="ws-card-title">Section I — Timekeeping</span></div>
             <div id="ws-tasks-section1"></div>
           </div>
-          <div class="ws-card" style="margin-bottom:14px">
+          <div class="ws-card" style="margin-bottom:14px" id="ws-tasks-card2">
             <div class="ws-card-hdr"><span class="ws-card-title">Section II — Employee Record Management</span></div>
             <div id="ws-tasks-section2"></div>
           </div>
-          <div class="ws-card" style="margin-bottom:14px;border:1.5px solid #BBF7D0;">
+          <div class="ws-card" style="margin-bottom:14px;border:1.5px solid #BBF7D0;" id="ws-tasks-card3">
             <div class="ws-card-hdr" style="background:linear-gradient(135deg,#DCFCE7,#E4FBEC);"><span class="ws-card-title" style="color:#32CE13;">Final Step — Payroll Instructions</span></div>
             <div id="ws-tasks-section3"></div>
           </div>
@@ -3149,9 +3149,22 @@ function renderWsTasksSections(key) {
   // the single currently-open sub would hide the whole card for the group the moment that
   // one sub had it disabled, even if a sibling sub still needed it processed.
   function anySubHasTaskEnabled(taskKey) { return _subsForTasks.some(function(s){ return isTaskEnabled(s, taskKey); }); }
-  if (s1) s1.innerHTML = c.tasks.filter(function(t){ return anySubHasTaskEnabled(t.taskKey); }).map(aggregateOrTaskHTML).join('');
-  if (s2) s2.innerHTML = c.tasks2.filter(function(t){ return anySubHasTaskEnabled(t.taskKey); }).map(aggregateOrTaskHTML).join('');
-  if (s3) s3.innerHTML = (c.tasks3||[]).filter(function(t){ return anySubHasTaskEnabled(t.taskKey); }).map(aggregateOrTaskHTML).join('');
+  // Individual task cards already disappear when disabled (the filter below), but the
+  // Section header itself is static HTML that stayed visible regardless -- a client with
+  // every task in a section unticked (e.g. Section II with both New Hires and Profile
+  // Updates off) showed an orphaned "Section II — Employee Record Management" header over an
+  // empty card. Hide the whole card once nothing under it applies, same as how the Disputes
+  // tab itself is hidden entirely for a client without Employee Email Support.
+  function renderSection(sectionEl, cardId, tasks) {
+    if (!sectionEl) return;
+    var html = (tasks || []).filter(function(t){ return anySubHasTaskEnabled(t.taskKey); }).map(aggregateOrTaskHTML).join('');
+    sectionEl.innerHTML = html;
+    var card = document.getElementById(cardId);
+    if (card) card.style.display = html ? '' : 'none';
+  }
+  renderSection(s1, 'ws-tasks-card1', c.tasks);
+  renderSection(s2, 'ws-tasks-card2', c.tasks2);
+  renderSection(s3, 'ws-tasks-card3', c.tasks3);
 }
 
 function closeWorkspace() {
