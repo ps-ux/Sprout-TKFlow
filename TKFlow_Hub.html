@@ -2780,7 +2780,7 @@ function closeWorkspace() {
     Object.keys(clientGroups).forEach(function(grpKey) {
       var grp = clientGroups[grpKey];
       var subs = grp.subs || [grpKey];
-      var hasAccess = subs.some(function(k) { return currentUser.assignedClients.includes(k); });
+      var hasAccess = subs.some(function(k) { return clients[k] && !clients[k]._churned && currentUser.assignedClients.includes(k); });
       if (!hasAccess) return;
       (isGroupOnHold(grpKey) ? memberOnHold : memberActive).push(grpKey);
     });
@@ -5332,25 +5332,40 @@ function renderMiniCal() {
   el.innerHTML = html;
 }
 
-// Dismissed (manually removed) and read state persist for the session, keyed by a stable
-// per-notification id. Time-sensitive notifications (TAT overdue/due-soon) cannot be dismissed
-// manually — they only disappear once the underlying ticket is actually closed, since they're
-// rebuilt fresh from allDisputes every render and that filter already excludes closed tickets.
-window.dismissedNotifs = window.dismissedNotifs || {};
-window.readNotifs = window.readNotifs || {};
+// Dismissed (manually removed) and read state persist to localStorage (per browser, not per
+// account, same pattern as _cutoffPromptDismissedGet below) rather than a plain in-memory
+// object -- otherwise reloading the page, which happens a lot from normal use, brought back
+// every notification you'd already cleared. Keyed by stable per-notification id.
+// Time-sensitive notifications (TAT overdue/due-soon) cannot be dismissed manually — they only
+// disappear once the underlying ticket is actually closed, since they're rebuilt fresh from
+// allDisputes every render and that filter already excludes closed tickets.
+function _notifStateGet(key, storageKey) {
+  if (window[key]) return window[key];
+  try {
+    window[key] = JSON.parse(localStorage.getItem(storageKey) || '{}');
+  } catch (e) {
+    window[key] = {};
+  }
+  return window[key];
+}
+Object.defineProperty(window, 'dismissedNotifs', { get: function(){ return _notifStateGet('_dismissedNotifs', 'tkflow_notifs_dismissed'); }, configurable: true });
+Object.defineProperty(window, 'readNotifs', { get: function(){ return _notifStateGet('_readNotifs', 'tkflow_notifs_read'); }, configurable: true });
 
 function dismissNotif(id) {
   window.dismissedNotifs[id] = true;
+  try { localStorage.setItem('tkflow_notifs_dismissed', JSON.stringify(window.dismissedNotifs)); } catch (e) {}
   renderNotifCard();
 }
 function markNotifRead(id) {
   window.readNotifs[id] = true;
+  try { localStorage.setItem('tkflow_notifs_read', JSON.stringify(window.readNotifs)); } catch (e) {}
   renderNotifCard();
 }
 function markAllNotifsRead() {
   document.querySelectorAll('[data-notif-id]').forEach(function(row) {
     window.readNotifs[row.getAttribute('data-notif-id')] = true;
   });
+  try { localStorage.setItem('tkflow_notifs_read', JSON.stringify(window.readNotifs)); } catch (e) {}
   renderNotifCard();
 }
 
