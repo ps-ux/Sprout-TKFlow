@@ -765,6 +765,7 @@ function assignAvClass(shortKey, siblingClasses) {
       await loadDisputesFromSupabase();
       await loadTaskStatusFromSupabase();
       await loadArchivedClientsFromSupabase();
+      await loadLeaveMonitoringFromSupabase();
       await loadTaskRunHistoryFromSupabase();
       await loadCutoffProcessingFromSupabase();
       if (typeof refreshUserUI === 'function') refreshUserUI();
@@ -1548,12 +1549,18 @@ function assignAvClass(shortKey, siblingClasses) {
               <div style="font-size:12px;color:#9898a6;margin-top:2px;">Tenure-bucket transfers, tracked as they happen — not tied to a cut-off cycle.</div>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
-              <button onclick="lmOpenUploadModal()" style="padding:8px 14px;background:#fff;border:1.5px solid #32CE13;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-upload"></i> Upload Reports</button>
-              <button onclick="lmOpenManualAddModal()" style="padding:8px 14px;background:#fff;border:1px solid #EBEBEF;color:#6b6b80;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-plus"></i> Add row</button>
+              <div id="lm-mutate-actions" style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button onclick="lmOpenUploadModal()" style="padding:8px 14px;background:#fff;border:1.5px solid #32CE13;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-upload"></i> Upload Reports</button>
+                <button onclick="lmOpenManualAddModal()" style="padding:8px 14px;background:#fff;border:1px solid #EBEBEF;color:#6b6b80;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-plus"></i> Add row</button>
+              </div>
               <button onclick="downloadLeaveMonitoringXLSX()" style="padding:8px 14px;background:#fff;border:1px solid #EBEBEF;color:#6b6b80;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-file-spreadsheet"></i> Download file</button>
               <button onclick="downloadLeaveMonitoringICS()" style="padding:8px 14px;background:#fff;border:1px solid #EBEBEF;color:#6b6b80;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-calendar-plus"></i> Download calendar (.ics)</button>
             </div>
           </div>
+
+          <div id="lm-year-switcher" style="margin-bottom:12px;"></div>
+
+          <div id="lm-upcoming-section" style="margin-bottom:16px;"></div>
 
           <div style="display:flex;gap:8px;margin-bottom:16px;">
             <div class="radio-opt selected" id="lm-type-vacation" onclick="lmSelectLeaveType('vacation')" style="padding:8px 16px;">Vacation Leave</div>
@@ -2965,7 +2972,7 @@ function switchTab(tab) {
     }
   }
   if (tab === 'ws-overview' && window.currentWsGroup && typeof renderGroupOverview === 'function') { renderGroupOverview(window.currentWsGroup); }
-  if (tab === 'ws-leave')   { setTimeout(function(){ if (typeof renderLeaveMonitoringLive === 'function') renderLeaveMonitoringLive(); }, 30); }
+  if (tab === 'ws-leave')   { window._lmActiveYear = new Date().getFullYear(); setTimeout(function(){ if (typeof renderLeaveMonitoringLive === 'function') renderLeaveMonitoringLive(); }, 30); }
   if (tab === 'ws-lcv')     { setTimeout(function(){ if (typeof lcvRenderHome === 'function') lcvRenderHome(); }, 30); }
   document.querySelectorAll('.tab-content[id^="ws-"]').forEach(el => { el.classList.remove('active'); el.style.display = 'none'; });
   var tabEl = document.getElementById(tab);
@@ -5300,7 +5307,7 @@ function renderDashSchedule() {
   (currentUser.processClients || []).forEach(function(ck) {
     if (seenLMClientsSched[ck]) return;
     seenLMClientsSched[ck] = true;
-    var lmStore = window.leaveMonitoringStore && window.leaveMonitoringStore[ck];
+    var lmStore = window.leaveMonitoringStore && window.leaveMonitoringStore[ck] && window.leaveMonitoringStore[ck][new Date().getFullYear()];
     if (!lmStore) return;
     var clientName = (clients[ck] && clients[ck].name) || ck;
     var todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -5425,7 +5432,7 @@ function renderMiniCal() {
   (currentUser.processClients || currentUser.assignedClients || []).forEach(function(ck) {
     if (seenLMClientsWk[ck]) return;
     seenLMClientsWk[ck] = true;
-    var lmStore = window.leaveMonitoringStore && window.leaveMonitoringStore[ck];
+    var lmStore = window.leaveMonitoringStore && window.leaveMonitoringStore[ck] && window.leaveMonitoringStore[ck][new Date().getFullYear()];
     if (!lmStore) return;
     var clientName = (clients[ck] && clients[ck].name) || ck;
     (lmStore.oneYear || []).concat(lmStore.fiveYear || []).forEach(function(r) {
@@ -5599,7 +5606,7 @@ function renderNotifCard() {
   (currentUser.processClients || []).forEach(function(ck) {
     if (seenLMClients[ck]) return;
     seenLMClients[ck] = true;
-    var lmStore = window.leaveMonitoringStore && window.leaveMonitoringStore[ck];
+    var lmStore = window.leaveMonitoringStore && window.leaveMonitoringStore[ck] && window.leaveMonitoringStore[ck][new Date().getFullYear()];
     if (!lmStore) return;
     var clientName = (clients[ck] && clients[ck].name) || ck;
     (lmStore.oneYear || []).concat(lmStore.fiveYear || []).forEach(function(r) {
@@ -6156,16 +6163,21 @@ function renderAdminCalendar() {
   });
 
   // Work anniversary transfers from Leave Credits Monitoring, across every client that has it
+  // and every year bucket that client has (this admin view can navigate forward into next
+  // year's prepped-ahead roster, so it isn't pinned to just the real current year).
   Object.keys(window.leaveMonitoringStore || {}).forEach(function(lk) {
-    var lmStore = window.leaveMonitoringStore[lk];
-    if (!lmStore) return;
+    var yearBuckets = window.leaveMonitoringStore[lk];
+    if (!yearBuckets) return;
     var lmClientName = (typeof clients !== 'undefined' && clients[lk]) ? clients[lk].name : lk;
     var lmColor = avClassAccentColor(avClassForStoreKey(lk));
-    (lmStore.oneYear || []).forEach(function(r) {
-      if (r.anniversary) addEvent(r.anniversary, lmClientName, r.lastName + ', ' + r.firstName + ' \u2014 1yr transfer', lmColor);
-    });
-    (lmStore.fiveYear || []).forEach(function(r) {
-      if (r.anniversary) addEvent(r.anniversary, lmClientName, r.lastName + ', ' + r.firstName + ' \u2014 ' + r.yearsOfService + 'yr transfer', lmColor);
+    Object.keys(yearBuckets).forEach(function(yr) {
+      var lmStore = yearBuckets[yr];
+      (lmStore.oneYear || []).forEach(function(r) {
+        if (r.anniversary) addEvent(r.anniversary, lmClientName, r.lastName + ', ' + r.firstName + ' \u2014 1yr transfer', lmColor);
+      });
+      (lmStore.fiveYear || []).forEach(function(r) {
+        if (r.anniversary) addEvent(r.anniversary, lmClientName, r.lastName + ', ' + r.firstName + ' \u2014 ' + r.yearsOfService + 'yr transfer', lmColor);
+      });
     });
   });
 
@@ -15007,7 +15019,11 @@ function nhFinalize() {
   // lmPushManualRow's mirroring, Sick) without needing to separately re-enter them via the
   // Employee List Report later.
   if (clients[ck] && clients[ck].taskConfig && clients[ck].taskConfig.leave_monitoring && typeof lmPushManualRow === 'function') {
-    var lmStore = lmGetStore(ck);
+    // Always the REAL current year, not window._lmActiveYear -- this hook fires from the New
+    // Hires task, unrelated to whatever year tab an admin happens to have open on the separate
+    // Leave Monitoring tab (which may not even be initialized yet this session).
+    var nhYear = new Date().getFullYear();
+    var lmStore = lmGetStore(ck, nhYear);
     (window.nhRows || []).forEach(function(nh) {
       if (!nh.empNo || !nh.hireDate) return;
       var hireDateObj = (typeof lmParseDate === 'function') ? lmParseDate(nh.hireDate) : new Date(nh.hireDate);
@@ -15015,10 +15031,11 @@ function nhFinalize() {
       var nameParts = String(nh.name || '').split(',').map(function(s){ return s.trim(); });
       var lastName = nameParts[0] || '';
       var firstName = nameParts[1] || (String(nh.name||'').split(' ').slice(0,-1).join(' ')) || '';
-      lmPushManualRow(ck, String(nh.empNo), lastName, firstName, hireDateObj);
+      lmPushManualRow(ck, String(nh.empNo), lastName, firstName, hireDateObj, nhYear);
     });
     lmStore.oneYear.sort(function(a,b){ return a.anniversary - b.anniversary; });
     lmStore.sickOneYear.sort(function(a,b){ return a.anniversary - b.anniversary; });
+    if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, nhYear);
   }
 
   if (typeof showToast === 'function') showToast('New hires finalized — included in Payroll Instructions');
@@ -15243,15 +15260,153 @@ function getProfileData(ck) {
 // Persistent, per-client monitoring list (not a per-cutoff task) — tenure-bucket leave
 // credit transfers: 0-1yr accrual (1.25/month), 1-4yr top-up to 15 total on the 1st work
 // anniversary, and 5+yr annual +1 increments (16, 17, ... capped at 25 for 14+ years).
-window.leaveMonitoringStore = window.leaveMonitoringStore || {}; // clientKey -> {oneYear:[...], fiveYear:[...]}
+// clientKey -> year -> {oneYear:[...], fiveYear:[...], sickOneYear:[...], sickFiveYear:[...]}
+// Year-scoped so a new calendar year's roster never inherits a prior year's rows -- an
+// employee who resigned mid-year must not reappear in next year's monitoring just because
+// their old row still exists. Rosters are re-established fresh from each year's own uploads.
+window.leaveMonitoringStore = window.leaveMonitoringStore || {};
 window._lmFiles = {};
 window._lmMode = 'due';
 
-function lmGetStore(ck) {
-  if (!window.leaveMonitoringStore[ck]) window.leaveMonitoringStore[ck] = { oneYear: [], fiveYear: [], sickOneYear: [], sickFiveYear: [] };
-  if (!window.leaveMonitoringStore[ck].sickOneYear) window.leaveMonitoringStore[ck].sickOneYear = []; // backward compat
-  if (!window.leaveMonitoringStore[ck].sickFiveYear) window.leaveMonitoringStore[ck].sickFiveYear = []; // backward compat
-  return window.leaveMonitoringStore[ck];
+// year is required and explicit everywhere -- no implicit "today" defaulting here, since a
+// caller during the Dec-prep window for next year and a caller reading today's real roster
+// must never accidentally collide on the same bucket.
+function lmGetStore(ck, year) {
+  if (!window.leaveMonitoringStore[ck]) window.leaveMonitoringStore[ck] = {};
+  if (!window.leaveMonitoringStore[ck][year]) window.leaveMonitoringStore[ck][year] = { oneYear: [], fiveYear: [], sickOneYear: [], sickFiveYear: [] };
+  var bucket = window.leaveMonitoringStore[ck][year];
+  if (!bucket.sickOneYear) bucket.sickOneYear = []; // backward compat
+  if (!bucket.sickFiveYear) bucket.sickFiveYear = []; // backward compat
+  return bucket;
+}
+
+// Which year's roster the Leave Monitoring tab is currently viewing. Reset to the real
+// current year every time the tab is (re-)opened (see switchTab's 'ws-leave' hook) -- a
+// switch to next year's prep view or an archived year is a per-visit choice, not sticky.
+window._lmActiveYear = window._lmActiveYear || new Date().getFullYear();
+window._lmArchivedOpen = window._lmArchivedOpen || false;
+window._lmArchivedLoaded = window._lmArchivedLoaded || {}; // ck -> true once its past years have been fetched
+
+function lmSelectYear(ck, year) {
+  window._lmActiveYear = year;
+  renderLeaveMonitoringLive();
+}
+function lmToggleArchivedYears(ck) {
+  window._lmArchivedOpen = !window._lmArchivedOpen;
+  if (window._lmArchivedOpen && !window._lmArchivedLoaded[ck] && typeof lmLoadArchivedYearsForClient === 'function') {
+    lmLoadArchivedYearsForClient(ck).then(function(){ renderLeaveMonitoringLive(); });
+  }
+  renderLeaveMonitoringLive();
+}
+
+// "Archived" is purely a computed property (year < the real current year) -- there's no
+// stored flag and nothing runs at midnight on Jan 1. The moment the calendar flips, a past
+// year's tab simply stops being the default view and renders read-only the moment it's opened.
+// The "+ Set up {next year}" chip appears once December has begun, or immediately if next
+// year's bucket already has data (so it doesn't vanish once someone's actually started it).
+function lmYearSwitcherHtml(ck) {
+  var realYear = new Date().getFullYear();
+  var nextYear = realYear + 1;
+  var clientYears = window.leaveMonitoringStore[ck] || {};
+  var showNextYearChip = new Date() >= new Date(realYear, 11, 1) || !!clientYears[nextYear];
+  var archivedYears = Object.keys(clientYears).map(Number)
+    .filter(function(y){ return y < realYear; }).sort(function(a,b){ return b - a; });
+
+  function chip(year, label) {
+    var selected = window._lmActiveYear === year;
+    return '<div class="radio-opt' + (selected ? ' selected' : '') + '" onclick="lmSelectYear(\'' + ck + '\',' + year + ')" style="padding:8px 16px;">' + label + '</div>';
+  }
+
+  var html = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">';
+  html += chip(realYear, String(realYear));
+  if (showNextYearChip) html += chip(nextYear, (clientYears[nextYear] ? String(nextYear) : '+ Set up ' + nextYear));
+  html += '<div onclick="lmToggleArchivedYears(\'' + ck + '\')" style="padding:8px 16px;cursor:pointer;color:#6b6b80;font-size:12px;display:inline-flex;align-items:center;gap:4px;user-select:none;">'
+    + '<i class="ti ti-chevron-' + (window._lmArchivedOpen ? 'down' : 'right') + '"></i> Archived' + (archivedYears.length ? ' (' + archivedYears.length + ')' : '') + '</div>';
+  if (window._lmArchivedOpen) {
+    if (!window._lmArchivedLoaded[ck]) {
+      html += '<span style="font-size:12px;color:#9898a6;">Loading…</span>';
+    } else if (!archivedYears.length) {
+      html += '<span style="font-size:12px;color:#9898a6;">No archived years yet</span>';
+    } else {
+      archivedYears.forEach(function(y) { html += chip(y, String(y)); });
+    }
+  }
+  return html + '</div>';
+}
+
+// Debounced (per company+year) fire-and-forget upsert, matching this file's existing
+// keystroke-safe save pattern (_persistClientCutoffs / tkScheduleReviewSave) rather than
+// gating persistence behind a new blur/change event -- lmEditRowLive is oninput-driven, so
+// calling this unconditionally on every keystroke and letting the debounce coalesce bursts is
+// the established idiom here, not a new one.
+var _lmSaveTimers = {};
+function _persistLeaveMonitoringYear(ck, year) {
+  var companyId = clients[ck] && clients[ck].companyId;
+  if (!companyId) return;
+  var timerKey = companyId + ':' + year;
+  if (_lmSaveTimers[timerKey]) clearTimeout(_lmSaveTimers[timerKey]);
+  _lmSaveTimers[timerKey] = setTimeout(function() {
+    delete _lmSaveTimers[timerKey];
+    supabaseClient.from('leave_monitoring_state').upsert({
+      company_id: companyId, year: year, data: lmGetStore(ck, year), updated_at: new Date().toISOString()
+    }, { onConflict: 'company_id,year' }).then(function(res) {
+      if (res.error) { console.warn('Could not save Leave Monitoring for ' + ck + ' / ' + year, res.error); if (typeof showToast === 'function') showToast('Could not save leave monitoring: ' + res.error.message, '#c0392b'); }
+    });
+  }, 800);
+}
+
+// jsonb has no Date type -- hireDate/regDate/anniversary come back as ISO strings after a
+// round-trip through Supabase. Revive with plain new Date(iso), matching how this file's other
+// jsonb-with-dates fixes (loadCalendarsFromSupabase's payout/deadlines revival, commit 31ca733)
+// do it -- NOT lmParseDate, whose string-parsing path reads the Y-M-D digits literally off the
+// string (the UTC-shifted day, not the local calendar day), which would silently shift every
+// date back a day for a positive-UTC-offset timezone like PH.
+function lmReviveDates(bucket) {
+  ['oneYear', 'fiveYear', 'sickOneYear', 'sickFiveYear'].forEach(function(cat) {
+    (bucket[cat] || []).forEach(function(r) {
+      if (r.hireDate) r.hireDate = new Date(r.hireDate);
+      if (r.regDate) r.regDate = new Date(r.regDate);
+      if (r.anniversary) r.anniversary = new Date(r.anniversary);
+    });
+  });
+  return bucket;
+}
+
+// Boot-time load, eager for the real current year + next year only -- the dashboard/notif
+// widgets need every client's current-year data available globally before any workspace is
+// even opened, and the "+Set up next year" chip needs next year's data present as soon as
+// anyone on the team has started it. Older (archived) years load lazily per-client instead,
+// via lmLoadArchivedYearsForClient -- loading every year of history for every company at every
+// login would grow unbounded for no benefit, since nothing running at boot ever reads one.
+async function loadLeaveMonitoringFromSupabase() {
+  var thisYear = new Date().getFullYear();
+  var res = await supabaseClient.from('leave_monitoring_state').select('*').in('year', [thisYear, thisYear + 1]);
+  if (res.error) { console.warn('Failed to load Leave Monitoring from Supabase', res.error); return; }
+  var companyIdToShortKey = {};
+  Object.keys(clients || {}).forEach(function(ck) { if (clients[ck].companyId) companyIdToShortKey[clients[ck].companyId] = ck; });
+  (res.data || []).forEach(function(row) {
+    var ck = companyIdToShortKey[row.company_id];
+    if (!ck) return;
+    if (!window.leaveMonitoringStore[ck]) window.leaveMonitoringStore[ck] = {};
+    window.leaveMonitoringStore[ck][row.year] = lmReviveDates(row.data || { oneYear: [], fiveYear: [], sickOneYear: [], sickFiveYear: [] });
+  });
+}
+
+// Lazy on-demand load for a single client's archived (past) years -- mirrors
+// varTryRestoreFromSupabase's per-company filtered fetch. Called only when "Archived" is
+// expanded for a client that hasn't had its archived years loaded yet this session; cached in
+// window._lmArchivedLoaded so re-expanding doesn't refetch.
+async function lmLoadArchivedYearsForClient(ck) {
+  var companyId = clients[ck] && clients[ck].companyId;
+  if (!companyId) return;
+  var res = await supabaseClient.from('leave_monitoring_state').select('*')
+    .eq('company_id', companyId).lt('year', new Date().getFullYear());
+  if (res.error) { console.warn('Could not load archived Leave Monitoring years for ' + ck, res.error); return; }
+  if (!window.leaveMonitoringStore[ck]) window.leaveMonitoringStore[ck] = {};
+  (res.data || []).forEach(function(row) {
+    window.leaveMonitoringStore[ck][row.year] = lmReviveDates(row.data || { oneYear: [], fiveYear: [], sickOneYear: [], sickFiveYear: [] });
+  });
+  window._lmArchivedLoaded[ck] = true;
 }
 
 function lmOpenUploadModal() {
@@ -15319,7 +15474,7 @@ function lmFindHeaderRowIdx(rows, mustContain) {
   return 0;
 }
 
-function computeLeaveMonitoring(empRows, leaveRows, mode, ck) {
+function computeLeaveMonitoring(empRows, leaveRows, mode, ck, targetYear) {
   var creditConfig = (typeof lmGetCreditConfig === 'function') ? lmGetCreditConfig(ck) : { baseCredits: 15, incrementPerYear: 1, maxCredits: 25 };
   var empHdrIdx = lmFindHeaderRowIdx(empRows, ['employee id','emp id','employeeid']);
   var empHeader = empRows[empHdrIdx] || [];
@@ -15355,7 +15510,11 @@ function computeLeaveMonitoring(empRows, leaveRows, mode, ck) {
   }
 
   var today = new Date();
-  var currentYear = today.getFullYear();
+  // The roster being built is for targetYear (the year currently open in the UI -- may be
+  // next year during the Dec-prep window), but the "is this anniversary imminent right now"
+  // due-window check below deliberately stays tied to the real wall-clock date -- those are
+  // two different questions.
+  var currentYear = targetYear;
   var oneYearTransfers = [];
   var fiveYearTransfers = [];
   var sickOneYearTransfers = [];
@@ -15472,10 +15631,12 @@ function runLeaveMonitoring() {
   }
 
   var ck = window.currentWsClient || window._wsClient || '';
+  var targetYear = window._lmActiveYear || new Date().getFullYear();
 
   Promise.all([readRows(window._lmFiles.emp), readRows(window._lmFiles.leave)]).then(function(results) {
-    var computed = computeLeaveMonitoring(results[0], results[1], window._lmMode, ck);
-    lmMergeIntoStore(ck, computed);
+    var computed = computeLeaveMonitoring(results[0], results[1], window._lmMode, ck, targetYear);
+    lmMergeIntoStore(ck, targetYear, computed);
+    if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, targetYear);
     lmCloseUploadModal();
     renderLeaveMonitoringLive();
     btn.disabled = false; btn.innerHTML = '<i class="ti ti-calculator"></i> Process & Add to Monitoring';
@@ -15489,8 +15650,12 @@ function runLeaveMonitoring() {
 
 // Merges newly-computed rows into the persistent store, deduping by Employee ID so
 // re-uploading reports (or overlapping "due now" / "whole year" runs) doesn't duplicate rows.
-function lmMergeIntoStore(ck, computed) {
-  var store = lmGetStore(ck);
+// Dedupe is scoped to THIS year's bucket only (via lmGetStore(ck, year)) -- the same employee
+// can legitimately have independent rows in different years' buckets (e.g. a recurring 5+yr
+// transfer tracked every year), and each year's overwrite-in-place can never collide with a
+// different year's row now that buckets are year-scoped.
+function lmMergeIntoStore(ck, year, computed) {
+  var store = lmGetStore(ck, year);
   computed.oneYearTransfers.forEach(function(r) {
     var existingIdx = store.oneYear.findIndex(function(e){ return e.empId === r.empId; });
     if (existingIdx >= 0) store.oneYear[existingIdx] = Object.assign({}, store.oneYear[existingIdx], r, {done: store.oneYear[existingIdx].done});
@@ -15581,11 +15746,27 @@ function lmToggleShowDone(category) {
 var LM_ONEYEAR_COLS = ['10%','19%','12%','12%','10%','9%','10%','13%','5%'];
 var LM_FIVEYEAR_COLS = ['13%','23%','16%','16%','15%','9%','8%'];
 
+// A past (archived) year is a frozen historical record -- once window._lmActiveYear falls
+// behind the real current year, done/remove/edit actions are disabled everywhere on this tab.
+function lmIsActiveYearReadOnly() {
+  return window._lmActiveYear < new Date().getFullYear();
+}
+
 function lmActionButtons(category, i, done) {
+  if (lmIsActiveYearReadOnly()) {
+    return '<span style="font-size:11px;color:' + (done?'#32CE13':'#9898a6') + ';font-weight:600;">' + (done?'Done':'Pending') + '</span>';
+  }
   return '<div style="display:flex;gap:14px;align-items:center;">'
     + '<button onclick="lmToggleDone(\'' + category + '\',' + i + ')" title="' + (done?'Mark not done':'Mark done') + '" style="border:none;background:none;cursor:pointer;color:' + (done?'#32CE13':'#9898a6') + ';font-size:14px;"><i class="ti ti-circle-check"></i></button>'
     + '<button onclick="lmConfirmRemoveRow(\'' + category + '\',' + i + ')" title="Remove" style="border:none;background:none;cursor:pointer;color:#c0392b;font-size:14px;"><i class="ti ti-trash"></i></button>'
     + '</div>';
+}
+
+// Renders an editable number input normally, or a plain value when the active year is
+// read-only (archived) -- shared by every editable Current Balance/Used cell.
+function lmEditableCell(category, i, field, value) {
+  if (lmIsActiveYearReadOnly()) return '<span>' + value + '</span>';
+  return '<input type="number" step="0.25" value="' + value + '" oninput="lmEditRowLive(\'' + category + '\',' + i + ',\'' + field + '\',this.value)" style="width:60px;text-align:right;border:1px solid #EBEBEF;border-radius:6px;padding:3px 6px;">';
 }
 
 // Renders the persistent monitoring lists as live, editable, sortable, filterable,
@@ -15601,12 +15782,91 @@ function lmSelectLeaveType(type) {
   if (sickSection) sickSection.style.display = type === 'sick' ? 'block' : 'none';
 }
 
+// ── Combined "Upcoming" view — who's due next across every tier and both leave types ──
+// Per-table sort/filter (lmSetSort/lmSetFilter above) already covers one category at a time;
+// this answers "who's coming up next, across everyone" without checking 4+ separate tables.
+window._lmUpcomingFilter = window._lmUpcomingFilter || '';
+
+function lmSetUpcomingFilter(value) {
+  window._lmUpcomingFilter = (value || '').toLowerCase();
+  renderLeaveMonitoringLive();
+}
+
+function lmBuildUpcomingRows(ck, year) {
+  var store = lmGetStore(ck, year);
+  var rows = [];
+  ['oneYear', 'fiveYear', 'sickOneYear', 'sickFiveYear'].forEach(function(cat) {
+    (store[cat] || []).filter(function(r){ return !r.done; }).forEach(function(r) {
+      rows.push(Object.assign({}, r, {
+        _leaveType: cat.indexOf('sick') === 0 ? 'Sick' : 'Vacation',
+        _tier: (cat === 'oneYear' || cat === 'sickOneYear') ? '1yr' : (r.yearsOfService + 'yr')
+      }));
+    });
+  });
+  var filterText = window._lmUpcomingFilter || '';
+  if (filterText) {
+    rows = rows.filter(function(r) {
+      var haystack = (r.empId + ' ' + r.lastName + ' ' + r.firstName).toLowerCase();
+      return haystack.indexOf(filterText) >= 0;
+    });
+  }
+  rows.sort(function(a, b) {
+    var at = a.anniversary ? new Date(a.anniversary).getTime() : Infinity;
+    var bt = b.anniversary ? new Date(b.anniversary).getTime() : Infinity;
+    return at - bt;
+  });
+  return rows;
+}
+
+function lmRenderUpcomingSection(ck) {
+  var collapsed = !!window._lmCollapsed['upcoming'];
+  var rows = lmBuildUpcomingRows(ck, window._lmActiveYear);
+  var headerBar = '<div onclick="lmToggleCollapse(\'upcoming\')" style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;user-select:none;background:#F8F8FA;border:1px solid #EBEBEF;border-radius:' + (collapsed?'14px':'14px 14px 0 0') + ';">'
+    + '<i class="ti ti-chevron-' + (collapsed?'right':'down') + '" style="font-size:13px;color:#6b6b80;"></i>'
+    + '<span style="font-size:12px;font-weight:600;color:#1a1a2e;">Upcoming — who’s due next (' + rows.length + ')</span>'
+    + '</div>';
+  if (collapsed) return headerBar;
+
+  var toolbar = '<div style="padding:10px;background:#fff;border-left:1px solid #EBEBEF;border-right:1px solid #EBEBEF;border-bottom:1px solid #EBEBEF;">'
+    + '<input type="text" placeholder="Search by name or Employee ID..." value="' + (window._lmUpcomingFilter||'') + '" oninput="lmSetUpcomingFilter(this.value)" style="width:100%;max-width:280px;padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;">'
+    + '</div>';
+
+  if (!rows.length) {
+    return headerBar + toolbar + '<div style="padding:16px;text-align:center;color:#9898a6;font-size:12px;background:#fff;border:1px solid #EBEBEF;border-top:none;border-radius:0 0 14px 14px;">' + (window._lmUpcomingFilter ? 'No matches for this search.' : 'Nothing pending across any tier.') + '</div>';
+  }
+
+  return headerBar + toolbar
+    + '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-top:none;border-radius:0 0 14px 14px;background:#fff;">'
+    + '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+    + '<thead><tr style="background:#F4F4F8;">'
+    + '<th style="padding:8px 10px;text-align:left;">Emp ID</th><th style="padding:8px 10px;text-align:left;">Name</th>'
+    + '<th style="padding:8px 10px;text-align:left;">Leave Type</th><th style="padding:8px 10px;text-align:left;">Tier</th>'
+    + '<th style="padding:8px 10px;text-align:left;">Anniversary</th></tr></thead><tbody>'
+    + rows.map(function(r) {
+        return '<tr style="border-bottom:1px solid #F4F4F8;">'
+          + '<td style="padding:8px 10px;">' + r.empId + '</td>'
+          + '<td style="padding:8px 10px;white-space:nowrap;">' + r.lastName + ', ' + r.firstName + '</td>'
+          + '<td style="padding:8px 10px;">' + r._leaveType + '</td>'
+          + '<td style="padding:8px 10px;">' + r._tier + '</td>'
+          + '<td style="padding:8px 10px;">' + fmtLMDate(r.anniversary) + '</td>'
+          + '</tr>';
+      }).join('')
+    + '</tbody></table></div>';
+}
+
 function renderLeaveMonitoringLive() {
   var ck = window.currentWsClient || window._wsClient || '';
-  var store = lmGetStore(ck);
+  var store = lmGetStore(ck, window._lmActiveYear);
   var oneYearEl = document.getElementById('lm-live-oneyear');
   var fiveYearEl = document.getElementById('lm-live-fiveyear');
   if (!oneYearEl || !fiveYearEl) return;
+
+  var yearSwitcherEl = document.getElementById('lm-year-switcher');
+  if (yearSwitcherEl) yearSwitcherEl.innerHTML = lmYearSwitcherHtml(ck);
+  var mutateActionsEl = document.getElementById('lm-mutate-actions');
+  if (mutateActionsEl) mutateActionsEl.style.display = lmIsActiveYearReadOnly() ? 'none' : 'flex';
+  var upcomingEl = document.getElementById('lm-upcoming-section');
+  if (upcomingEl && typeof lmRenderUpcomingSection === 'function') upcomingEl.innerHTML = lmRenderUpcomingSection(ck);
 
   // ── 1-Year Tenure Transfers ──
   var oneYearAll = lmApplyFilterSort(store.oneYear, 'oneYear');
@@ -15645,8 +15905,8 @@ function renderLeaveMonitoringLive() {
             + '<td style="padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + r.lastName + ', ' + r.firstName + '</td>'
             + '<td style="padding:8px 10px;">' + fmtLMDate(r.hireDate) + '</td>'
             + '<td style="padding:8px 10px;">' + fmtLMDate(r.anniversary) + '</td>'
-            + '<td style="padding:8px 10px;text-align:right;"><input type="number" step="0.25" value="' + r.currentBalance + '" oninput="lmEditRowLive(\'oneYear\',' + i + ',\'currentBalance\',this.value)" style="width:60px;text-align:right;border:1px solid #EBEBEF;border-radius:6px;padding:3px 6px;"></td>'
-            + '<td style="padding:8px 10px;text-align:right;"><input type="number" step="0.25" value="' + r.used + '" oninput="lmEditRowLive(\'oneYear\',' + i + ',\'used\',this.value)" style="width:60px;text-align:right;border:1px solid #EBEBEF;border-radius:6px;padding:3px 6px;"></td>'
+            + '<td style="padding:8px 10px;text-align:right;">' + lmEditableCell('oneYear', i, 'currentBalance', r.currentBalance) + '</td>'
+            + '<td style="padding:8px 10px;text-align:right;">' + lmEditableCell('oneYear', i, 'used', r.used) + '</td>'
             + '<td id="lm-shouldbe-oneYear-' + i + '" style="padding:8px 10px;text-align:right;">' + r.shouldBe.toFixed(2) + '</td>'
             + '<td id="lm-formanual-oneYear-' + i + '" style="padding:8px 10px;text-align:right;font-weight:600;color:#32CE13;">' + r.forManualEdit.toFixed(2) + '</td>'
             + '<td style="padding:8px 10px;">' + lmActionButtons('oneYear', i, r.done) + '</td></tr>';
@@ -15753,8 +16013,8 @@ function renderLeaveMonitoringLive() {
               + '<td style="padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + r.lastName + ', ' + r.firstName + '</td>'
               + '<td style="padding:8px 10px;">' + fmtLMDate(r.hireDate) + '</td>'
               + '<td style="padding:8px 10px;">' + fmtLMDate(r.anniversary) + '</td>'
-              + '<td style="padding:8px 10px;text-align:right;"><input type="number" step="0.25" value="' + r.currentBalance + '" oninput="lmEditRowLive(\'sickOneYear\',' + i + ',\'currentBalance\',this.value)" style="width:60px;text-align:right;border:1px solid #EBEBEF;border-radius:6px;padding:3px 6px;"></td>'
-              + '<td style="padding:8px 10px;text-align:right;"><input type="number" step="0.25" value="' + r.used + '" oninput="lmEditRowLive(\'sickOneYear\',' + i + ',\'used\',this.value)" style="width:60px;text-align:right;border:1px solid #EBEBEF;border-radius:6px;padding:3px 6px;"></td>'
+              + '<td style="padding:8px 10px;text-align:right;">' + lmEditableCell('sickOneYear', i, 'currentBalance', r.currentBalance) + '</td>'
+              + '<td style="padding:8px 10px;text-align:right;">' + lmEditableCell('sickOneYear', i, 'used', r.used) + '</td>'
               + '<td id="lm-shouldbe-sickOneYear-' + i + '" style="padding:8px 10px;text-align:right;">' + r.shouldBe.toFixed(2) + '</td>'
               + '<td id="lm-formanual-sickOneYear-' + i + '" style="padding:8px 10px;text-align:right;font-weight:600;color:#32CE13;">' + r.forManualEdit.toFixed(2) + '</td>'
               + '<td style="padding:8px 10px;">' + lmActionButtons('sickOneYear', i, r.done) + '</td></tr>';
@@ -15824,7 +16084,7 @@ function renderLeaveMonitoringLive() {
 
 function lmEditRow(category, idx, field, value) {
   var ck = window.currentWsClient || window._wsClient || '';
-  var store = lmGetStore(ck);
+  var store = lmGetStore(ck, window._lmActiveYear);
   var row = store[category][idx];
   if (!row) return;
   row[field] = parseFloat(value) || 0;
@@ -15842,7 +16102,7 @@ function lmEditRow(category, idx, field, value) {
 // position and making it impossible to type more than one digit at a time.
 function lmEditRowLive(category, idx, field, value) {
   var ck = window.currentWsClient || window._wsClient || '';
-  var store = lmGetStore(ck);
+  var store = lmGetStore(ck, window._lmActiveYear);
   var row = store[category][idx];
   if (!row) return;
   row[field] = parseFloat(value) || 0;
@@ -15855,11 +16115,12 @@ function lmEditRowLive(category, idx, field, value) {
   var forManualEditEl = document.getElementById('lm-formanual-' + category + '-' + idx);
   if (shouldBeEl) shouldBeEl.textContent = row.shouldBe.toFixed(2);
   if (forManualEditEl) forManualEditEl.textContent = row.forManualEdit.toFixed(2);
+  if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, window._lmActiveYear);
 }
 
 function lmToggleDone(category, idx) {
   var ck = window.currentWsClient || window._wsClient || '';
-  var store = lmGetStore(ck);
+  var store = lmGetStore(ck, window._lmActiveYear);
   var row = store[category][idx];
   if (row) {
     row.done = !row.done;
@@ -15870,17 +16131,19 @@ function lmToggleDone(category, idx) {
     var d = new Date();
     row.doneAt = row.done ? (d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')) : null;
   }
+  if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, window._lmActiveYear);
   renderLeaveMonitoringLive();
   if (typeof renderNotifCard === 'function') renderNotifCard();
 }
 // Confirms before actually removing a row, since this can't be undone.
 function lmConfirmRemoveRow(category, idx) {
   var ck = window.currentWsClient || window._wsClient || '';
-  var store = lmGetStore(ck);
+  var store = lmGetStore(ck, window._lmActiveYear);
   var row = store[category][idx];
   var who = row ? (row.lastName + ', ' + row.firstName) : 'this row';
     appConfirm('Remove from monitoring?', 'Remove ' + who + ' from the monitoring list? This cannot be undone.', function() {
   store[category].splice(idx, 1);
+  if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, window._lmActiveYear);
   renderLeaveMonitoringLive();
   }, { okLabel: 'Remove' });
 }
@@ -15888,14 +16151,15 @@ function lmConfirmRemoveRow(category, idx) {
 // Builds and pushes the Vacation Leave row for a newly tracked employee, then mirrors a
 // matching Sick Leave row into the sick store — so adding someone once (manually, or via the
 // New Hires auto-enroll hook below) doesn't also require a separate Sick Leave entry. Returns
-// false without pushing anything if the employee is already tracked.
-function lmPushManualRow(ck, empId, lastName, firstName, hireDate) {
-  var store = lmGetStore(ck);
+// false without pushing anything if the employee is already tracked IN THE TARGET YEAR (an
+// employee tracked in a different year must not block adding them to this one).
+function lmPushManualRow(ck, empId, lastName, firstName, hireDate, targetYear) {
+  var store = lmGetStore(ck, targetYear);
   var alreadyTracked = store.oneYear.some(function(r){ return r.empId === empId; })
     || store.fiveYear.some(function(r){ return r.empId === empId; });
   if (alreadyTracked) return false;
 
-  var currentYear = new Date().getFullYear();
+  var currentYear = targetYear;
   var yearsAtAnniversary = currentYear - hireDate.getFullYear();
   var anniversary = new Date(currentYear, hireDate.getMonth(), hireDate.getDate());
   var creditConfig = lmGetCreditConfig(ck);
@@ -15979,9 +16243,10 @@ function lmSubmitManualRows() {
     if (!empId || !hireDateStr) { if (empId || lastName || firstName || hireDateStr) skipped++; return; }
     var hireDate = new Date(hireDateStr + 'T00:00:00');
     if (isNaN(hireDate)) { skipped++; return; }
-    if (lmPushManualRow(ck, empId, lastName, firstName, hireDate)) added++; else duplicate++;
+    if (lmPushManualRow(ck, empId, lastName, firstName, hireDate, window._lmActiveYear)) added++; else duplicate++;
   });
   if (added === 0 && skipped === 0 && duplicate === 0) { if (typeof showToast === 'function') showToast('Enter at least an Employee ID and hire date', '#e67e00'); return; }
+  if (added && typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, window._lmActiveYear);
   renderLeaveMonitoringLive();
   lmCloseManualAddModal();
   var msg = added + ' employee' + (added!==1?'s':'') + ' added to monitoring';
@@ -15992,9 +16257,9 @@ function lmSubmitManualRows() {
 
 function downloadLeaveMonitoringXLSX() {
   var ck = window.currentWsClient || window._wsClient || '';
-  var store = lmGetStore(ck);
+  var year = window._lmActiveYear || new Date().getFullYear();
+  var store = lmGetStore(ck, year);
   var clientName = (clients[ck] && clients[ck].name) || ck;
-  var year = new Date().getFullYear();
 
   var oneYearSheet = [['Employee ID','Last Name','First Name','Hire Date','Regularization Date','Work Anniversary (' + year + ')','Supposed','Current Balance','Leaves Used','Should be VL Credits','For Manual Edit']];
   store.oneYear.forEach(function(r) {
@@ -16018,7 +16283,7 @@ function downloadLeaveMonitoringXLSX() {
 // you'd already been doing this manually.
 function downloadLeaveMonitoringICS() {
   var ck = window.currentWsClient || window._wsClient || '';
-  var store = lmGetStore(ck);
+  var store = lmGetStore(ck, window._lmActiveYear || new Date().getFullYear());
   var clientName = (clients[ck] && clients[ck].name) || ck;
 
   function icsDate(d) {
@@ -23642,15 +23907,18 @@ function renderTKCalendar() {
       lmKeysForCal = [window.currentWsClient];
     }
     lmKeysForCal.forEach(function(lk) {
-      var lmStore = window.leaveMonitoringStore[lk];
+      // Direct year-bucket lookup now that the store is year-scoped -- calYear IS the bucket
+      // key, so the old getFullYear()===calYear filter on r.anniversary is redundant (kept as
+      // a month filter only, since a bucket can still span into adjacent months at its edges).
+      var lmStore = window.leaveMonitoringStore[lk] && window.leaveMonitoringStore[lk][calYear];
       if (!lmStore) return;
       (lmStore.oneYear || []).forEach(function(r) {
-        if (r.anniversary && r.anniversary.getMonth() === calMonth && r.anniversary.getFullYear() === calYear) {
+        if (r.anniversary && r.anniversary.getMonth() === calMonth) {
           addEv(r.anniversary.getDate(), {type:'anniversary', label:r.lastName + ', ' + r.firstName + ' \u2014 1yr transfer', bg:'#f3e8ff', color:'#7c3aed'});
         }
       });
       (lmStore.fiveYear || []).forEach(function(r) {
-        if (r.anniversary && r.anniversary.getMonth() === calMonth && r.anniversary.getFullYear() === calYear) {
+        if (r.anniversary && r.anniversary.getMonth() === calMonth) {
           addEv(r.anniversary.getDate(), {type:'anniversary', label:r.lastName + ', ' + r.firstName + ' \u2014 ' + r.yearsOfService + 'yr transfer', bg:'#f3e8ff', color:'#7c3aed'});
         }
       });
