@@ -703,6 +703,12 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       await loadCutoffProcessingFromSupabase();
       if (typeof refreshUserUI === 'function') refreshUserUI();
       if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
+      // updateAdminOverviewMetrics() also runs on DOMContentLoaded, before this whole load
+      // chain has even started -- so admin's client/headcount/dispute/team counts were stuck
+      // showing whatever the hardcoded seed data had until the CURRENT session happened to
+      // trigger a recount itself (e.g. by adding a client). Re-run it now with real data,
+      // matching updateDashboardMetrics() right above.
+      if (typeof updateAdminOverviewMetrics === 'function') updateAdminOverviewMetrics();
       if (typeof renderDashSchedule === 'function') renderDashSchedule();
       // initHub() already ran renderMiniCal() once on DOMContentLoaded, before this chain
       // (currentUser, _calStore) had real data -- re-render now so the workweek widget
