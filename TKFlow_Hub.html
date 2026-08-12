@@ -1297,6 +1297,7 @@ function assignAvClass(shortKey, siblingClasses) {
 
         <!-- WS Tasks -->
         <div class="tab-content" id="ws-tasks">
+          <div id="ws-tasks-period-banner" class="dm-info-banner" style="display:none;background:#e8f0fe;border:1px solid #BADCFF;border-radius:16px;padding:12px 16px;margin-bottom:14px;align-items:flex-start;gap:10px;"></div>
           <div class="ws-card" style="margin-bottom:14px" id="ws-tasks-card1">
             <div class="ws-card-hdr"><span class="ws-card-title">Section I — Timekeeping</span></div>
             <div id="ws-tasks-section1"></div>
@@ -2267,6 +2268,57 @@ function switchTab(tab) {
   currentWsTab = tab;
 }
 
+// Builds the "Today is X. You're currently in Y cut-off period" banner's inner HTML, shared
+// by the Overview tab and the Tasks tab -- each subcompany can run its own cut-off schedule
+// (e.g. HDI's subs don't necessarily follow the same 1st/16th split as KNI's), so this
+// computes each sub's own current period and only shows one unified sentence if they
+// actually agree; otherwise it breaks down per distinct schedule. Prefers the real uploaded
+// TK Calendar (shared across the whole group) over generic semi-monthly math. Returns '' when
+// there's nothing to show (no subs with a resolvable period).
+function buildCurrentPeriodBannerHTML(subs) {
+  var realPeriodsForBanner = getRealCalendarPeriods();
+  var realIdxForBanner = realPeriodsForBanner.length ? findCurrentCutoffStartedIdx(realPeriodsForBanner) : -1;
+  var realCurrentForBanner = realIdxForBanner >= 0 ? realPeriodsForBanner[realIdxForBanner] : null;
+
+  var subPeriods = subs.map(function(sk) {
+    var c = clients[sk];
+    if (!c) return null;
+    if (realCurrentForBanner) {
+      var label = realCurrentForBanner.monthName + ' ' + (realCurrentForBanner.period === 1 ? '1st' : '2nd') + ' Payout · att ' + realCurrentForBanner.attCov;
+      return { subKey: sk, subName: c.name, label: label };
+    }
+    if (!c.cutoff) return null;
+    var rawRange = parseCutoffRange(c.cutoff);
+    if (!rawRange) return null;
+    var curRange = computeCurrentCutoffRange(rawRange, c.payrollType);
+    var ordinal = cutoffPeriodOrdinal(curRange.startDay, c.payrollType);
+    var label = ordinal + ' Payout · ' + formatDateRangeLabel(curRange);
+    return { subKey: sk, subName: c.name, label: label };
+  }).filter(Boolean);
+
+  if (!subPeriods.length) return '';
+
+  var todayStr = new Date().toLocaleDateString('en-US', {month:'long', day:'numeric', year:'numeric'});
+  var distinctLabels = subPeriods.reduce(function(acc, sp) {
+    if (!acc.some(function(a){ return a.label === sp.label; })) acc.push({label: sp.label, subs: []});
+    acc.find(function(a){ return a.label === sp.label; }).subs.push(sp.subName);
+    return acc;
+  }, []);
+
+  if (distinctLabels.length === 1) {
+    return '<i class="ti ti-calendar-time" style="font-size:18px;color:#1679FA;flex-shrink:0;margin-top:1px;"></i>'
+      + '<div style="font-size:13px;color:#1a1a2e;">Today is <b>' + todayStr + '</b>. Based on the timekeeping calendar, you’re currently in the <b>' + distinctLabels[0].label + '</b> cut-off period.</div>';
+  }
+  // Subcompanies don't all share the same schedule — show each distinct period separately
+  // rather than falsely implying one blanket period for the whole group.
+  return '<i class="ti ti-calendar-time" style="font-size:18px;color:#1679FA;flex-shrink:0;margin-top:1px;"></i>'
+    + '<div style="font-size:13px;color:#1a1a2e;"><div style="margin-bottom:4px;">Today is <b>' + todayStr + '</b>. Cut-off periods vary across subcompanies:</div>'
+    + distinctLabels.map(function(d) {
+        return '<div style="margin-top:2px;">• <b>' + d.subs.join(', ') + '</b>: ' + d.label + '</div>';
+      }).join('')
+    + '</div>';
+}
+
 function renderGroupOverview(grpKey) {
   var grp = clientGroups[grpKey];
   if (!grp) return;
@@ -2324,61 +2376,14 @@ function renderGroupOverview(grpKey) {
   ovEl.innerHTML = '';
 
   // ── Current period banner ────────────────────────────────────────────────
-  // Each subcompany can run its own cut-off schedule (e.g. HDI's subs don't necessarily
-  // follow the same 1st/16th split as KNI's) — so this can't just read subs[0] and assume
-  // the whole group matches. Compute each sub's own current period, then only show one
-  // unified sentence if they actually agree; otherwise break it down per distinct schedule.
-  // Prefer the real uploaded TK Calendar (shared across the whole group) over generic
-  // semi-monthly math — this banner previously never got updated to use it, so it could
-  // show a different, wrong period than Client Profile / Payroll Instructions / etc.
-  var realPeriodsForBanner = getRealCalendarPeriods();
-  var realIdxForBanner = realPeriodsForBanner.length ? findCurrentCutoffStartedIdx(realPeriodsForBanner) : -1;
-  var realCurrentForBanner = realIdxForBanner >= 0 ? realPeriodsForBanner[realIdxForBanner] : null;
-
-  var subPeriods = subs.map(function(sk) {
-    var c = clients[sk];
-    if (!c) return null;
-    if (realCurrentForBanner) {
-      var label = realCurrentForBanner.monthName + ' ' + (realCurrentForBanner.period === 1 ? '1st' : '2nd') + ' Payout \u00b7 att ' + realCurrentForBanner.attCov;
-      return { subKey: sk, subName: c.name, label: label };
-    }
-    if (!c.cutoff) return null;
-    var rawRange = parseCutoffRange(c.cutoff);
-    if (!rawRange) return null;
-    var curRange = computeCurrentCutoffRange(rawRange, c.payrollType);
-    var ordinal = cutoffPeriodOrdinal(curRange.startDay, c.payrollType);
-    var label = ordinal + ' Payout \u00b7 ' + formatDateRangeLabel(curRange);
-    return { subKey: sk, subName: c.name, label: label };
-  }).filter(Boolean);
-
-  if (subPeriods.length) {
-    var todayStr = new Date().toLocaleDateString('en-US', {month:'long', day:'numeric', year:'numeric'});
-    var distinctLabels = subPeriods.reduce(function(acc, sp) {
-      if (!acc.some(function(a){ return a.label === sp.label; })) acc.push({label: sp.label, subs: []});
-      acc.find(function(a){ return a.label === sp.label; }).subs.push(sp.subName);
-      return acc;
-    }, []);
-
+  var bannerInner = buildCurrentPeriodBannerHTML(subs);
+  if (bannerInner) {
     var periodBanner = document.createElement('div');
     periodBanner.className = 'dm-info-banner';
     periodBanner.style.cssText = 'background:#e8f0fe;border:1px solid #BADCFF;border-radius:16px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:flex-start;gap:10px;';
-
-    if (distinctLabels.length === 1) {
-      periodBanner.innerHTML = '<i class="ti ti-calendar-time" style="font-size:18px;color:#1679FA;flex-shrink:0;margin-top:1px;"></i>'
-        + '<div style="font-size:13px;color:#1a1a2e;">Today is <b>' + todayStr + '</b>. Based on the timekeeping calendar, you\u2019re currently in the <b>' + distinctLabels[0].label + '</b> cut-off period.</div>';
-    } else {
-      // Subcompanies don't all share the same schedule — show each distinct period separately
-      // rather than falsely implying one blanket period for the whole group.
-      periodBanner.innerHTML = '<i class="ti ti-calendar-time" style="font-size:18px;color:#1679FA;flex-shrink:0;margin-top:1px;"></i>'
-        + '<div style="font-size:13px;color:#1a1a2e;"><div style="margin-bottom:4px;">Today is <b>' + todayStr + '</b>. Cut-off periods vary across subcompanies:</div>'
-        + distinctLabels.map(function(d) {
-            return '<div style="margin-top:2px;">\u2022 <b>' + d.subs.join(', ') + '</b>: ' + d.label + '</div>';
-          }).join('')
-        + '</div>';
-    }
+    periodBanner.innerHTML = bannerInner;
     ovEl.appendChild(periodBanner);
   }
-
   // ── Row 1: Metrics cards ──────────────────────────────────────────────────
   var totalHC   = subs.reduce(function(a,k){ return a+(clients[k].hc||0); },0);
   var totalDisp = subs.reduce(function(a,k){ return a+(clients[k].disp||0); },0);
@@ -3164,6 +3169,16 @@ function renderWsTasksSections(key) {
   renderSection(s1, 'ws-tasks-card1', c.tasks);
   renderSection(s2, 'ws-tasks-card2', c.tasks2);
   renderSection(s3, 'ws-tasks-card3', c.tasks3);
+
+  // Current payout date + attendance cut-off, same banner already shown on Overview -- Tasks
+  // is where the actual work happens, so knowing which period is currently active shouldn't
+  // require switching tabs to check.
+  var periodBannerEl = document.getElementById('ws-tasks-period-banner');
+  if (periodBannerEl) {
+    var bannerHtml = (typeof buildCurrentPeriodBannerHTML === 'function') ? buildCurrentPeriodBannerHTML(_subsForTasks) : '';
+    periodBannerEl.innerHTML = bannerHtml;
+    periodBannerEl.style.display = bannerHtml ? 'flex' : 'none';
+  }
 }
 
 function closeWorkspace() {
