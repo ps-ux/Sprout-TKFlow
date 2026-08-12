@@ -1561,30 +1561,6 @@ function assignAvClass(shortKey, siblingClasses) {
           <div id="lm-year-switcher" style="margin-bottom:12px;"></div>
 
           <div id="lm-upcoming-section" style="margin-bottom:16px;"></div>
-
-          <div style="display:flex;gap:8px;margin-bottom:16px;">
-            <div class="radio-opt selected" id="lm-type-vacation" onclick="lmSelectLeaveType('vacation')" style="padding:8px 16px;">Vacation Leave</div>
-            <div class="radio-opt" id="lm-type-sick" onclick="lmSelectLeaveType('sick')" style="padding:8px 16px;">Sick Leave</div>
-          </div>
-
-          <div id="lm-vacation-section">
-            <div style="font-size:12px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">1-Year Tenure Transfers</div>
-            <div id="lm-live-oneyear" style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow-x:auto;margin-bottom:20px;"></div>
-
-            <div style="font-size:12px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">5+ Years Tenure Transfers</div>
-            <div id="lm-live-fiveyear" style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow-x:auto;"></div>
-          </div>
-
-          <div id="lm-sick-section" style="display:none;">
-            <div style="font-size:12px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">1-Year Tenure Transfers (Sick Leave)</div>
-            <div style="font-size:11px;color:#9898a6;margin-bottom:8px;" id="lm-sick-oneyear-note">Sick Leave only needs 1st-year top-up tracking — it renews automatically in Sprout HR every year after, unlike Vacation, which escalates with tenure.</div>
-            <div id="lm-live-sick" style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow-x:auto;margin-bottom:20px;"></div>
-
-            <div id="lm-sick-fiveyear-wrapper" style="display:none;">
-              <div style="font-size:12px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">5+ Years Tenure Transfers (Sick Leave)</div>
-              <div id="lm-live-sick-fiveyear" style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow-x:auto;"></div>
-            </div>
-          </div>
         </div>
 
         <div class="tab-content" id="ws-lcv">
@@ -1790,19 +1766,6 @@ function assignAvClass(shortKey, siblingClasses) {
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
               <div style="font-size:15px;font-weight:600;color:#1a1a2e;">Upload Reports</div>
               <div onclick="lmCloseUploadModal()" style="cursor:pointer;color:#9898a6;font-size:18px;">&times;</div>
-            </div>
-            <div style="margin-bottom:14px;">
-              <div class="field-label">Mode</div>
-              <div style="display:flex;gap:8px;">
-                <div class="radio-opt selected" id="lm-mode-due" onclick="lmSelectMode('due')" style="flex:1;text-align:center;">
-                  <div style="font-weight:500;">Due now</div>
-                  <div style="font-size:11px;color:#9898a6;margin-top:2px;">Only employees due for transfer soon</div>
-                </div>
-                <div class="radio-opt" id="lm-mode-year" onclick="lmSelectMode('year')" style="flex:1;text-align:center;">
-                  <div style="font-weight:500;">Whole year</div>
-                  <div style="font-size:11px;color:#9898a6;margin-top:2px;">Prep every transfer for the year ahead</div>
-                </div>
-              </div>
             </div>
             <div class="task-dz" id="lm-dz-emp" onclick="document.getElementById('lm-f-emp').click()" ondragover="return dzDragOver(event)" ondragleave="dzDragLeave(event)" ondrop="dzDrop(event,'lm-f-emp')">
               <div class="task-dz-icon" style="background:#DCFCE7;color:#32CE13;"><i class="ti ti-users"></i></div>
@@ -15266,7 +15229,6 @@ function getProfileData(ck) {
 // their old row still exists. Rosters are re-established fresh from each year's own uploads.
 window.leaveMonitoringStore = window.leaveMonitoringStore || {};
 window._lmFiles = {};
-window._lmMode = 'due';
 
 // year is required and explicit everywhere -- no implicit "today" defaulting here, since a
 // caller during the Dec-prep window for next year and a caller reading today's real roster
@@ -15418,18 +15380,10 @@ function lmOpenUploadModal() {
   ['lm-dz-emp','lm-dz-leave'].forEach(function(id){ var el=document.getElementById(id); if(el) el.classList.remove('has-file'); });
   var fnEmp = document.getElementById('lm-fn-emp'); if (fnEmp) fnEmp.textContent = 'Employee List Report';
   var fnLeave = document.getElementById('lm-fn-leave'); if (fnLeave) fnLeave.textContent = 'Leave Report';
-  lmSelectMode('due');
 }
 function lmCloseUploadModal() {
   var modal = document.getElementById('lm-upload-modal');
   if (modal) modal.style.display = 'none';
-}
-function lmSelectMode(mode) {
-  window._lmMode = mode;
-  var dueEl = document.getElementById('lm-mode-due');
-  var yearEl = document.getElementById('lm-mode-year');
-  if (dueEl) dueEl.classList.toggle('selected', mode==='due');
-  if (yearEl) yearEl.classList.toggle('selected', mode==='year');
 }
 
 function lmHandleFile(which, input) {
@@ -15474,7 +15428,7 @@ function lmFindHeaderRowIdx(rows, mustContain) {
   return 0;
 }
 
-function computeLeaveMonitoring(empRows, leaveRows, mode, ck, targetYear) {
+function computeLeaveMonitoring(empRows, leaveRows, ck, targetYear) {
   var creditConfig = (typeof lmGetCreditConfig === 'function') ? lmGetCreditConfig(ck) : { baseCredits: 15, incrementPerYear: 1, maxCredits: 25 };
   var empHdrIdx = lmFindHeaderRowIdx(empRows, ['employee id','emp id','employeeid']);
   var empHeader = empRows[empHdrIdx] || [];
@@ -15509,11 +15463,11 @@ function computeLeaveMonitoring(empRows, leaveRows, mode, ck, targetYear) {
     if (cLeaveType >= 0 && leaveTypeVal.indexOf('sick') >= 0) sickByEmpId[lEmpId] = entry;
   }
 
-  var today = new Date();
   // The roster being built is for targetYear (the year currently open in the UI -- may be
-  // next year during the Dec-prep window), but the "is this anniversary imminent right now"
-  // due-window check below deliberately stays tied to the real wall-clock date -- those are
-  // two different questions.
+  // next year during the Dec-prep window). Every employee whose tenure lands them in a
+  // tracked tier for that year is included -- no "due soon" narrowing (a prior "due now"
+  // upload mode silently missed anyone whose anniversary was still months away from today,
+  // e.g. an August upload never picking up Oct-Dec anniversaries at all).
   var currentYear = targetYear;
   var oneYearTransfers = [];
   var fiveYearTransfers = [];
@@ -15538,17 +15492,13 @@ function computeLeaveMonitoring(empRows, leaveRows, mode, ck, targetYear) {
     var transferDate = creditConfig.timing === 'yearstart'
       ? new Date(currentYear, 0, 1)
       : new Date(currentYear, hireDate.getMonth(), hireDate.getDate());
-    var daysDiff = Math.round((transferDate - today) / 86400000);
-    var inDueWindow = daysDiff >= -14 && daysDiff <= 45;
 
     var sickTiming = creditConfig.sickTiming || 'anniversary';
     var sickTransferDate = sickTiming === 'yearstart'
       ? new Date(currentYear, 0, 1)
       : new Date(currentYear, hireDate.getMonth(), hireDate.getDate());
-    var sickDaysDiff = Math.round((sickTransferDate - today) / 86400000);
-    var sickInDueWindow = sickDaysDiff >= -14 && sickDaysDiff <= 45;
 
-    if (yearsAtAnniversary === 1 && (mode === 'year' || inDueWindow)) {
+    if (yearsAtAnniversary === 1) {
       var ld = leaveByEmpId[empId] || { currentBalance: 0, used: 0 };
       var supposed = creditConfig.baseCredits;
       var shouldBe = supposed - ld.used;
@@ -15563,7 +15513,7 @@ function computeLeaveMonitoring(empRows, leaveRows, mode, ck, targetYear) {
       });
     }
 
-    if (yearsAtAnniversary === 1 && (mode === 'year' || sickInDueWindow)) {
+    if (yearsAtAnniversary === 1) {
       // Sick Leave — only needs 1st-year top-up tracking; years 2+ renew automatically in
       // Sprout HR without needing our monitoring (unlike Vacation, it doesn't escalate).
       var sd = sickByEmpId[empId] || { currentBalance: 0, used: 0 };
@@ -15579,7 +15529,7 @@ function computeLeaveMonitoring(empRows, leaveRows, mode, ck, targetYear) {
       });
     }
 
-    if (yearsAtAnniversary >= 5 && (mode === 'year' || inDueWindow)) {
+    if (yearsAtAnniversary >= 5) {
       var totalCreditsForYear = lmCreditsForYear(creditConfig, yearsAtAnniversary);
       var previousYearCredits = yearsAtAnniversary === 5 ? creditConfig.baseCredits : lmCreditsForYear(creditConfig, yearsAtAnniversary - 1);
       var creditsToAdd = totalCreditsForYear - previousYearCredits;
@@ -15634,7 +15584,7 @@ function runLeaveMonitoring() {
   var targetYear = window._lmActiveYear || new Date().getFullYear();
 
   Promise.all([readRows(window._lmFiles.emp), readRows(window._lmFiles.leave)]).then(function(results) {
-    var computed = computeLeaveMonitoring(results[0], results[1], window._lmMode, ck, targetYear);
+    var computed = computeLeaveMonitoring(results[0], results[1], ck, targetYear);
     lmMergeIntoStore(ck, targetYear, computed);
     if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, targetYear);
     lmCloseUploadModal();
@@ -15686,65 +15636,28 @@ function fmtLMDate(d) {
   return d ? new Date(d).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}) : '\u2014';
 }
 
-// Renders the persistent monitoring lists as live, editable tables in the Leave Monitoring tab.
-window._lmFilter = { oneYear: '', fiveYear: '', sickOneYear: '', sickFiveYear: '' };
-window._lmSort = { oneYear: {col:'anniversary', dir:'asc'}, fiveYear: {col:'anniversary', dir:'asc'}, sickOneYear: {col:'anniversary', dir:'asc'}, sickFiveYear: {col:'anniversary', dir:'asc'} };
-
-function lmSetFilter(category, value) {
-  window._lmFilter[category] = (value || '').toLowerCase();
-  renderLeaveMonitoringLive();
-}
-function lmSetSort(category, col) {
-  var cur = window._lmSort[category];
-  var dir = (cur.col === col && cur.dir === 'asc') ? 'desc' : 'asc';
-  window._lmSort[category] = { col: col, dir: dir };
-  renderLeaveMonitoringLive();
-}
-function lmSortIndicator(category, col) {
-  var cur = window._lmSort[category];
-  if (cur.col !== col) return '';
-  return cur.dir === 'asc' ? ' \u25B2' : ' \u25BC';
-}
-function lmApplyFilterSort(rows, category) {
-  var filterText = window._lmFilter[category] || '';
-  var filtered = filterText
-    ? rows.filter(function(r) {
-        var haystack = (r.empId + ' ' + r.lastName + ' ' + r.firstName).toLowerCase();
-        return haystack.indexOf(filterText) >= 0;
-      })
-    : rows.slice();
-  var sortState = window._lmSort[category];
-  filtered.sort(function(a, b) {
-    var av = a[sortState.col], bv = b[sortState.col];
-    if (av instanceof Date || bv instanceof Date) { av = av ? new Date(av).getTime() : 0; bv = bv ? new Date(bv).getTime() : 0; }
-    else if (typeof av === 'string' || typeof bv === 'string') { av = String(av||'').toLowerCase(); bv = String(bv||'').toLowerCase(); }
-    if (av < bv) return sortState.dir === 'asc' ? -1 : 1;
-    if (av > bv) return sortState.dir === 'asc' ? 1 : -1;
-    return 0;
-  });
-  return filtered;
-}
-
-// Renders the persistent monitoring lists as live, editable, sortable, filterable tables.
-// 5+ years transfers get split into their own separate section per tenure year (5yr, 6yr,
-// 7yr, etc.) instead of one mixed table, matching how 1-year and 5+-year are already
-// separated from each other.
-window._lmCollapsed = window._lmCollapsed || {}; // sectionId -> true if collapsed
-window._lmShowDone = window._lmShowDone || {}; // category -> true if completed rows shown
+// ── One combined, chronologically-sorted list across every tier and both leave types ──
+// Replaces the old separate 1-year/5+-year x Vacation/Sick tables -- everyone due, sorted by
+// nearest anniversary first, with the same editable Current Balance/Used/Mark done/Delete
+// controls the old per-tier tables had. "Show completed" reveals done rows (hidden by
+// default); the search box filters by name/Employee ID. No user-adjustable column sort --
+// always chronological, matching what "Upcoming" already did before this merge.
+window._lmCollapsed = window._lmCollapsed || {}; // sectionId -> true if collapsed (unused by this section currently, kept for other collapsible UI in this file)
+window._lmShowDoneUpcoming = window._lmShowDoneUpcoming || false;
+window._lmUpcomingFilter = window._lmUpcomingFilter || '';
 
 function lmToggleCollapse(sectionId) {
   window._lmCollapsed[sectionId] = !window._lmCollapsed[sectionId];
   renderLeaveMonitoringLive();
 }
-function lmToggleShowDone(category) {
-  window._lmShowDone[category] = !window._lmShowDone[category];
+function lmToggleShowDoneUpcoming() {
+  window._lmShowDoneUpcoming = !window._lmShowDoneUpcoming;
   renderLeaveMonitoringLive();
 }
-
-// Shared fixed column widths so every table (the main list and each per-year 5+ section)
-// lines up consistently instead of each sizing independently to its own content.
-var LM_ONEYEAR_COLS = ['10%','19%','12%','12%','10%','9%','10%','13%','5%'];
-var LM_FIVEYEAR_COLS = ['13%','23%','16%','16%','15%','9%','8%'];
+function lmSetUpcomingFilter(value) {
+  window._lmUpcomingFilter = (value || '').toLowerCase();
+  renderLeaveMonitoringLive();
+}
 
 // A past (archived) year is a frozen historical record -- once window._lmActiveYear falls
 // behind the real current year, done/remove/edit actions are disabled everywhere on this tab.
@@ -15769,317 +15682,93 @@ function lmEditableCell(category, i, field, value) {
   return '<input type="number" step="0.25" value="' + value + '" oninput="lmEditRowLive(\'' + category + '\',' + i + ',\'' + field + '\',this.value)" style="width:60px;text-align:right;border:1px solid #EBEBEF;border-radius:6px;padding:3px 6px;">';
 }
 
-// Renders the persistent monitoring lists as live, editable, sortable, filterable,
-// collapsible tables. Completed rows are hidden by default (toggle to reveal), and 5+ years
-// transfers are split into one section per tenure year — with 14+ years always merged into a
-// single combined section, since they all share the same capped 25-credit entitlement.
-function lmSelectLeaveType(type) {
-  document.getElementById('lm-type-vacation').classList.toggle('selected', type === 'vacation');
-  document.getElementById('lm-type-sick').classList.toggle('selected', type === 'sick');
-  var vacSection = document.getElementById('lm-vacation-section');
-  var sickSection = document.getElementById('lm-sick-section');
-  if (vacSection) vacSection.style.display = type === 'vacation' ? 'block' : 'none';
-  if (sickSection) sickSection.style.display = type === 'sick' ? 'block' : 'none';
-}
-
-// ── Combined "Upcoming" view — who's due next across every tier and both leave types ──
-// Per-table sort/filter (lmSetSort/lmSetFilter above) already covers one category at a time;
-// this answers "who's coming up next, across everyone" without checking 4+ separate tables.
-window._lmUpcomingFilter = window._lmUpcomingFilter || '';
-
-function lmSetUpcomingFilter(value) {
-  window._lmUpcomingFilter = (value || '').toLowerCase();
-  renderLeaveMonitoringLive();
-}
-
+// Flattens every category (oneYear/fiveYear/sickOneYear/sickFiveYear) into one list, each row
+// tagged with which category/index it actually lives at in the store (needed so
+// lmToggleDone/lmConfirmRemoveRow/lmEditRowLive -- all category+idx based -- keep working
+// unchanged against the merged view), then filters and sorts by nearest anniversary first.
 function lmBuildUpcomingRows(ck, year) {
   var store = lmGetStore(ck, year);
   var rows = [];
   ['oneYear', 'fiveYear', 'sickOneYear', 'sickFiveYear'].forEach(function(cat) {
-    (store[cat] || []).filter(function(r){ return !r.done; }).forEach(function(r) {
-      rows.push(Object.assign({}, r, {
-        _leaveType: cat.indexOf('sick') === 0 ? 'Sick' : 'Vacation',
-        _tier: (cat === 'oneYear' || cat === 'sickOneYear') ? '1yr' : (r.yearsOfService + 'yr')
-      }));
+    (store[cat] || []).forEach(function(r) {
+      rows.push({
+        row: r, category: cat, idx: store[cat].indexOf(r),
+        leaveType: cat.indexOf('sick') === 0 ? 'Sick' : 'Vacation',
+        tier: (cat === 'oneYear' || cat === 'sickOneYear') ? '1yr' : (r.yearsOfService + 'yr')
+      });
     });
   });
+  if (!window._lmShowDoneUpcoming) rows = rows.filter(function(x){ return !x.row.done; });
   var filterText = window._lmUpcomingFilter || '';
   if (filterText) {
-    rows = rows.filter(function(r) {
+    rows = rows.filter(function(x) {
+      var r = x.row;
       var haystack = (r.empId + ' ' + r.lastName + ' ' + r.firstName).toLowerCase();
       return haystack.indexOf(filterText) >= 0;
     });
   }
   rows.sort(function(a, b) {
-    var at = a.anniversary ? new Date(a.anniversary).getTime() : Infinity;
-    var bt = b.anniversary ? new Date(b.anniversary).getTime() : Infinity;
+    var at = a.row.anniversary ? new Date(a.row.anniversary).getTime() : Infinity;
+    var bt = b.row.anniversary ? new Date(b.row.anniversary).getTime() : Infinity;
     return at - bt;
   });
   return rows;
 }
 
 function lmRenderUpcomingSection(ck) {
-  var collapsed = !!window._lmCollapsed['upcoming'];
-  var rows = lmBuildUpcomingRows(ck, window._lmActiveYear);
-  var headerBar = '<div onclick="lmToggleCollapse(\'upcoming\')" style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;user-select:none;background:#F8F8FA;border:1px solid #EBEBEF;border-radius:' + (collapsed?'14px':'14px 14px 0 0') + ';">'
-    + '<i class="ti ti-chevron-' + (collapsed?'right':'down') + '" style="font-size:13px;color:#6b6b80;"></i>'
-    + '<span style="font-size:12px;font-weight:600;color:#1a1a2e;">Upcoming — who’s due next (' + rows.length + ')</span>'
-    + '</div>';
-  if (collapsed) return headerBar;
+  var allRows = lmBuildUpcomingRows(ck, window._lmActiveYear);
+  var storeForCount = lmGetStore(ck, window._lmActiveYear);
+  var doneCount = ['oneYear','fiveYear','sickOneYear','sickFiveYear'].reduce(function(sum, cat) {
+    return sum + (storeForCount[cat] || []).filter(function(r){ return r.done; }).length;
+  }, 0);
 
-  var toolbar = '<div style="padding:10px;background:#fff;border-left:1px solid #EBEBEF;border-right:1px solid #EBEBEF;border-bottom:1px solid #EBEBEF;">'
-    + '<input type="text" placeholder="Search by name or Employee ID..." value="' + (window._lmUpcomingFilter||'') + '" oninput="lmSetUpcomingFilter(this.value)" style="width:100%;max-width:280px;padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;">'
+  var toolbar = '<div style="padding:10px;border-bottom:1px solid #EBEBEF;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+    + '<input type="text" placeholder="Search by name or Employee ID..." value="' + (window._lmUpcomingFilter||'') + '" oninput="lmSetUpcomingFilter(this.value)" style="flex:1;min-width:200px;max-width:280px;padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;">'
+    + (doneCount ? '<button onclick="lmToggleShowDoneUpcoming()" style="font-size:11px;color:#6b6b80;background:#F4F4F8;border:1px solid #EBEBEF;border-radius:12px;padding:6px 10px;cursor:pointer;font-family:Rubik,sans-serif;">' + (window._lmShowDoneUpcoming ? 'Hide completed' : 'Show completed (' + doneCount + ')') + '</button>' : '')
     + '</div>';
 
-  if (!rows.length) {
-    return headerBar + toolbar + '<div style="padding:16px;text-align:center;color:#9898a6;font-size:12px;background:#fff;border:1px solid #EBEBEF;border-top:none;border-radius:0 0 14px 14px;">' + (window._lmUpcomingFilter ? 'No matches for this search.' : 'Nothing pending across any tier.') + '</div>';
+  if (!allRows.length) {
+    return '<div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow:hidden;">' + toolbar
+      + '<div style="padding:24px;text-align:center;color:#9898a6;font-size:12px;">' + (window._lmUpcomingFilter ? 'No matches for this search.' : 'Nothing tracked yet. Upload reports or add a row manually.') + '</div></div>';
   }
 
-  return headerBar + toolbar
-    + '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-top:none;border-radius:0 0 14px 14px;background:#fff;">'
-    + '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+  function hdr(label) { return '<th style="padding:8px 10px;text-align:left;white-space:nowrap;">' + label + '</th>'; }
+
+  return '<div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow:hidden;">' + toolbar
+    + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">'
     + '<thead><tr style="background:#F4F4F8;">'
-    + '<th style="padding:8px 10px;text-align:left;">Emp ID</th><th style="padding:8px 10px;text-align:left;">Name</th>'
-    + '<th style="padding:8px 10px;text-align:left;">Leave Type</th><th style="padding:8px 10px;text-align:left;">Tier</th>'
-    + '<th style="padding:8px 10px;text-align:left;">Anniversary</th></tr></thead><tbody>'
-    + rows.map(function(r) {
-        return '<tr style="border-bottom:1px solid #F4F4F8;">'
-          + '<td style="padding:8px 10px;">' + r.empId + '</td>'
+    + hdr('Emp ID') + hdr('Name') + hdr('Leave Type') + hdr('Tier') + hdr('Hire Date') + hdr('Anniversary')
+    + hdr('Current Bal.') + hdr('Used') + hdr('Should Be') + hdr('For Manual Edit') + hdr('Total for Year') + hdr('Credits to Add')
+    + '<th style="padding:8px 10px;"></th></tr></thead><tbody>'
+    + allRows.map(function(x) {
+        var r = x.row;
+        var isOneYearTier = (x.category === 'oneYear' || x.category === 'sickOneYear');
+        return '<tr style="border-bottom:1px solid #F4F4F8;' + (r.done?'opacity:0.5;':'') + '">'
+          + '<td style="padding:8px 10px;white-space:nowrap;">' + r.empId + '</td>'
           + '<td style="padding:8px 10px;white-space:nowrap;">' + r.lastName + ', ' + r.firstName + '</td>'
-          + '<td style="padding:8px 10px;">' + r._leaveType + '</td>'
-          + '<td style="padding:8px 10px;">' + r._tier + '</td>'
-          + '<td style="padding:8px 10px;">' + fmtLMDate(r.anniversary) + '</td>'
-          + '</tr>';
+          + '<td style="padding:8px 10px;white-space:nowrap;">' + x.leaveType + '</td>'
+          + '<td style="padding:8px 10px;white-space:nowrap;">' + x.tier + '</td>'
+          + '<td style="padding:8px 10px;white-space:nowrap;">' + fmtLMDate(r.hireDate) + '</td>'
+          + '<td style="padding:8px 10px;white-space:nowrap;">' + fmtLMDate(r.anniversary) + '</td>'
+          + '<td style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? lmEditableCell(x.category, x.idx, 'currentBalance', r.currentBalance) : '—') + '</td>'
+          + '<td style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? lmEditableCell(x.category, x.idx, 'used', r.used) : '—') + '</td>'
+          + '<td id="lm-shouldbe-' + x.category + '-' + x.idx + '" style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? r.shouldBe.toFixed(2) : '—') + '</td>'
+          + '<td id="lm-formanual-' + x.category + '-' + x.idx + '" style="padding:8px 10px;text-align:right;font-weight:600;color:#32CE13;">' + (isOneYearTier ? r.forManualEdit.toFixed(2) : '—') + '</td>'
+          + '<td style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? '—' : r.totalCreditsForYear) + '</td>'
+          + '<td style="padding:8px 10px;text-align:right;font-weight:600;color:#32CE13;">' + (isOneYearTier ? '—' : ((r.creditsToAdd>=0?'+':'') + r.creditsToAdd)) + '</td>'
+          + '<td style="padding:8px 10px;">' + lmActionButtons(x.category, x.idx, r.done) + '</td></tr>';
       }).join('')
-    + '</tbody></table></div>';
+    + '</tbody></table></div></div>';
 }
 
 function renderLeaveMonitoringLive() {
   var ck = window.currentWsClient || window._wsClient || '';
-  var store = lmGetStore(ck, window._lmActiveYear);
-  var oneYearEl = document.getElementById('lm-live-oneyear');
-  var fiveYearEl = document.getElementById('lm-live-fiveyear');
-  if (!oneYearEl || !fiveYearEl) return;
-
   var yearSwitcherEl = document.getElementById('lm-year-switcher');
   if (yearSwitcherEl) yearSwitcherEl.innerHTML = lmYearSwitcherHtml(ck);
   var mutateActionsEl = document.getElementById('lm-mutate-actions');
   if (mutateActionsEl) mutateActionsEl.style.display = lmIsActiveYearReadOnly() ? 'none' : 'flex';
   var upcomingEl = document.getElementById('lm-upcoming-section');
-  if (upcomingEl && typeof lmRenderUpcomingSection === 'function') upcomingEl.innerHTML = lmRenderUpcomingSection(ck);
-
-  // ── 1-Year Tenure Transfers ──
-  var oneYearAll = lmApplyFilterSort(store.oneYear, 'oneYear');
-  var oneYearDoneCount = oneYearAll.filter(function(r){ return r.done; }).length;
-  var oneYearVisible = window._lmShowDone.oneYear ? oneYearAll : oneYearAll.filter(function(r){ return !r.done; });
-  var oneYearCollapsed = !!window._lmCollapsed['oneYear'];
-
-  var oneYearToolbar = '<div style="padding:10px;border-bottom:1px solid #EBEBEF;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-    + '<input type="text" placeholder="Search by name or Employee ID..." value="' + (window._lmFilter.oneYear||'') + '" oninput="lmSetFilter(\'oneYear\',this.value)" style="flex:1;min-width:200px;max-width:280px;padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;">'
-    + (oneYearDoneCount ? '<button onclick="lmToggleShowDone(\'oneYear\')" style="font-size:11px;color:#6b6b80;background:#F4F4F8;border:1px solid #EBEBEF;border-radius:12px;padding:6px 10px;cursor:pointer;font-family:Rubik,sans-serif;">' + (window._lmShowDone.oneYear ? 'Hide completed' : 'Show completed (' + oneYearDoneCount + ')') + '</button>' : '')
-    + '</div>';
-
-  var oneYearHeaderBar = '<div onclick="lmToggleCollapse(\'oneYear\')" style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;user-select:none;background:#F8F8FA;border-bottom:' + (oneYearCollapsed?'none':'1px solid #EBEBEF') + ';">'
-    + '<i class="ti ti-chevron-' + (oneYearCollapsed?'right':'down') + '" style="font-size:13px;color:#6b6b80;"></i>'
-    + '<span style="font-size:12px;font-weight:600;color:#1a1a2e;">1-Year Tenure Transfers (' + store.oneYear.length + ')</span>'
-    + '</div>';
-
-  if (!store.oneYear.length) {
-    oneYearEl.innerHTML = oneYearHeaderBar + (oneYearCollapsed ? '' : '<div style="padding:24px;text-align:center;color:#9898a6;font-size:12px;">No 1-year transfers tracked yet. Upload reports or add a row manually.</div>');
-  } else if (oneYearCollapsed) {
-    oneYearEl.innerHTML = oneYearHeaderBar;
-  } else {
-    function oyHdr(label, col, align) {
-      return '<th onclick="lmSetSort(\'oneYear\',\'' + col + '\')" style="padding:8px 10px;text-align:' + align + ';cursor:pointer;user-select:none;white-space:nowrap;">' + label + lmSortIndicator('oneYear', col) + '</th>';
-    }
-    oneYearEl.innerHTML = oneYearHeaderBar + oneYearToolbar
-      + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;"><colgroup>' + LM_ONEYEAR_COLS.map(function(w){return '<col style="width:'+w+';">';}).join('') + '</colgroup>'
-      + '<thead><tr style="background:#F4F4F8;">'
-      + oyHdr('Emp ID','empId','left') + oyHdr('Name','lastName','left') + oyHdr('Hire Date','hireDate','left') + oyHdr('Anniversary','anniversary','left')
-      + oyHdr('Current Bal.','currentBalance','right') + oyHdr('Used','used','right') + oyHdr('Should Be','shouldBe','right')
-      + oyHdr('For Manual Edit','forManualEdit','right') + '<th style="padding:8px 10px;"></th></tr></thead><tbody>'
-      + oneYearVisible.map(function(r) {
-          var i = store.oneYear.indexOf(r);
-          return '<tr style="border-bottom:1px solid #F4F4F8;' + (r.done?'opacity:0.5;':'') + '">'
-            + '<td style="padding:8px 10px;overflow:hidden;text-overflow:ellipsis;">' + r.empId + '</td>'
-            + '<td style="padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + r.lastName + ', ' + r.firstName + '</td>'
-            + '<td style="padding:8px 10px;">' + fmtLMDate(r.hireDate) + '</td>'
-            + '<td style="padding:8px 10px;">' + fmtLMDate(r.anniversary) + '</td>'
-            + '<td style="padding:8px 10px;text-align:right;">' + lmEditableCell('oneYear', i, 'currentBalance', r.currentBalance) + '</td>'
-            + '<td style="padding:8px 10px;text-align:right;">' + lmEditableCell('oneYear', i, 'used', r.used) + '</td>'
-            + '<td id="lm-shouldbe-oneYear-' + i + '" style="padding:8px 10px;text-align:right;">' + r.shouldBe.toFixed(2) + '</td>'
-            + '<td id="lm-formanual-oneYear-' + i + '" style="padding:8px 10px;text-align:right;font-weight:600;color:#32CE13;">' + r.forManualEdit.toFixed(2) + '</td>'
-            + '<td style="padding:8px 10px;">' + lmActionButtons('oneYear', i, r.done) + '</td></tr>';
-        }).join('')
-      + '</tbody></table></div>'
-      + (oneYearVisible.length === 0 ? '<div style="padding:16px;text-align:center;color:#9898a6;font-size:12px;">' + (window._lmFilter.oneYear ? 'No matches for this search.' : 'All caught up \u2014 nothing pending.') + '</div>' : '');
-  }
-
-  // ── 5+ Years Tenure Transfers — split into one section per tenure year, with 14+ years
-  // always merged into a single combined section (they all cap at the same 25 credits) ──
-  var fiveYearAll = lmApplyFilterSort(store.fiveYear, 'fiveYear');
-  var fiveYearDoneCountTotal = fiveYearAll.filter(function(r){ return r.done; }).length;
-  var fiveYearVisibleAll = window._lmShowDone.fiveYear ? fiveYearAll : fiveYearAll.filter(function(r){ return !r.done; });
-  var fiveYearCollapsed = !!window._lmCollapsed['fiveYear'];
-
-  var fiveYearHeaderBar = '<div onclick="lmToggleCollapse(\'fiveYear\')" style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;user-select:none;background:#F8F8FA;border-bottom:' + (fiveYearCollapsed?'none':'1px solid #EBEBEF') + ';">'
-    + '<i class="ti ti-chevron-' + (fiveYearCollapsed?'right':'down') + '" style="font-size:13px;color:#6b6b80;"></i>'
-    + '<span style="font-size:12px;font-weight:600;color:#1a1a2e;">5+ Years Tenure Transfers (' + store.fiveYear.length + ')</span>'
-    + '</div>';
-
-  if (!store.fiveYear.length) {
-    fiveYearEl.innerHTML = fiveYearHeaderBar + (fiveYearCollapsed ? '' : '<div style="padding:24px;text-align:center;color:#9898a6;font-size:12px;">No 5+ year transfers tracked yet. Upload reports or add a row manually.</div>');
-  } else if (fiveYearCollapsed) {
-    fiveYearEl.innerHTML = fiveYearHeaderBar;
-  } else {
-    var fiveYearToolbar = '<div style="padding:10px;border-bottom:1px solid #EBEBEF;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-      + '<input type="text" placeholder="Search by name or Employee ID..." value="' + (window._lmFilter.fiveYear||'') + '" oninput="lmSetFilter(\'fiveYear\',this.value)" style="flex:1;min-width:200px;max-width:280px;padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;">'
-      + (fiveYearDoneCountTotal ? '<button onclick="lmToggleShowDone(\'fiveYear\')" style="font-size:11px;color:#6b6b80;background:#F4F4F8;border:1px solid #EBEBEF;border-radius:12px;padding:6px 10px;cursor:pointer;font-family:Rubik,sans-serif;">' + (window._lmShowDone.fiveYear ? 'Hide completed' : 'Show completed (' + fiveYearDoneCountTotal + ')') + '</button>' : '')
-      + '</div>';
-
-    var byYear = {};
-    fiveYearVisibleAll.forEach(function(r) {
-      var groupKey = r.yearsOfService >= 14 ? '14plus' : String(r.yearsOfService);
-      if (!byYear[groupKey]) byYear[groupKey] = [];
-      byYear[groupKey].push(r);
-    });
-    var yearsSorted = Object.keys(byYear).sort(function(a,b) {
-      var av = a === '14plus' ? 999 : Number(a), bv = b === '14plus' ? 999 : Number(b);
-      return av - bv;
-    });
-
-    function fyHdr(label, col, align) {
-      return '<th onclick="lmSetSort(\'fiveYear\',\'' + col + '\')" style="padding:8px 10px;text-align:' + align + ';cursor:pointer;user-select:none;white-space:nowrap;">' + label + lmSortIndicator('fiveYear', col) + '</th>';
-    }
-
-    fiveYearEl.innerHTML = fiveYearHeaderBar + fiveYearToolbar
-      + yearsSorted.map(function(groupKey) {
-          var rows = byYear[groupKey];
-          var yearLabel = groupKey === '14plus' ? '14+ Years Tenure' : (groupKey + ' Years Tenure');
-          var sectionId = 'fiveYear_' + groupKey;
-          var sectionCollapsed = !!window._lmCollapsed[sectionId];
-          var subHeader = '<div onclick="lmToggleCollapse(\'' + sectionId + '\')" style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:#FAFAFA;font-size:12px;font-weight:600;color:#1a1a2e;border-bottom:1px solid #EBEBEF;cursor:pointer;user-select:none;">'
-            + '<i class="ti ti-chevron-' + (sectionCollapsed?'right':'down') + '" style="font-size:12px;color:#9898a6;"></i>' + yearLabel + ' (' + rows.length + ')</div>';
-          if (sectionCollapsed) return subHeader;
-          return subHeader
-            + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;margin-bottom:4px;"><colgroup>' + LM_FIVEYEAR_COLS.map(function(w){return '<col style="width:'+w+';">';}).join('') + '</colgroup>'
-            + '<thead><tr style="background:#FAFAFA;">'
-            + fyHdr('Emp ID','empId','left') + fyHdr('Name','lastName','left') + fyHdr('Hire Date','hireDate','left')
-            + fyHdr('Anniversary','anniversary','left') + fyHdr('Total for Year','totalCreditsForYear','right') + fyHdr('Add','creditsToAdd','right') + '<th style="padding:8px 10px;"></th></tr></thead><tbody>'
-            + rows.map(function(r) {
-                var i = store.fiveYear.indexOf(r);
-                return '<tr style="border-bottom:1px solid #F4F4F8;' + (r.done?'opacity:0.5;':'') + '">'
-                  + '<td style="padding:8px 10px;overflow:hidden;text-overflow:ellipsis;">' + r.empId + '</td>'
-                  + '<td style="padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + r.lastName + ', ' + r.firstName + '</td>'
-                  + '<td style="padding:8px 10px;">' + fmtLMDate(r.hireDate) + '</td>'
-                  + '<td style="padding:8px 10px;">' + fmtLMDate(r.anniversary) + '</td>'
-                  + '<td style="padding:8px 10px;text-align:right;">' + r.totalCreditsForYear + '</td>'
-                  + '<td style="padding:8px 10px;text-align:right;font-weight:600;color:#32CE13;" title="The incremental credit added AT this transfer \u2014 moving up exactly one tier from whatever they had the year before, regardless of which year tier this is.">+' + r.creditsToAdd + '</td>'
-                  + '<td style="padding:8px 10px;">' + lmActionButtons('fiveYear', i, r.done) + '</td></tr>';
-              }).join('')
-            + '</tbody></table></div>';
-        }).join('')
-      + (fiveYearVisibleAll.length === 0 ? '<div style="padding:16px;text-align:center;color:#9898a6;font-size:12px;">' + (window._lmFilter.fiveYear ? 'No matches for this search.' : 'All caught up \u2014 nothing pending.') + '</div>' : '');
-  }
-
-  // ── Sick Leave — 1-Year Tenure Transfers only (no 5+ years escalation) ──
-  var sickEl = document.getElementById('lm-live-sick');
-  if (sickEl) {
-    var sickAll = lmApplyFilterSort(store.sickOneYear, 'sickOneYear');
-    var sickDoneCount = sickAll.filter(function(r){ return r.done; }).length;
-    var sickVisible = window._lmShowDone.sickOneYear ? sickAll : sickAll.filter(function(r){ return !r.done; });
-
-    var sickToolbar = '<div style="padding:10px;border-bottom:1px solid #EBEBEF;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-      + '<input type="text" placeholder="Search by name or Employee ID..." value="' + (window._lmFilter.sickOneYear||'') + '" oninput="lmSetFilter(\'sickOneYear\',this.value)" style="flex:1;min-width:200px;max-width:280px;padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;">'
-      + (sickDoneCount ? '<button onclick="lmToggleShowDone(\'sickOneYear\')" style="font-size:11px;color:#6b6b80;background:#F4F4F8;border:1px solid #EBEBEF;border-radius:12px;padding:6px 10px;cursor:pointer;font-family:Rubik,sans-serif;">' + (window._lmShowDone.sickOneYear ? 'Hide completed' : 'Show completed (' + sickDoneCount + ')') + '</button>' : '')
-      + '</div>';
-
-    if (!store.sickOneYear.length) {
-      sickEl.innerHTML = '<div style="padding:24px;text-align:center;color:#9898a6;font-size:12px;">No Sick Leave transfers tracked yet. Upload reports to populate this.</div>';
-    } else {
-      function skHdr(label, col, align) {
-        return '<th onclick="lmSetSort(\'sickOneYear\',\'' + col + '\')" style="padding:8px 10px;text-align:' + align + ';cursor:pointer;user-select:none;white-space:nowrap;">' + label + lmSortIndicator('sickOneYear', col) + '</th>';
-      }
-      sickEl.innerHTML = sickToolbar
-        + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;"><colgroup>' + LM_ONEYEAR_COLS.map(function(w){return '<col style="width:'+w+';">';}).join('') + '</colgroup>'
-        + '<thead><tr style="background:#F4F4F8;">'
-        + skHdr('Emp ID','empId','left') + skHdr('Name','lastName','left') + skHdr('Hire Date','hireDate','left') + skHdr('Anniversary','anniversary','left')
-        + skHdr('Current Bal.','currentBalance','right') + skHdr('Used','used','right') + skHdr('Should Be','shouldBe','right')
-        + skHdr('For Manual Edit','forManualEdit','right') + '<th style="padding:8px 10px;"></th></tr></thead><tbody>'
-        + sickVisible.map(function(r) {
-            var i = store.sickOneYear.indexOf(r);
-            return '<tr style="border-bottom:1px solid #F4F4F8;' + (r.done?'opacity:0.5;':'') + '">'
-              + '<td style="padding:8px 10px;overflow:hidden;text-overflow:ellipsis;">' + r.empId + '</td>'
-              + '<td style="padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + r.lastName + ', ' + r.firstName + '</td>'
-              + '<td style="padding:8px 10px;">' + fmtLMDate(r.hireDate) + '</td>'
-              + '<td style="padding:8px 10px;">' + fmtLMDate(r.anniversary) + '</td>'
-              + '<td style="padding:8px 10px;text-align:right;">' + lmEditableCell('sickOneYear', i, 'currentBalance', r.currentBalance) + '</td>'
-              + '<td style="padding:8px 10px;text-align:right;">' + lmEditableCell('sickOneYear', i, 'used', r.used) + '</td>'
-              + '<td id="lm-shouldbe-sickOneYear-' + i + '" style="padding:8px 10px;text-align:right;">' + r.shouldBe.toFixed(2) + '</td>'
-              + '<td id="lm-formanual-sickOneYear-' + i + '" style="padding:8px 10px;text-align:right;font-weight:600;color:#32CE13;">' + r.forManualEdit.toFixed(2) + '</td>'
-              + '<td style="padding:8px 10px;">' + lmActionButtons('sickOneYear', i, r.done) + '</td></tr>';
-          }).join('')
-        + '</tbody></table></div>'
-        + (sickVisible.length === 0 ? '<div style="padding:16px;text-align:center;color:#9898a6;font-size:12px;">' + (window._lmFilter.sickOneYear ? 'No matches for this search.' : 'All caught up \u2014 nothing pending.') + '</div>' : '');
-    }
-  }
-
-  // ── Sick Leave 5+ years — only shown if this client's policy has Sick escalation enabled ──
-  var sickCreditConfig = (typeof lmGetCreditConfig === 'function') ? lmGetCreditConfig(ck) : {};
-  var sickFiveWrapper = document.getElementById('lm-sick-fiveyear-wrapper');
-  var sickOneYearNote = document.getElementById('lm-sick-oneyear-note');
-  if (sickCreditConfig.sickEscalates) {
-    if (sickFiveWrapper) sickFiveWrapper.style.display = 'block';
-    if (sickOneYearNote) sickOneYearNote.textContent = 'This client\u2019s Sick Leave also escalates by tenure year, like Vacation.';
-    var sickFiveEl = document.getElementById('lm-live-sick-fiveyear');
-    if (sickFiveEl) {
-      var sickFiveAll = lmApplyFilterSort(store.sickFiveYear, 'sickFiveYear');
-      var sickFiveDoneCount = sickFiveAll.filter(function(r){ return r.done; }).length;
-      var sickFiveVisible = window._lmShowDone.sickFiveYear ? sickFiveAll : sickFiveAll.filter(function(r){ return !r.done; });
-
-      if (!store.sickFiveYear.length) {
-        sickFiveEl.innerHTML = '<div style="padding:24px;text-align:center;color:#9898a6;font-size:12px;">No Sick Leave 5+ year transfers tracked yet.</div>';
-      } else {
-        var sickByYear = {};
-        sickFiveVisible.forEach(function(r) {
-          var groupKey = r.yearsOfService >= 14 ? '14plus' : String(r.yearsOfService);
-          if (!sickByYear[groupKey]) sickByYear[groupKey] = [];
-          sickByYear[groupKey].push(r);
-        });
-        var sickYearsSorted = Object.keys(sickByYear).sort(function(a,b) {
-          var av = a === '14plus' ? 999 : Number(a), bv = b === '14plus' ? 999 : Number(b);
-          return av - bv;
-        });
-        function sfHdr(label, col, align) {
-          return '<th onclick="lmSetSort(\'sickFiveYear\',\'' + col + '\')" style="padding:8px 10px;text-align:' + align + ';cursor:pointer;user-select:none;white-space:nowrap;">' + label + lmSortIndicator('sickFiveYear', col) + '</th>';
-        }
-        sickFiveEl.innerHTML = sickYearsSorted.map(function(groupKey) {
-          var rows = sickByYear[groupKey];
-          var yearLabel = groupKey === '14plus' ? '14+ Years Tenure' : (groupKey + ' Years Tenure');
-          return '<div style="padding:8px 14px;background:#FAFAFA;font-size:12px;font-weight:600;color:#1a1a2e;border-bottom:1px solid #EBEBEF;">' + yearLabel + ' (' + rows.length + ')</div>'
-            + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;margin-bottom:4px;"><colgroup>' + LM_FIVEYEAR_COLS.map(function(w){return '<col style="width:'+w+';">';}).join('') + '</colgroup>'
-            + '<thead><tr style="background:#FAFAFA;">'
-            + sfHdr('Emp ID','empId','left') + sfHdr('Name','lastName','left') + sfHdr('Hire Date','hireDate','left')
-            + sfHdr('Anniversary','anniversary','left') + sfHdr('Total for Year','totalCreditsForYear','right') + sfHdr('Add','creditsToAdd','right') + '<th style="padding:8px 10px;"></th></tr></thead><tbody>'
-            + rows.map(function(r) {
-                var i = store.sickFiveYear.indexOf(r);
-                return '<tr style="border-bottom:1px solid #F4F4F8;' + (r.done?'opacity:0.5;':'') + '">'
-                  + '<td style="padding:8px 10px;overflow:hidden;text-overflow:ellipsis;">' + r.empId + '</td>'
-                  + '<td style="padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + r.lastName + ', ' + r.firstName + '</td>'
-                  + '<td style="padding:8px 10px;">' + fmtLMDate(r.hireDate) + '</td>'
-                  + '<td style="padding:8px 10px;">' + fmtLMDate(r.anniversary) + '</td>'
-                  + '<td style="padding:8px 10px;text-align:right;">' + r.totalCreditsForYear + '</td>'
-                  + '<td style="padding:8px 10px;text-align:right;font-weight:600;color:#32CE13;">' + (r.creditsToAdd>=0?'+':'') + r.creditsToAdd + '</td>'
-                  + '<td style="padding:8px 10px;">' + lmActionButtons('sickFiveYear', i, r.done) + '</td></tr>';
-              }).join('')
-            + '</tbody></table></div>';
-        }).join('');
-      }
-    }
-  } else {
-    if (sickFiveWrapper) sickFiveWrapper.style.display = 'none';
-    if (sickOneYearNote) sickOneYearNote.textContent = 'Sick Leave only needs 1st-year top-up tracking \u2014 it renews automatically in Sprout HR every year after, unlike Vacation, which escalates with tenure.';
-  }
+  if (upcomingEl) upcomingEl.innerHTML = lmRenderUpcomingSection(ck);
 }
 
 function lmEditRow(category, idx, field, value) {
