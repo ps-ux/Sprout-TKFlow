@@ -752,6 +752,7 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
     console.error('Session check failed', err);
     showLoginForm();
   });
+
 })();
 
 // Auto-logout after inactivity: warns 60s before actually signing out, so an idle tab doesn't
@@ -2846,7 +2847,21 @@ function switchTab(tab) {
   if (tab === 'ws-profile')  { setTimeout(function(){ if (typeof renderClientProfile==='function') { var _pk2 = (window.currentWsGroup && typeof clientGroups !== 'undefined' && clientGroups[window.currentWsGroup]) ? window.currentWsGroup : (window.currentWsClient||''); renderClientProfile(_pk2); } if (typeof renderPolicyFiles==='function') renderPolicyFiles(); if (typeof renderTKCalendar==='function') renderTKCalendar(); }, 30); }
   if (tab === 'ws-email')    { setTimeout(function(){ if (typeof _emailRestore==='function') _emailRestore();  }, 30); }
   if (tab === 'ws-logs')    { setTimeout(function(){ if (typeof renderAdhocLogs==='function') renderAdhocLogs(); }, 30); }
-  if (tab === 'ws-tasks')   { if (typeof renderWsTasksSections === 'function') renderWsTasksSections(window.currentWsClient || window._wsClient); if (typeof checkCutoffRollover === 'function' && window.currentWsClient) checkCutoffRollover(window.currentWsClient); }
+  if (tab === 'ws-tasks')   {
+    if (typeof renderWsTasksSections === 'function') renderWsTasksSections(window.currentWsClient || window._wsClient);
+    // Tasks shows an aggregate view across every subcompany in the group (see
+    // renderWsTasksSections' _subsForTasks), but rollover was only ever checked for
+    // whichever sub happened to be selected in the switcher -- the other subs' cut-off
+    // labels silently never advanced past a closed period unless someone manually clicked
+    // through each one's own switcher tab while on this exact tab. Check all of them.
+    if (typeof checkCutoffRollover === 'function') {
+      var _grpForRollover = window.currentWsGroup && clientGroups[window.currentWsGroup];
+      var _subsForRollover = (_grpForRollover && _grpForRollover.subs)
+        ? _grpForRollover.subs.filter(function(k){ return clients[k] && !clients[k]._churned; })
+        : (window.currentWsClient ? [window.currentWsClient] : []);
+      _subsForRollover.forEach(function(sk){ checkCutoffRollover(sk); });
+    }
+  }
   if (tab === 'ws-overview' && window.currentWsGroup && typeof renderGroupOverview === 'function') { renderGroupOverview(window.currentWsGroup); }
   if (tab === 'ws-leave')   { setTimeout(function(){ if (typeof renderLeaveMonitoringLive === 'function') renderLeaveMonitoringLive(); }, 30); }
   if (tab === 'ws-lcv')     { setTimeout(function(){ if (typeof lcvRenderHome === 'function') lcvRenderHome(); }, 30); }
@@ -8482,8 +8497,16 @@ function saveCutoffProcessing(clientKey, entry) {
     company_id: companyId, cutoff_label: entry.cutoffLabel,
     started_at: entry.startedAt || null, finished_at: entry.finishedAt || null,
     tasks_done: entry.tasksDone || 0, total_tasks: entry.totalTasks || 0
-  }, { onConflict: 'company_id,cutoff_label' }).then(function(res) {
-    if (res.error) console.warn('Could not save cutoff processing history for ' + clientKey, res.error);
+  }, { onConflict: 'company_id,cutoff_label' }).select().then(function(res) {
+    if (res.error) { console.warn('Could not save cutoff processing history for ' + clientKey, res.error); return; }
+    // RLS can let an upsert report success with res.error === null while returning 0 rows
+    // (the write itself is invisible to its own RETURNING clause) -- confirmed happening on
+    // the users table in an earlier session, treat it the same way here rather than trusting
+    // a null error alone.
+    if (!res.data || !res.data.length) {
+      console.warn('Cutoff processing save for ' + clientKey + ' reported success but saved 0 rows -- check RLS policies on client_cutoff_processing');
+      if (typeof showToast === 'function') showToast('Processing history did not save for ' + (clients[clientKey] && clients[clientKey].name || clientKey) + ' (permissions issue)', '#c0392b');
+    }
   });
 }
 
@@ -8921,6 +8944,26 @@ function _cutoffPromptDismiss(dedupeKey) {
   try { localStorage.setItem('tkflow_cutoff_prompts_dismissed', JSON.stringify(store)); } catch (e) {}
 }
 
+// appConfirm reuses a single shared modal element, so calling it again before the first one
+// is resolved silently clobbers it -- whichever call fires last wins the visible modal while
+// the earlier one's dedupe key was already marked "asked" (see _cutoffPromptDismiss below,
+// which fires before the modal is shown), permanently skipping that subcompany's prompt.
+// This queue makes checkCutoffRollover's prompts run one at a time when a group has several
+// subcompanies whose cut-offs closed at once, instead of only the last one ever surfacing.
+window._cutoffRolloverQueue = window._cutoffRolloverQueue || [];
+window._cutoffRolloverQueueRunning = window._cutoffRolloverQueueRunning || false;
+function _queueCutoffPrompt(runFn) {
+  window._cutoffRolloverQueue.push(runFn);
+  _drainCutoffRolloverQueue();
+}
+function _drainCutoffRolloverQueue() {
+  if (window._cutoffRolloverQueueRunning) return;
+  var next = window._cutoffRolloverQueue.shift();
+  if (!next) return;
+  window._cutoffRolloverQueueRunning = true;
+  next(function() { window._cutoffRolloverQueueRunning = false; _drainCutoffRolloverQueue(); });
+}
+
 function checkCutoffRollover(key) {
   var clientObj = clients[key];
   if (!clientObj) return;
@@ -8996,14 +9039,16 @@ function checkCutoffRollover(key) {
     var behindMsg = periodsBehind > 1
       ? ('You\u2019re ' + periodsBehind + ' periods behind.\n\n')
       : '';
-    appConfirm(
-      'Cut-off has ended',
-      clientObj.name + '\u2019s cutoff (' + oldLabelReal + ') has ended.\n\n' +
-      behindMsg +
-      'Catch up to ' + realLabel + ' (attendance: ' + targetPeriod.attCov + ')? This will reset all task statuses to pending for this client.',
-      function() { doReset(realLabel); },
-      { okLabel: 'Catch up' }
-    );
+    _queueCutoffPrompt(function(done) {
+      appConfirm(
+        'Cut-off has ended',
+        clientObj.name + '\u2019s cutoff (' + oldLabelReal + ') has ended.\n\n' +
+        behindMsg +
+        'Catch up to ' + realLabel + ' (attendance: ' + targetPeriod.attCov + ')? This will reset all task statuses to pending for this client.',
+        function() { doReset(realLabel); done(); },
+        { okLabel: 'Catch up', onCancel: done }
+      );
+    });
     return;
   }
 
@@ -9023,13 +9068,15 @@ function checkCutoffRollover(key) {
 
   var oldLabel = clientObj.cutoff;
   var newLabel = formatCutoffLabel(currentRange, clientObj.payrollType);
-  appConfirm(
-    'Cut-off has ended',
-    clientObj.name + '\u2019s cutoff (' + oldLabel + ') has ended.\n\n' +
-    'Start fresh for ' + newLabel + '? This will reset all task statuses to pending for this client.',
-    function() { doReset(newLabel); },
-    { okLabel: 'Start fresh' }
-  );
+  _queueCutoffPrompt(function(done) {
+    appConfirm(
+      'Cut-off has ended',
+      clientObj.name + '\u2019s cutoff (' + oldLabel + ') has ended.\n\n' +
+      'Start fresh for ' + newLabel + '? This will reset all task statuses to pending for this client.',
+      function() { doReset(newLabel); done(); },
+      { okLabel: 'Start fresh', onCancel: done }
+    );
+  });
 }
 
 function getTaskStatus(taskKey) {
@@ -18031,7 +18078,7 @@ function appConfirm(title, message, onConfirm, opts) {
   var newOk = okBtn.cloneNode(true); okBtn.parentNode.replaceChild(newOk, okBtn);
   var newCancel = cancelBtn.cloneNode(true); cancelBtn.parentNode.replaceChild(newCancel, cancelBtn);
   newOk.addEventListener('click', function() { modal.style.display = 'none'; onConfirm(); });
-  newCancel.addEventListener('click', function() { modal.style.display = 'none'; });
+  newCancel.addEventListener('click', function() { modal.style.display = 'none'; if (typeof opts.onCancel === 'function') opts.onCancel(); });
   modal.style.display = 'flex';
 }
 
