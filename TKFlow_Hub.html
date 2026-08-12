@@ -5865,6 +5865,16 @@ function churnSubcompany(groupKey, subKey) {
   _persistCompanyStatus(subKey, 'Churned');
   addToArchives(groupKey, [subKey], today, reason || 'No reason given', '', true);
 
+  // Policy Bank's file list can be scoped to exactly this one subcompany (see
+  // renderPolicyFiles' window._policyFilterSub) -- if that's the sub just churned, the
+  // list would otherwise keep filtering to a key nothing renders under anymore, which reads
+  // as "the uploaded files disappeared" even though nothing was actually deleted. Clear the
+  // filter back to the group aggregate and refresh both it and Client Profile's own
+  // subcompany list, neither of which this function used to re-render at all.
+  if (window._policyFilterSub === subKey) window._policyFilterSub = null;
+  if (typeof renderClientProfile === 'function') renderClientProfile(groupKey);
+  if (typeof filterPolicyFiles === 'function') filterPolicyFiles();
+  if (typeof renderTKCalendar === 'function') renderTKCalendar();
   if (typeof renderClientCards === 'function') renderClientCards();
   if (typeof renderSidebarClients === 'function') renderSidebarClients();
   if (typeof showToast === 'function') showToast(c.name + ' churned' + (remainingActive.length ? ' \u2014 ' + grp.name + ' stays active' : ''));
