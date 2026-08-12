@@ -12210,6 +12210,13 @@ function renderTKReview() {
 function tkRecomputeDaysAbsent(r) {
   r.daysAbsent = (r.evidence||[]).filter(function(e){ return (e.flagType||'absent') === 'absent'; })
     .reduce(function(sum, e){ return sum + (e.isHalfDay ? 0.5 : 1); }, 0);
+  r._absentMismatchAcked = false; // evidence changed -- any prior mismatch acknowledgment is stale
+}
+function tkAbsentMismatch(r) {
+  var absentCount = (r.evidence||[]).filter(function(e){ return (e.flagType||'absent')==='absent'; })
+    .reduce(function(sum,e){ return sum + (e.isHalfDay ? 0.5 : 1); }, 0);
+  var fileAbsentVal = (typeof r.fileDaysAbsent === 'number') ? r.fileDaysAbsent : null;
+  return fileAbsentVal !== null && Math.abs(fileAbsentVal - absentCount) > 0.001;
 }
 function tkUpdateRemark(rowIdx, evIdx, val) {
   if (tkReviewRows[rowIdx] && tkReviewRows[rowIdx].evidence[evIdx]) {
@@ -13354,8 +13361,28 @@ function tkUpdateRemark(rowIdx, evIdx, val) {
 }
 
 function toggleTKRow(i) {
-  tkReviewRows[i].checked = !tkReviewRows[i].checked;
-  tkReviewRows[i]._collapsed = tkReviewRows[i].checked; // auto-collapse once confirmed, auto-expand if un-confirmed
+  var r = tkReviewRows[i];
+  // Confirming (not un-confirming) a row whose detected absence count doesn't match the
+  // file's own Summary figure requires an explicit acknowledgment first, so a count gap
+  // can't slip through just because nobody looked twice at the amber banner.
+  if (!r.checked && tkAbsentMismatch(r) && !r._absentMismatchAcked) {
+    var detected = (r.evidence||[]).filter(function(e){ return (e.flagType||'absent')==='absent'; })
+      .reduce(function(sum,e){ return sum + (e.isHalfDay ? 0.5 : 1); }, 0);
+    appConfirm(
+      'Absence count mismatch',
+      r.name + ': the file’s Summary tab reports ' + r.fileDaysAbsent + ' day(s) absent, but ' + detected + ' were flagged from the daily records. Confirm anyway?',
+      function() {
+        r._absentMismatchAcked = true;
+        r.checked = true;
+        r._collapsed = true;
+        renderTKReview();
+      },
+      { okLabel: 'Confirm anyway', cancelLabel: 'Review dates' }
+    );
+    return;
+  }
+  r.checked = !r.checked;
+  r._collapsed = r.checked; // auto-collapse once confirmed, auto-expand if un-confirmed
   renderTKReview();
 }
 function tkToggleCollapse(i) { tkReviewRows[i]._collapsed = !tkReviewRows[i]._collapsed; renderTKReview(); }
