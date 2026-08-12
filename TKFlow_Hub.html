@@ -12284,6 +12284,34 @@ function tkRemoveEvidenceRow(rowIdx, evIdx) {
   renderTKReview();
 }
 
+// Builds a remark for a date (re-)added by hand from the Detailed Tab Browser or the manual
+// date picker, reusing the exact half-day/remark detection the automatic scan uses (exposed on
+// window by runValidation, see detectHalfDay/deriveRemark) -- so a manually (re-)added date
+// reads identically to one the scan itself flagged, including correctly marking it as a half
+// day (weight 0.5) instead of silently defaulting to a full absence.
+function tkBuildManualRemark(detRow, dayBios, hasApp, appType) {
+  var appSuffix = hasApp ? 'has ' + appType : 'no application submitted';
+  if (!detRow) return { remark: hasApp ? 'has ' + appType : '', isHalfDay: false };
+  var biologs = detRow.biologs || '';
+  var bioU = biologs.toUpperCase();
+  if (bioU === 'NO LOGS' || bioU === '') {
+    return { remark: 'No Logs; ' + appSuffix, isHalfDay: false };
+  }
+  if (typeof window._tkDetectHalfDay === 'function') {
+    var halfDayResult = window._tkDetectHalfDay(detRow.shift || '', biologs, detRow.totalHrs || 0, detRow.undertimeMins || 0);
+    if (halfDayResult) {
+      return {
+        remark: 'Half Day Absent — ' + halfDayResult.reason + (hasApp ? '; Has ' + appType : '; No Pending Application'),
+        isHalfDay: true
+      };
+    }
+  }
+  if (typeof window._tkDeriveRemark === 'function') {
+    return { remark: window._tkDeriveRemark(biologs, dayBios || [], hasApp, appType), isHalfDay: false };
+  }
+  return { remark: appSuffix, isHalfDay: false };
+}
+
 function tkAddManualDate(rowIdx) {
   var input = document.getElementById('manual-date-' + rowIdx);
   if (!input || !input.value) return;
@@ -12296,6 +12324,13 @@ function tkAddManualDate(rowIdx) {
   var r = tkReviewRows[rowIdx];
   if (!r) return;
 
+  var alreadyAbsent = r.evidence.some(function(e){ return e.date === dateStr && (e.flagType||'absent') === 'absent'; });
+  if (alreadyAbsent) {
+    if (typeof showToast === 'function') showToast(dateStr + ' already added');
+    input.value = '';
+    return;
+  }
+
   // Get biolog entries for this date from stored data
   var dayBios = (r.bioByDate && r.bioByDate[dk]) ? r.bioByDate[dk] : [];
   // Get apps for this date
@@ -12307,18 +12342,7 @@ function tkAddManualDate(rowIdx) {
   // Find detailed row for this date
   var detRow = (r.allDetailedRows || []).find(function(dr) { return dr.dk === dk; });
 
-  var remark = '';
-  if (detRow) {
-    // Derive remark from detailed row using biologs tab
-    var bioU = (detRow.biologs || '').toUpperCase();
-    if (bioU === 'NO LOGS') {
-      var inLogs  = dayBios.filter(function(b){ return b.mode.toLowerCase() === 'in'; });
-      var outLogs = dayBios.filter(function(b){ return b.mode.toLowerCase() === 'out'; });
-      if (outLogs.length > 0 && inLogs.length === 0) remark = 'Missing IN Log; ' + (hasApp ? 'has ' + appType : 'no application submitted');
-      else if (inLogs.length > 0 && outLogs.length === 0) remark = 'Missing OUT Log; ' + (hasApp ? 'has ' + appType : 'no application submitted');
-      else remark = 'No Logs; ' + (hasApp ? 'has ' + appType : 'no application submitted');
-    }
-  }
+  var built = tkBuildManualRemark(detRow, dayBios, hasApp, appType);
 
   // Update biologs to include ±1 day around this new date
   var prev = new Date(d); prev.setDate(prev.getDate()-1);
@@ -12338,10 +12362,11 @@ function tkAddManualDate(rowIdx) {
     shift: detRow ? detRow.shift : '(manual)',
     biologs: detRow ? detRow.biologs : '(manual)',
     totalHrs: detRow ? detRow.totalHrs : 0,
-    isSameTime: false, remark: remark, applications: matchedApps
+    isSameTime: false, flagType: 'absent', isHalfDay: built.isHalfDay,
+    remark: built.remark, applications: matchedApps
   });
   tkRecomputeDaysAbsent(r);
-  r.remarks.push(remark);
+  r.remarks.push(built.remark);
   input.value = '';
   renderTKReview();
   if (typeof showToast === 'function') showToast('Date added: ' + dateStr);
@@ -12386,7 +12411,11 @@ function tkOpenDetailedBrowser(rowIdx) {
         var tParts2     = (row.biologs||'').match(/(\d+:\d+\s*[AP]M)\s+TO\s+(\d+:\d+\s*[AP]M)/i);
         var isSameTimeRow = tParts2 && tParts2[1].trim().toUpperCase()===tParts2[2].trim().toUpperCase();
         var isSuspicious  = isNoLogs || isSameTimeRow || isLateRow || isShortHrs || isUnpaidRow || isUnpaidHol;
-        var alreadyAdded  = r.evidence.some(function(e){ return e.date === row.date; });
+        // Only counts an ABSENT-type entry for this date -- a date can carry a separate
+        // late/undertime evidence entry alongside (or after) its absent one is removed, and
+        // that leftover entry was making this look "already added" even once the actual
+        // absence had been deleted, permanently blocking re-adding it from here.
+        var alreadyAdded  = r.evidence.some(function(e){ return e.date === row.date && (e.flagType||'absent') === 'absent'; });
         var rowBg    = alreadyAdded ? '#edfae8' : (isSuspicious ? '#fffaec' : 'transparent');
         var bioColor = isNoLogs ? 'var(--tm-600)' : (isSuspicious ? 'var(--ca-600)' : 'var(--text-primary)');
         return '<tr style="background:'+rowBg+';border-bottom:1px solid #EBEBEF;">'
@@ -12421,7 +12450,11 @@ function tkAddDateFromBrowser(rowIdx, dk) {
   var d = detRow.dateObj;
   var dateStr = detRow.date;
 
-  if (r.dates.indexOf(dateStr) >= 0) {
+  // Same fix as the "already added" check above: only an ABSENT-type entry for this date
+  // should block re-adding it -- a leftover late/undertime entry for the same date (after the
+  // absent one was deleted) must not.
+  var alreadyAbsent = r.evidence.some(function(e){ return e.date === dateStr && (e.flagType||'absent') === 'absent'; });
+  if (alreadyAbsent) {
     if (typeof showToast === 'function') showToast(dateStr + ' already added');
     return;
   }
@@ -12433,15 +12466,7 @@ function tkAddDateFromBrowser(rowIdx, dk) {
   var hasApp = matchedApps.length > 0;
   var appType = hasApp ? (matchedApps.length > 1 ? matchedApps.length + ' applications (check dates)' : matchedApps[0].type+(matchedApps[0].status?' ('+matchedApps[0].status+')':'')) : '';
 
-  var remark = '';
-  var bioU = (detRow.biologs||'').toUpperCase();
-  if (bioU === 'NO LOGS') {
-    var ins  = dayBios.filter(function(b){ return b.mode.toLowerCase()==='in'; });
-    var outs = dayBios.filter(function(b){ return b.mode.toLowerCase()==='out'; });
-    if (outs.length>0&&ins.length===0) remark='Missing IN Log; '+(hasApp?'has '+appType:'no application submitted');
-    else if (ins.length>0&&outs.length===0) remark='Missing OUT Log; '+(hasApp?'has '+appType:'no application submitted');
-    else remark='No Logs; '+(hasApp?'has '+appType:'no application submitted');
-  }
+  var built = tkBuildManualRemark(detRow, dayBios, hasApp, appType);
 
   // Update biologs
   var prev=new Date(d); prev.setDate(prev.getDate()-1);
@@ -12459,10 +12484,11 @@ function tkAddDateFromBrowser(rowIdx, dk) {
   r.evidence.push({
     date:dateStr, dateObj:d, day:detRow.day,
     shift:detRow.shift, biologs:detRow.biologs, totalHrs:detRow.totalHrs,
-    isSameTime:false, remark:remark, applications:matchedApps
+    isSameTime:false, flagType:'absent', isHalfDay: built.isHalfDay,
+    remark:built.remark, applications:matchedApps
   });
   tkRecomputeDaysAbsent(r);
-  r.remarks.push(remark);
+  r.remarks.push(built.remark);
 
   // Refresh browser row highlight
   document.getElementById('tk-detail-browser').remove();
@@ -13347,51 +13373,6 @@ function tkOpenSummaryPicker() {
   document.body.insertAdjacentHTML('beforeend', html);
 }
 
-function tkUpdateRemark(rowIdx, evIdx, val) {
-  if (tkReviewRows[rowIdx] && tkReviewRows[rowIdx].evidence[evIdx]) {
-    tkReviewRows[rowIdx].evidence[evIdx].remark = val;
-    if (tkReviewRows[rowIdx].remarks) tkReviewRows[rowIdx].remarks[evIdx] = val;
-  }
-}
-
-function tkAddManualDate(rowIdx) {
-  var input = document.getElementById('manual-date-' + rowIdx);
-  if (!input || !input.value) return;
-  var d = new Date(input.value);
-  var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  var DAYS   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  var dateStr = MONTHS[d.getMonth()] + ' ' + d.getDate();
-  var dayStr  = DAYS[d.getDay()];
-  var r = tkReviewRows[rowIdx];
-  // Add to evidence and dates if not already there
-  if (r.dates.indexOf(dateStr) < 0) {
-    r.dates.push(dateStr);
-    r.evidence.push({
-      date: dateStr, dateObj: d, day: dayStr,
-      shift: '(manual)', biologs: '(manual)', totalHrs: 0,
-      remark: '', applications: []
-    });
-    tkRecomputeDaysAbsent(r);
-    r.remarks.push('');
-  }
-  input.value = '';
-  renderTKReview();
-}
-
-function tkUpdateRemark(rowIdx, evIdx, val) {
-  if (tkReviewRows[rowIdx] && tkReviewRows[rowIdx].evidence[evIdx]) {
-    tkReviewRows[rowIdx].evidence[evIdx].remark = val;
-    if (tkReviewRows[rowIdx].remarks) tkReviewRows[rowIdx].remarks[evIdx] = val;
-  }
-}
-
-function tkUpdateRemark(rowIdx, evIdx, val) {
-  if (tkReviewRows[rowIdx] && tkReviewRows[rowIdx].evidence[evIdx]) {
-    tkReviewRows[rowIdx].evidence[evIdx].remark = val;
-    if (tkReviewRows[rowIdx].remarks) tkReviewRows[rowIdx].remarks[evIdx] = val;
-  }
-}
-
 function toggleTKRow(i) {
   var r = tkReviewRows[i];
   // Confirming (not un-confirming) a row whose detected absence count doesn't match the
@@ -13781,8 +13762,16 @@ function runValidation(opts) {
     var REQUIRED_HRS_FALLBACK = 9;
     var overrunPastShiftEnd = bioEndRel - shiftDur;
     var fileHasRealUndertime = undertimeMins > 0;
-    if (!fileHasRealUndertime && overrunPastShiftEnd > 60 && totalHrs > 0 && totalHrs < REQUIRED_HRS_FALLBACK - 1) {
-      return { half: 'short-total', reason: 'short of the required work hours' };
+    // Comparing against a flat "< 8 hrs" cutoff flagged anyone even a few minutes short of a
+    // full day (e.g. 7.93 hrs -- 4 min under 8) as a HALF day, which isn't what "half day" means.
+    // Using a fraction of the required day instead keeps the bar proportional to an actual half.
+    // Note this branch only runs when logs extend well past the shift's own end (see
+    // overrunPastShiftEnd above) -- someone arriving very late but leaving on time never
+    // reaches here at all; that's caught by missedMorning below instead, so this threshold has
+    // no effect on that scenario either way.
+    var HALF_DAY_HRS_THRESHOLD = REQUIRED_HRS_FALLBACK * 0.6; // 5.4 hrs
+    if (!fileHasRealUndertime && overrunPastShiftEnd > 60 && totalHrs > 0 && totalHrs < HALF_DAY_HRS_THRESHOLD) {
+      return { half: 'short-total', reason: 'only ' + totalHrs + ' of the required ' + REQUIRED_HRS_FALLBACK + ' hrs logged' };
     }
 
     var coveredStart = Math.max(bioStartRel, 0);
@@ -13884,6 +13873,14 @@ function runValidation(opts) {
     // Count entries - if only 1 entry total (not 2), it might just be a data entry issue
     return bioEntries.length <= 2; // Flagged if biolog tab shows <=2 entries for that day
   }
+
+  // Exposed globally (this closure isn't reachable from outside runValidation otherwise) so
+  // tkAddManualDate/tkAddDateFromBrowser can reuse this exact detection when a date is
+  // (re-)added by hand after the fact, instead of duplicating -- and risking drift from --
+  // this logic. Safe to rely on: the review UI these two functions operate on only exists
+  // after runValidation has already run at least once.
+  window._tkDetectHalfDay = detectHalfDay;
+  window._tkDeriveRemark = deriveRemark;
 
   function readFile(file) {
     return new Promise(function(resolve) {
