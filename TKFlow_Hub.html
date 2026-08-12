@@ -21598,6 +21598,10 @@ function dtmSaveEmailTime(inputValue) {
   var hour12 = hour % 12; if (hour12 === 0) hour12 = 12;
   var str = MONTHS[parseInt(m[2], 10) - 1] + ' ' + parseInt(m[3], 10) + ', ' + hour12 + ':' + min + ap;
   dtmSaveField('emailTime', str);
+  // dateSubmitted no longer has its own input (see fieldSpecs) -- keep it derived from
+  // Email Received so exports/table columns and the pushed-ticket TAT fallback still have a
+  // real date, without asking anyone to fill in the same date a second time.
+  dtmSaveField('dateSubmitted', m[1] + '-' + m[2] + '-' + m[3]);
   if (typeof recomputeAllDisputeTAT === 'function') recomputeAllDisputeTAT();
 }
 
@@ -21718,9 +21722,13 @@ function openDisputeTicket(id, clientContext) {
     // _openNewDisputeTicketInner) but previously frozen there forever with no way to correct
     // it if the ticket was actually logged some time after the email/report actually came in.
     // Editing this recomputes TAT immediately (see dtmSaveEmailTime) instead of waiting on
-    // the 60s auto-refresh.
+    // the 60s auto-refresh. Replaces the old separate "Date of Submission" input -- for a
+    // manually-logged ticket the two were always meant to be the same moment, so editing both
+    // was just filling in the same date twice (and could silently drift apart if only one got
+    // corrected). dtmSaveEmailTime keeps dateSubmitted in sync automatically; it still exists
+    // under the hood for exports/table columns and as the TAT fallback for pushed tickets that
+    // only ever send a date, never a time.
     ['Email Received',     'emailTime',     d, 'datetime'],
-    ['Date of Submission', 'dateSubmitted', d.dateSubmitted, 'date'],
     ['Date of Action',     'dateAction',    d.dateAction, 'date'],
     ['Payout Cut-off',     'payoutCutoff',  d.payoutCutoff || d.cutoff],
   ];
