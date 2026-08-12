@@ -5462,10 +5462,15 @@ function renderNotifCard() {
     });
   });
 
-  // Work anniversary transfers — on the exact anniversary day, or the last working day
-  // before it if the actual date falls on a weekend/holiday, from Leave Credits Monitoring,
-  // for clients this user actually processes.
+  // Work anniversary transfers -- starts showing on the anniversary day (or the last working
+  // day before it, if that falls on a weekend/holiday) and keeps showing every day after
+  // until actually marked done in Leave Credits Monitoring -- previously this only matched
+  // the single exact calculated day, so an unactioned reminder from yesterday just silently
+  // stopped generating today instead of carrying over as still-pending work. A row marked
+  // done keeps showing (as completed) only through the rest of the day it was marked, via
+  // lmToggleDone's doneAt stamp, then stops generating entirely from the next day on.
   var todayForLM = new Date(); todayForLM.setHours(0,0,0,0);
+  var todayISOForLM = todayForLM.getFullYear() + '-' + String(todayForLM.getMonth()+1).padStart(2,'0') + '-' + String(todayForLM.getDate()).padStart(2,'0');
   var seenLMClients = {};
   (currentUser.processClients || []).forEach(function(ck) {
     if (seenLMClients[ck]) return;
@@ -5474,15 +5479,20 @@ function renderNotifCard() {
     if (!lmStore) return;
     var clientName = (clients[ck] && clients[ck].name) || ck;
     (lmStore.oneYear || []).concat(lmStore.fiveYear || []).forEach(function(r) {
-      if (r.done || !r.anniversary) return;
+      if (!r.anniversary) return;
+      if (r.done) { if (r.doneAt !== todayISOForLM) return; }
       var reminderDate = lastWorkingDayOnOrBefore(r.anniversary, ck);
-      if (reminderDate.getTime() !== todayForLM.getTime()) return;
+      if (!r.done && reminderDate.getTime() > todayForLM.getTime()) return;
       var isEarly = reminderDate.getTime() !== new Date(r.anniversary.getFullYear(), r.anniversary.getMonth(), r.anniversary.getDate()).getTime();
+      var overdueDays = Math.round((todayForLM - reminderDate) / 86400000);
       var transferLabel = r.yearsOfService ? (r.yearsOfService + 'yr transfer') : '1yr transfer';
+      var statusText = r.done
+        ? ' \u2014 marked done'
+        : (overdueDays > 0 ? (' \u2014 ' + overdueDays + ' day' + (overdueDays > 1 ? 's' : '') + ' overdue') : (isEarly ? ' \u2014 actual date is ' + fmtLMDate(r.anniversary) : ' today'));
       notifs.push({
         id: 'lm-anniv-' + ck + '-' + r.empId,
-        timeSensitive: false, icon: 'ti-calendar-heart', color: '#7c3aed', bg: '#f3e8ff',
-        text: r.lastName + ', ' + r.firstName + ' \u2014 ' + transferLabel + (isEarly ? ' \u2014 actual date is ' + fmtLMDate(r.anniversary) : ' today'),
+        timeSensitive: !r.done, icon: 'ti-calendar-heart', color: '#7c3aed', bg: '#f3e8ff',
+        text: r.lastName + ', ' + r.firstName + ' \u2014 ' + transferLabel + statusText,
         sub: clientName + ' \u00b7 ' + fmtLMDate(r.anniversary),
         action: function(){ openWorkspace(ck); setTimeout(function(){ switchTab('ws-leave'); }, 80); }
       });
@@ -15619,8 +15629,18 @@ function lmEditRowLive(category, idx, field, value) {
 function lmToggleDone(category, idx) {
   var ck = window.currentWsClient || window._wsClient || '';
   var store = lmGetStore(ck);
-  if (store[category][idx]) store[category][idx].done = !store[category][idx].done;
+  var row = store[category][idx];
+  if (row) {
+    row.done = !row.done;
+    // Stamped so the anniversary-transfer notification (see renderNotifCard) can keep
+    // showing it as "done" for the rest of today it was actually completed, then stop
+    // generating it at all from tomorrow -- rather than either vanishing mid-session or
+    // sticking around forever once marked done.
+    var d = new Date();
+    row.doneAt = row.done ? (d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')) : null;
+  }
   renderLeaveMonitoringLive();
+  if (typeof renderNotifCard === 'function') renderNotifCard();
 }
 // Confirms before actually removing a row, since this can't be undone.
 function lmConfirmRemoveRow(category, idx) {
