@@ -447,6 +447,49 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
   @keyframes tkfSpin{to{transform:rotate(360deg);}}
 </style>
 <script>
+// ── Company color palette ───────────────────────────────────────────────────────────────
+// Single source of truth for avClass -> color, replacing ~6 previously duplicated inline
+// copies scattered across render functions (sidebar, group overview, calendar filter chips,
+// etc) that would each need hand-editing to add a color -- and were stuck at just 4 entries,
+// guaranteeing a collision for any group with more than 4 subcompanies (all 6 of HDI's were
+// hardcoded to the same one, 'av-o'). AV_TEXT_COLORS doubles as the calendar "accent" color
+// (see avClassAccentColor) since the two were already using identical values.
+var AV_PALETTE = ['av-g','av-b','av-o','av-p','av-t','av-pk','av-i','av-c'];
+var AV_BG_COLORS = {
+  'av-g':'#edfae8', 'av-b':'#e8f0fe', 'av-o':'#fff4e6', 'av-p':'#F5F3FF',
+  'av-t':'#E0F7F5', 'av-pk':'#FCE7F3', 'av-i':'#E0E7FF', 'av-c':'#CFFAFE'
+};
+var AV_TEXT_COLORS = {
+  'av-g':'#32CE13', 'av-b':'#1679FA', 'av-o':'#e67e00', 'av-p':'#16A34A',
+  'av-t':'#0D9488', 'av-pk':'#DB2777', 'av-i':'#4F46E5', 'av-c':'#0891B2'
+};
+
+// Deterministic hash so the same short_key always lands on the same palette index across
+// reloads regardless of load order -- avClass is never persisted to Supabase (no column for
+// it), so stability has to come from the key itself rather than "how many clients have been
+// processed so far this load," which is what the old Object.keys(clients).length-based
+// assignment depended on.
+function _avHashIndex(str, mod) {
+  var h = 0;
+  for (var i = 0; i < str.length; i++) { h = (h * 31 + str.charCodeAt(i)) >>> 0; }
+  return h % mod;
+}
+
+// Picks a color for a company, avoiding whatever active siblings in the same group are
+// already using (siblingClasses) when possible -- falls back to the plain hash pick if every
+// palette color is already taken (a group bigger than the whole palette isn't realistic
+// today, but this way it degrades to "may repeat" instead of throwing).
+function assignAvClass(shortKey, siblingClasses) {
+  siblingClasses = siblingClasses || [];
+  var start = _avHashIndex(shortKey || '', AV_PALETTE.length);
+  for (var i = 0; i < AV_PALETTE.length; i++) {
+    var candidate = AV_PALETTE[(start + i) % AV_PALETTE.length];
+    if (siblingClasses.indexOf(candidate) === -1) return candidate;
+  }
+  return AV_PALETTE[start];
+}
+</script>
+<script>
 (function(){
   var loginOverlay = document.getElementById('login-overlay');
   var loginChecking = document.getElementById('login-checking');
@@ -469,9 +512,8 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
   // makeDefaultClientEntry() uses, one field at a time, without
   // clobbering anything already present.
   function ensureClientTaskScaffold(existing, shortKey) {
-    var avatarColors = ['av-g', 'av-b', 'av-o', 'av-p'];
     if (!existing.av) existing.av = shortKey.slice(0, 3);
-    if (!existing.avClass) existing.avClass = avatarColors[Object.keys(clients).length % avatarColors.length];
+    if (!existing.avClass) existing.avClass = assignAvClass(shortKey);
     if (!existing.meta) existing.meta = 'Newly added';
     if (!existing.status) { existing.status = 'Pending'; existing.statusClass = 'wsp-b'; }
     if (!existing.cutoff) existing.cutoff = 'Not yet set';
@@ -550,10 +592,29 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       // above, since every pre-existing row defaults to '{}' and would otherwise wipe out any
       // in-memory profileMeta set earlier this same session.
       if (g.profile_meta && Object.keys(g.profile_meta).length) existingGroup.profileMeta = g.profile_meta;
-      var subs = (companiesRes.data || []).filter(function(c){ return c.group_id === g.id; });
+      // Sorted for determinism -- companiesRes.data has no explicit .order(), and the
+      // collision resolution below needs to process this group's subs in the same order
+      // every time regardless of whatever order Postgres happened to return rows in.
+      var subs = (companiesRes.data || []).filter(function(c){ return c.group_id === g.id; })
+        .sort(function(a,b){ return a.short_key < b.short_key ? -1 : (a.short_key > b.short_key ? 1 : 0); });
       existingGroup.subs = subs.map(function(c){ return c.short_key; });
       existingGroup.subNames = {};
       subs.forEach(function(c){ existingGroup.subNames[c.short_key] = c.name; });
+      // Resolve any avClass collisions within this group -- deterministic per (group
+      // composition, short_key), so it's stable across reloads rather than depending on load
+      // order. Catches both a fresh hash collision and legacy hardcoded seed data (HDI's six
+      // subcompanies were all originally 'av-o').
+      var usedAvClasses = [];
+      subs.forEach(function(c) {
+        var entry = clients[c.short_key];
+        if (!entry) return;
+        if (entry.avClass && usedAvClasses.indexOf(entry.avClass) === -1) {
+          usedAvClasses.push(entry.avClass);
+        } else {
+          entry.avClass = assignAvClass(c.short_key, usedAvClasses);
+          usedAvClasses.push(entry.avClass);
+        }
+      });
     });
 
     // A client with no group_id is still, by app convention, its own
@@ -1937,6 +1998,10 @@ var clients = {
   },
   HDI_CG: {
     av:'CGI', avClass:'av-o', name:'Capital Growth Inc.', group:'HDI', groupName:'HDI Group of Companies',
+    // HDI's 6 subs were all originally hardcoded to 'av-o' -- indistinguishable from each
+    // other in any calendar view that colors by client. Also self-heals at runtime now (see
+    // loadCompaniesFromSupabase's within-group avClass dedup), but fixed here too so the raw
+    // seed data itself isn't misleading.
     meta:'Semi-monthly · HDI Group',
     status:'Submitted', statusClass:'wsp-g',
     cutoff:'2nd Payout · May 9–22', hc:45, absent:2, disp:0, dispSub:'',
@@ -1959,7 +2024,7 @@ var clients = {
     tasks3:[], disputes:[], logs:[]
   },
   HDI_EL: {
-    av:'ERM', avClass:'av-o', name:'Erminland Realty Corporation', group:'HDI', groupName:'HDI Group of Companies',
+    av:'ERM', avClass:'av-t', name:'Erminland Realty Corporation', group:'HDI', groupName:'HDI Group of Companies',
     meta:'Semi-monthly · HDI Group',
     status:'Submitted', statusClass:'wsp-g',
     cutoff:'2nd Payout · May 9–22', hc:38, absent:1, disp:0, dispSub:'',
@@ -1982,7 +2047,7 @@ var clients = {
     tasks3:[], disputes:[], logs:[]
   },
   HDI_ADV: {
-    av:'ADV', avClass:'av-o', name:'HDI Adventures Inc.', group:'HDI', groupName:'HDI Group of Companies',
+    av:'ADV', avClass:'av-p', name:'HDI Adventures Inc.', group:'HDI', groupName:'HDI Group of Companies',
     meta:'Semi-monthly · HDI Group',
     status:'Submitted', statusClass:'wsp-g',
     cutoff:'2nd Payout · May 9–22', hc:52, absent:3, disp:0, dispSub:'',
@@ -2005,7 +2070,7 @@ var clients = {
     tasks3:[], disputes:[], logs:[]
   },
   HDI_STF: {
-    av:'STF', avClass:'av-o', name:'Stanford Finance Corporation', group:'HDI', groupName:'HDI Group of Companies',
+    av:'STF', avClass:'av-b', name:'Stanford Finance Corporation', group:'HDI', groupName:'HDI Group of Companies',
     meta:'Semi-monthly · HDI Group',
     status:'Submitted', statusClass:'wsp-g',
     cutoff:'2nd Payout · May 9–22', hc:41, absent:2, disp:0, dispSub:'',
@@ -2028,7 +2093,7 @@ var clients = {
     tasks3:[], disputes:[], logs:[]
   },
   HDI_HC: {
-    av:'HCR', avClass:'av-o', name:'Hillcroft Philippines Inc.', group:'HDI', groupName:'HDI Group of Companies',
+    av:'HCR', avClass:'av-pk', name:'Hillcroft Philippines Inc.', group:'HDI', groupName:'HDI Group of Companies',
     meta:'Semi-monthly · HDI Group',
     status:'Submitted', statusClass:'wsp-g',
     cutoff:'2nd Payout · May 9–22', hc:29, absent:1, disp:0, dispSub:'',
@@ -2051,7 +2116,7 @@ var clients = {
     tasks3:[], disputes:[], logs:[]
   },
   HDI_WLD: {
-    av:'WLD', avClass:'av-o', name:'HDI World Phils Inc', group:'HDI', groupName:'HDI Group of Companies',
+    av:'WLD', avClass:'av-i', name:'HDI World Phils Inc', group:'HDI', groupName:'HDI Group of Companies',
     meta:'Semi-monthly · HDI Group',
     status:'Submitted', statusClass:'wsp-g',
     cutoff:'2nd Payout · May 9–22', hc:33, absent:1, disp:0, dispSub:'',
@@ -2210,8 +2275,8 @@ function renderGroupOverview(grpKey) {
   var ovEl = document.getElementById('ws-overview');
   if (!ovEl) return;
 
-  var avColors  = {'av-g':'#edfae8','av-b':'#e8f0fe','av-o':'#fff4e6','av-p':'#F5F3FF'};
-  var txtColors = {'av-g':'#32CE13','av-b':'#1679FA','av-o':'#e67e00','av-p':'#16A34A'};
+  var avColors  = AV_BG_COLORS;
+  var txtColors = AV_TEXT_COLORS;
   var taskKeys   = ['variance','validation','disputes_summary','newhires','profile','payroll_instructions'];
   var taskLabels = {variance:'Variance Analysis',validation:'Current Attendance Validation',
     disputes_summary:'Dispute Summary',newhires:'New Hires Upload',
@@ -2675,8 +2740,8 @@ function switchWsCompany(subKey) {
   var grpKey = currentWsGroup;
   var grp = grpKey ? clientGroups[grpKey] : null;
   var subs = grp ? grp.subs.filter(function(k){ return clients[k] && !clients[k]._churned && currentUser.assignedClients.includes(k); }) : [subKey];
-  var avColors  = {'av-g':'#edfae8','av-b':'#e8f0fe','av-o':'#fff4e6','av-p':'#F5F3FF'};
-  var txtColors = {'av-g':'#32CE13','av-b':'#1679FA','av-o':'#e67e00','av-p':'#16A34A'};
+  var avColors  = AV_BG_COLORS;
+  var txtColors = AV_TEXT_COLORS;
 
   // Update tab active state
   subs.forEach(function(k) {
@@ -2703,8 +2768,8 @@ function closeWorkspace() {
   var container = document.getElementById('sidebar-client-links');
   if (!container) return;
 
-  var avColors  = {'av-g':'#edfae8','av-b':'#e8f0fe','av-o':'#fff4e6','av-p':'#F5F3FF'};
-  var txtColors = {'av-g':'#32CE13','av-b':'#1679FA','av-o':'#e67e00','av-p':'#16A34A'};
+  var avColors  = AV_BG_COLORS;
+  var txtColors = AV_TEXT_COLORS;
 
   container.innerHTML = '';
 
@@ -4509,9 +4574,10 @@ async function saveSubcompany() {
     }
   }
 
-  var avatarColors = ['av-g','av-b','av-o','av-p'];
-  var usedColors = Object.keys(clients).length;
-  var avCls = avatarColors[usedColors % avatarColors.length];
+  // Avoids whatever color the group's existing subcompanies already have, so a group never
+  // ends up with two visually-identical entries the moment a second/third sub is added.
+  var siblingAvClasses = (grp.subs || []).map(function(sk){ return clients[sk] && clients[sk].avClass; }).filter(Boolean);
+  var avCls = assignAvClass(code, siblingAvClasses);
 
   clients[code] = {
     av: code.slice(0,3),
@@ -4769,9 +4835,11 @@ async function _saveClientConfirmed() {
   // actually reads from (renderSidebarClients iterates clientGroups, not clients), so a
   // group entry must always be created too — this was the reason new clients never showed
   // up in the sidebar before, regardless of how correctly clients[key] itself was populated.
-  const avatarColors = ['av-g','av-b','av-o','av-p'];
-  const usedColors = Object.keys(clients).length;
-  const avCls = avatarColors[usedColors % avatarColors.length];
+  // Tracked across the whole batch (closure, populated inside makeDefaultClientEntry below)
+  // so a multi-entity group created in one go -- e.g. several entity tags added at once --
+  // gets a distinct color per entity instead of every one of them sharing the same single
+  // avCls the way this used to work.
+  var _newClientUsedAvClasses = [];
   // The main client/first entity (named via Client name, keyed via Short code) must always
   // be included alongside any additional entity tags, umbrella or not — entity tags are just
   // additional entities under the same client, not a replacement for the one typed in step 1.
@@ -4789,6 +4857,8 @@ async function _saveClientConfirmed() {
     // name — that real name lives in clientName. Every other tagged entity uses its own
     // label as its name directly.
     var entryName = (subLabel === key) ? clientName : subLabel;
+    var avCls = assignAvClass(subLabel, _newClientUsedAvClasses);
+    _newClientUsedAvClasses.push(avCls);
     return {
       av: subLabel.slice(0,3),
       avClass: avCls,
@@ -5062,10 +5132,9 @@ function lastWorkingDayOnOrBefore(dateObj, clientKey) {
 // chips, Client Assignments) -- reused here so calendar events shown outside a client's own
 // workspace (dashboard schedule, mini calendar, Team Calendar) are colored by which CLIENT
 // they belong to instead of just event type, making it possible to tell clients apart at a
-// glance in a shared view. Only 4 buckets exist (same limitation as everywhere else this
-// mapping is used), so cycles/repeats once there are more than 4 distinct clients.
+// glance in a shared view.
 function avClassAccentColor(avClass) {
-  return {'av-g':'#32CE13','av-b':'#1679FA','av-o':'#e67e00','av-p':'#16A34A'}[avClass] || '#6b6b80';
+  return AV_TEXT_COLORS[avClass] || '#6b6b80';
 }
 // Resolves a _calStore key (a real client short_key, or a group code for multi-entity
 // clients) to a representative avClass -- groups don't reliably carry their own avClass
@@ -17649,8 +17718,8 @@ function filterPolicyFiles() {
         filtersEl.dataset.builtFor = grpKey;
         filtersEl.innerHTML = '';
         filtersEl.style.cssText += ';gap:8px;flex-wrap:wrap;';
-        var avColors  = {'av-g':'#edfae8','av-b':'#e8f0fe','av-o':'#fff4e6','av-p':'#F5F3FF'};
-        var txtColors = {'av-g':'#32CE13','av-b':'#1679FA','av-o':'#e67e00','av-p':'#16A34A'};
+        var avColors  = AV_BG_COLORS;
+        var txtColors = AV_TEXT_COLORS;
         grp.subs.forEach(function(subKey) {
           var c = clients[subKey]; if (!c) return;
           var chip = document.createElement('div');
@@ -18610,8 +18679,8 @@ function renderArchives() {
     return;
   }
 
-  const avBg  = {'av-g':'#edfae8','av-b':'#e8f0fe','av-o':'#fff4e6','av-p':'#DCFCE7'};
-  const avTxt = {'av-g':'#32CE13','av-b':'#1679FA','av-o':'#e67e00','av-p':'#16A34A'};
+  const avBg  = AV_BG_COLORS;
+  const avTxt = AV_TEXT_COLORS;
 
   list.innerHTML = filtered.map((a, i) => '\n    <div style="background:#fff;border:1px solid #EBEBEF;border-radius:14px;padding:18px 20px;margin-bottom:12px;display:flex;align-items:flex-start;gap:16px;transition:box-shadow 0.12s;" onmouseover="this.style.boxShadow=\'0 2px 12px rgba(0,0,0,0.07)\'" onmouseout="this.style.boxShadow=\'none\'">\n      <!-- Avatar -->\n      <div style="width:46px;height:46px;border-radius:16px;background:' + (avBg[a.avClass]||'#edfae8') + ';color:' + (avTxt[a.avClass]||'#32CE13') + ';display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;opacity:0.7;">' + (a.av) + '</div>\n      <!-- Info -->\n      <div style="flex:1;min-width:0;">\n        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap;">\n          <div style="font-size:15px;font-weight:600;color:#1a1a2e;">' + (a.name) + '</div>\n          <span style="font-size:11px;background:#fff0f0;color:#c0392b;border:1px solid #f9a8d4;padding:2px 9px;border-radius:20px;font-weight:500;">' + (a.isPartial ? 'Subcompany churned' : 'Fully churned') + '</span>\n        </div>\n        ' + (!a.isPartial && a.subKeys && a.subKeys.length > 1 ? '<div style="font-size:11px;color:#9898a6;margin-bottom:6px;">' + a.subKeys.length + ' subcompanies: ' + a.subNames.join(', ') + '</div>' : '') + '\n        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px;">\n          <div style="background:#F8F8FA;border-radius:12px;padding:8px 12px;">\n            <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:3px;">Churned on</div>\n            <div style="font-size:13px;color:#1a1a2e;font-weight:500;">' + (new Date(a.churnDate).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})) + '</div>\n          </div>\n          <div style="background:#F8F8FA;border-radius:12px;padding:8px 12px;">\n            <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:3px;">Reason</div>\n            <div style="font-size:13px;color:#1a1a2e;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (a.reason) + '</div>\n          </div>\n          <div style="background:#F8F8FA;border-radius:12px;padding:8px 12px;">\n            <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:3px;">Last handler</div>\n            <div style="font-size:13px;color:#1a1a2e;font-weight:500;">' + (a.lastHandler) + '</div>\n          </div>\n        </div>\n        ' + (a.notes ? '<div style="margin-top:8px;font-size:12px;color:#9898a6;font-style:italic;">"' + (a.notes) + '"</div>' : '') + '\n      </div>\n      <!-- Actions -->\n      <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0;">\n        <button onclick="restoreFromArchive(' + (archivedClients.indexOf(a)) + ')" style="padding:7px 14px;background:#edfae8;color:#32CE13;border:1px solid #A6EB93;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;white-space:nowrap;"><i class="ti ti-refresh"></i> Restore</button>\n        <button onclick="deleteArchive(' + (archivedClients.indexOf(a)) + ')" style="padding:7px 14px;background:#fff;color:#9898a6;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;cursor:pointer;font-family:Rubik,sans-serif;white-space:nowrap;"><i class="ti ti-trash"></i> Delete</button>\n      </div>\n    </div>').join('');
 }
