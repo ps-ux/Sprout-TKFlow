@@ -569,6 +569,12 @@ function assignAvClass(shortKey, siblingClasses) {
       // would otherwise wipe out on every load.
       if (c.cutoffs && c.cutoffs.length) existing.cutoffs = c.cutoffs;
       existing.taskConfig = c.task_config;
+      // Leave Monitoring's credit policy is stashed inside taskConfig itself (see
+      // lmSaveSetup/_persistTaskConfig) rather than its own column -- pull it back out into
+      // the property lmGetCreditConfig() actually reads, so the policy survives a reload too.
+      if (existing.taskConfig && existing.taskConfig.leaveMonitoringConfig) {
+        existing.leaveMonitoringConfig = existing.taskConfig.leaveMonitoringConfig;
+      }
       existing.ticketingMode = c.ticketing_mode;
       existing.ticketingUrl = c.ticketing_url;
       // Churn state must round-trip through Supabase's companies.status column -- see
@@ -6648,6 +6654,7 @@ function setLeaveMonitoringEnabled(subKeysCsv, enabled) {
     if (!clients[sk]) return;
     if (!clients[sk].taskConfig) clients[sk].taskConfig = {};
     clients[sk].taskConfig.leave_monitoring = !!enabled;
+    if (typeof _persistTaskConfig === 'function') _persistTaskConfig(sk);
   });
   var leaveTabBtn = document.getElementById('tab-leave-btn');
   if (leaveTabBtn) leaveTabBtn.style.display = enabled ? 'flex' : 'none';
@@ -6753,6 +6760,11 @@ function lmSaveSetup() {
     };
     if (!clients[sk].taskConfig) clients[sk].taskConfig = {};
     clients[sk].taskConfig.leave_monitoring = true;
+    // Mirrored into taskConfig (rather than given its own column) so it round-trips through
+    // the same companies.task_config jsonb write/read _persistTaskConfig already does --
+    // otherwise the enabled flag would survive a reload but the credit policy itself wouldn't.
+    clients[sk].taskConfig.leaveMonitoringConfig = clients[sk].leaveMonitoringConfig;
+    if (typeof _persistTaskConfig === 'function') _persistTaskConfig(sk);
   });
 
   var modal = document.getElementById('lm-setup-modal');
@@ -6814,6 +6826,7 @@ function setLeaveCreditsValidationEnabled(subKeysCsv, enabled) {
     if (!clients[sk]) return;
     if (!clients[sk].taskConfig) clients[sk].taskConfig = {};
     clients[sk].taskConfig.leave_credits_validation = !!enabled;
+    if (typeof _persistTaskConfig === 'function') _persistTaskConfig(sk);
   });
   var lcvTabBtn = document.getElementById('tab-lcv-btn');
   if (lcvTabBtn) lcvTabBtn.style.display = enabled ? 'flex' : 'none';
@@ -6835,6 +6848,7 @@ function setEmailSupportEnabled(subKeysCsv, enabled) {
     if (!clients[sk]) return;
     if (!clients[sk].taskConfig) clients[sk].taskConfig = {};
     clients[sk].taskConfig.email_support = !!enabled;
+    if (typeof _persistTaskConfig === 'function') _persistTaskConfig(sk);
   });
   var disputesTabBtn = document.getElementById('tab-disputes-btn');
   if (disputesTabBtn) disputesTabBtn.style.display = enabled ? 'flex' : 'none';
