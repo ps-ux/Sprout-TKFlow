@@ -577,15 +577,16 @@ function assignAvClass(shortKey, siblingClasses) {
       existing._churned = c.status === 'Churned';
       if (existing._churned) existing.status = 'Churned';
       if (group) { existing.group = group.code; existing.groupName = group.name; }
-      // A manual color pick (see setCompanyAvClass) always wins over the automatic
-      // hash-based assignment ensureClientTaskScaffold's fallback would otherwise apply --
-      // must be set before that call so its "only fill in if missing" guard sees it.
+      // Only meaningful for a standalone client (no group_id) -- a grouped company's avClass
+      // gets overwritten by its group's own color further down regardless (see the groups
+      // loop below), since color is a whole-company concern now, not per subcompany. Must be
+      // set before ensureClientTaskScaffold so its "only fill in if missing" guard sees it.
       if (c.av_class) existing.avClass = c.av_class;
       ensureClientTaskScaffold(existing, c.short_key);
     });
 
     (groupsRes.data || []).forEach(function(g) {
-      if (!clientGroups[g.code]) clientGroups[g.code] = { name: g.name, av: g.code, avClass: 'av-g', subs: [], subNames: {} };
+      if (!clientGroups[g.code]) clientGroups[g.code] = { name: g.name, av: g.code, avClass: assignAvClass(g.code), subs: [], subNames: {} };
       var existingGroup = clientGroups[g.code];
       // Real company_groups.id -- calendars are shared per-group, so persistence needs this,
       // not the group code. Deliberately absent on the synthetic self-groups below (no real
@@ -596,28 +597,19 @@ function assignAvClass(shortKey, siblingClasses) {
       // above, since every pre-existing row defaults to '{}' and would otherwise wipe out any
       // in-memory profileMeta set earlier this same session.
       if (g.profile_meta && Object.keys(g.profile_meta).length) existingGroup.profileMeta = g.profile_meta;
-      // Sorted for determinism -- companiesRes.data has no explicit .order(), and the
-      // collision resolution below needs to process this group's subs in the same order
-      // every time regardless of whatever order Postgres happened to return rows in.
-      var subs = (companiesRes.data || []).filter(function(c){ return c.group_id === g.id; })
-        .sort(function(a,b){ return a.short_key < b.short_key ? -1 : (a.short_key > b.short_key ? 1 : 0); });
+      // A manual color pick (see setCompanyGroupAvClass) always wins; otherwise keep whatever
+      // this group already has (seed hardcoded value, or the assignAvClass default just above
+      // for a group with no seed entry at all).
+      existingGroup.avClass = g.av_class || existingGroup.avClass || assignAvClass(g.code);
+      var subs = (companiesRes.data || []).filter(function(c){ return c.group_id === g.id; });
       existingGroup.subs = subs.map(function(c){ return c.short_key; });
       existingGroup.subNames = {};
       subs.forEach(function(c){ existingGroup.subNames[c.short_key] = c.name; });
-      // Resolve any avClass collisions within this group -- deterministic per (group
-      // composition, short_key), so it's stable across reloads rather than depending on load
-      // order. Catches both a fresh hash collision and legacy hardcoded seed data (HDI's six
-      // subcompanies were all originally 'av-o').
-      var usedAvClasses = [];
+      // Calendars are scoped to the whole group, not each subcompany individually (see
+      // avClassForStoreKey) -- every sub just shows the group's one color rather than each
+      // having its own, which was never actually visible anywhere and just added noise.
       subs.forEach(function(c) {
-        var entry = clients[c.short_key];
-        if (!entry) return;
-        if (entry.avClass && usedAvClasses.indexOf(entry.avClass) === -1) {
-          usedAvClasses.push(entry.avClass);
-        } else {
-          entry.avClass = assignAvClass(c.short_key, usedAvClasses);
-          usedAvClasses.push(entry.avClass);
-        }
+        if (clients[c.short_key]) clients[c.short_key].avClass = existingGroup.avClass;
       });
     });
 
@@ -642,6 +634,9 @@ function assignAvClass(shortKey, siblingClasses) {
       clientGroups[c.short_key].name = c.name;
       clientGroups[c.short_key].subs = [c.short_key];
       clientGroups[c.short_key].subNames[c.short_key] = c.name;
+      // A standalone client IS its own group -- keep them in sync so a manual color pick
+      // (persisted on companies.av_class, applied to clients[] above) is reflected here too.
+      if (clients[c.short_key] && clients[c.short_key].avClass) clientGroups[c.short_key].avClass = clients[c.short_key].avClass;
       if (c.profile_meta && Object.keys(c.profile_meta).length) clientGroups[c.short_key].profileMeta = c.profile_meta;
     });
   }
@@ -3591,13 +3586,6 @@ function closeWorkspace() {
           </select>
         </div>
       </div>
-      <div style="margin-bottom:16px;">
-        <div class="field-label">Color</div>
-        <!-- Applies immediately on click (see setCompanyAvClass) rather than waiting on Save
-             changes below -- same instant-apply pattern as the sidebar/avatar swatches
-             elsewhere, and it needs to persist even if the rest of the form is untouched. -->
-        <div id="es-color-swatches" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
-      </div>
       <div style="font-size:11px;color:#9898a6;background:#F8F8FA;padding:8px 12px;border-radius:12px;"><i class="ti ti-info-circle" style="font-size:12px;vertical-align:-2px;"></i> Changing payroll type resets this subcompany's Cut-off Schedule to blank rows matching the new period count — same as changing it from Client Profile.</div>
     </div>
     <div style="padding:14px 22px;border-top:1px solid #EBEBEF;display:flex;gap:8px;justify-content:flex-end;">
@@ -4598,10 +4586,10 @@ async function saveSubcompany() {
     }
   }
 
-  // Avoids whatever color the group's existing subcompanies already have, so a group never
-  // ends up with two visually-identical entries the moment a second/third sub is added.
-  var siblingAvClasses = (grp.subs || []).map(function(sk){ return clients[sk] && clients[sk].avClass; }).filter(Boolean);
-  var avCls = assignAvClass(code, siblingAvClasses);
+  // Inherits the group's one color -- calendars are scoped to the whole group, not each
+  // subcompany individually, so a new sub having its own distinct color was never actually
+  // visible anywhere.
+  var avCls = grp.avClass || assignAvClass(groupKey);
 
   clients[code] = {
     av: code.slice(0,3),
@@ -4859,11 +4847,10 @@ async function _saveClientConfirmed() {
   // actually reads from (renderSidebarClients iterates clientGroups, not clients), so a
   // group entry must always be created too — this was the reason new clients never showed
   // up in the sidebar before, regardless of how correctly clients[key] itself was populated.
-  // Tracked across the whole batch (closure, populated inside makeDefaultClientEntry below)
-  // so a multi-entity group created in one go -- e.g. several entity tags added at once --
-  // gets a distinct color per entity instead of every one of them sharing the same single
-  // avCls the way this used to work.
-  var _newClientUsedAvClasses = [];
+  // One color for the whole company (group), not per entity -- calendars are already scoped
+  // to the group as a whole (see avClassForStoreKey), so subcompanies having their own
+  // distinct colors was never actually visible anywhere and just added noise.
+  var groupAvCls = assignAvClass(key);
   // The main client/first entity (named via Client name, keyed via Short code) must always
   // be included alongside any additional entity tags, umbrella or not — entity tags are just
   // additional entities under the same client, not a replacement for the one typed in step 1.
@@ -4881,11 +4868,9 @@ async function _saveClientConfirmed() {
     // name — that real name lives in clientName. Every other tagged entity uses its own
     // label as its name directly.
     var entryName = (subLabel === key) ? clientName : subLabel;
-    var avCls = assignAvClass(subLabel, _newClientUsedAvClasses);
-    _newClientUsedAvClasses.push(avCls);
     return {
       av: subLabel.slice(0,3),
-      avClass: avCls,
+      avClass: groupAvCls,
       name: entryName,
       meta: subKeys.length > 1 ? (groupDisplayName + ' \u2014 ' + subLabel) : 'Newly added',
       status: 'Pending',
@@ -5032,7 +5017,7 @@ async function _saveClientConfirmed() {
   clientGroups[key] = {
     name: groupDisplayName,
     av: clientCode.slice(0,3),
-    avClass: avCls,
+    avClass: groupAvCls,
     subs: subKeys,
     // Same reasoning as companyId above, but for the company_groups row -- lets a
     // just-created multi-entity client's calendar (shared across its subs) persist
@@ -5161,15 +5146,12 @@ function avClassAccentColor(avClass) {
   return AV_TEXT_COLORS[avClass] || '#6b6b80';
 }
 // Resolves a _calStore key (a real client short_key, or a group code for multi-entity
-// clients) to a representative avClass -- groups don't reliably carry their own avClass
-// (companies loaded from Supabase default every real group to 'av-g'), so this uses the
-// first sub's own avClass instead, which is diversified per-client at creation time.
+// clients) to its one avClass -- a standalone client is its own group (clientGroups[key]
+// exists for both cases, see loadCompaniesFromSupabase), and every sub within a real group
+// is kept in sync with its group's color, so this no longer needs a first-sub fallback.
 function avClassForStoreKey(storeKey) {
+  if (typeof clientGroups !== 'undefined' && clientGroups[storeKey] && clientGroups[storeKey].avClass) return clientGroups[storeKey].avClass;
   if (typeof clients !== 'undefined' && clients[storeKey]) return clients[storeKey].avClass;
-  if (typeof clientGroups !== 'undefined' && clientGroups[storeKey] && clientGroups[storeKey].subs && clientGroups[storeKey].subs.length) {
-    var firstSub = clientGroups[storeKey].subs[0];
-    return (clients[firstSub] && clients[firstSub].avClass) || 'av-g';
-  }
   return 'av-g';
 }
 
@@ -5905,43 +5887,57 @@ function openEditSubcompanyModal(sk) {
   document.getElementById('es-entity-name').value = c.name || '';
   document.getElementById('es-headcount').value = (c.hc != null ? c.hc : '');
   document.getElementById('es-payroll-type').value = c.payrollType || 'Semi-monthly';
-  renderEsColorSwatches(sk);
   var modal = document.getElementById('edit-subcompany-modal');
   if (modal) modal.style.display = 'flex';
 }
 
-// Renders one swatch per AV_PALETTE entry -- pulls from the same global palette everything
-// else (sidebar, calendars) reads from, so this picker automatically covers any color added
-// there later without needing its own separate hardcoded list.
-function renderEsColorSwatches(sk) {
-  var el = document.getElementById('es-color-swatches');
+// Renders one swatch per AV_PALETTE entry for the whole company (group), not each
+// subcompany -- calendars are scoped to the group as a whole (see avClassForStoreKey), so a
+// per-subcompany picker would change a color nothing actually shows separately.
+function renderProfileColorSwatches(companyOrGroupKey) {
+  var el = document.getElementById('ws-profile-color-swatches');
   if (!el) return;
-  var current = clients[sk] && clients[sk].avClass;
+  var grp = clientGroups[companyOrGroupKey];
+  var current = grp && grp.avClass;
   el.innerHTML = AV_PALETTE.map(function(cls) {
     var isActive = cls === current;
-    return '<div onclick="setCompanyAvClass(\'' + sk + '\',\'' + cls + '\')" title="' + cls + '" style="width:24px;height:24px;border-radius:50%;background:' + AV_TEXT_COLORS[cls] + ';cursor:pointer;border:2px solid ' + (isActive ? '#1a1a2e' : 'transparent') + ';box-shadow:0 0 0 1px ' + (isActive ? '#1a1a2e' : '#EBEBEF') + ';"></div>';
+    return '<div onclick="event.stopPropagation();setCompanyGroupAvClass(\'' + companyOrGroupKey + '\',\'' + cls + '\')" title="' + cls + '" style="width:18px;height:18px;border-radius:50%;background:' + AV_TEXT_COLORS[cls] + ';cursor:pointer;border:2px solid ' + (isActive ? '#1a1a2e' : 'transparent') + ';box-shadow:0 0 0 1px ' + (isActive ? '#1a1a2e' : '#EBEBEF') + ';"></div>';
   }).join('');
 }
 
-// Applies immediately (not gated behind the modal's Save changes button) since a color pick
-// is a complete action on its own -- persisted to companies.av_class so it survives a reload
-// instead of falling back to the automatic hash-based assignment (see assignAvClass).
-function setCompanyAvClass(key, avClass) {
-  var c = clients[key];
-  if (!c) return;
-  c.avClass = avClass;
-  renderEsColorSwatches(key);
+// Applies immediately -- sets the whole group's color (propagated to every sub, since they're
+// kept in sync, see loadCompaniesFromSupabase) and persists to company_groups.av_class for a
+// real multi-entity group, or companies.av_class for a standalone client (its own "group").
+function setCompanyGroupAvClass(companyOrGroupKey, avClass) {
+  var grp = clientGroups[companyOrGroupKey];
+  if (!grp) return;
+  grp.avClass = avClass;
+  (grp.subs || [companyOrGroupKey]).forEach(function(sk) {
+    if (clients[sk]) clients[sk].avClass = avClass;
+  });
+  renderProfileColorSwatches(companyOrGroupKey);
   if (typeof renderSidebarClients === 'function') renderSidebarClients();
   if (typeof renderClientCards === 'function') renderClientCards();
-  if (typeof renderClientProfile === 'function') renderClientProfile(window.currentWsGroup || window.currentWsClient || key);
   var wsAv = document.getElementById('ws-av');
-  if (wsAv && window.currentWsClient === key) wsAv.className = 'ws-av ' + avClass;
-  if (!c.companyId) return;
-  supabaseClient.from('companies').update({ av_class: avClass }).eq('id', c.companyId).select().then(function(res) {
-    if (res.error) { console.warn('Could not save company color for ' + key, res.error); if (typeof showToast === 'function') showToast('Could not save color: ' + res.error.message, '#c0392b'); return; }
-    if (!res.data || !res.data.length) { if (typeof showToast === 'function') showToast('Color did not save for ' + c.name + ' (permissions issue)', '#c0392b'); return; }
-    if (typeof showToast === 'function') showToast('Color updated for ' + c.name);
-  });
+  if (wsAv) wsAv.className = 'ws-av ' + avClass;
+
+  function reportError(err) { console.warn('Could not save company color for ' + companyOrGroupKey, err); if (typeof showToast === 'function') showToast('Could not save color: ' + err.message, '#c0392b'); }
+  function reportZeroRows() { if (typeof showToast === 'function') showToast('Color did not save for ' + grp.name + ' (permissions issue)', '#c0392b'); }
+  if (grp.groupId) {
+    supabaseClient.from('company_groups').update({ av_class: avClass }).eq('id', grp.groupId).select().then(function(res) {
+      if (res.error) return reportError(res.error);
+      if (!res.data || !res.data.length) return reportZeroRows();
+      if (typeof showToast === 'function') showToast('Color updated for ' + grp.name);
+    });
+  } else {
+    var c = clients[companyOrGroupKey];
+    if (!c || !c.companyId) return;
+    supabaseClient.from('companies').update({ av_class: avClass }).eq('id', c.companyId).select().then(function(res) {
+      if (res.error) return reportError(res.error);
+      if (!res.data || !res.data.length) return reportZeroRows();
+      if (typeof showToast === 'function') showToast('Color updated for ' + grp.name);
+    });
+  }
 }
 
 function closeEditSubcompanyModal() {
@@ -7250,7 +7246,7 @@ function renderClientProfile(key) {
     ? '<div style="font-size:11px;color:#9898a6;margin-top:2px;">Previously: ' + nameHistory[nameHistory.length - 1].oldName + (nameHistory.length > 1 ? ' <span onclick="event.stopPropagation();openNameHistoryModal(\'' + (grpKey || key) + '\')" style="color:#1679FA;cursor:pointer;text-decoration:underline;">(+' + (nameHistory.length - 1) + ' more)</span>' : '') + '</div>'
     : '';
 
-  // Lists every active entity with an Edit button (name/headcount/payroll type/color) --
+  // Lists every active entity with an Edit button (name/headcount/payroll type) --
   // previously the only way to reach openEditSubcompanyModal was a separate "Edit" button
   // buried in the Client Assignments page's expandable card, nowhere near where someone
   // managing entities would actually think to look (this page, right next to Add Subcompany).
@@ -7258,12 +7254,8 @@ function renderClientProfile(key) {
     + '<div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;">' + (subs.length > 1 ? 'Subcompanies' : 'Entity details') + '</div>'
     + subs.map(function(sk) {
         var sc = clients[sk];
-        var dotColor = AV_TEXT_COLORS[sc.avClass] || '#32CE13';
         return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;gap:8px;border-bottom:1px solid #F8F8FA;">'
-          + '<div style="display:flex;align-items:center;gap:8px;min-width:0;">'
-          + '<div title="' + (sc.avClass||'') + '" style="width:10px;height:10px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;"></div>'
           + '<div style="font-size:12px;color:#1a1a2e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (sc.name || sk) + '</div>'
-          + '</div>'
           + '<button onclick="openEditSubcompanyModal(\'' + sk + '\')" title="Edit this subcompany" style="padding:3px 10px;background:#fff;color:#6b6b80;border:1px solid #EBEBEF;border-radius:6px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;flex-shrink:0;">Edit</button>'
           + '</div>';
       }).join('')
@@ -7276,7 +7268,12 @@ function renderClientProfile(key) {
     + '<div style="flex:1;"><div style="display:flex;align-items:center;gap:6px;"><div style="font-size:16px;font-weight:600;color:#1a1a2e;">' + headerName + '</div>'
     + '<button onclick="openRenameClientModal(\'' + (grpKey || key) + '\')" title="Rename" style="padding:2px 6px;border:none;background:transparent;color:#6b6b80;cursor:pointer;"><i class="ti ti-edit" style="font-size:13px;"></i></button></div>'
     + prevNameNote
-    + '<div style="font-size:12px;color:#9898a6;margin-top:3px;">' + headerMeta + '</div></div>'
+    + '<div style="font-size:12px;color:#9898a6;margin-top:3px;">' + headerMeta + '</div>'
+    // One color for the whole company, applied to its avatar and every calendar view it
+    // appears in (see avClassForStoreKey) -- not per subcompany, since calendars are already
+    // scoped to the company as a whole.
+    + '<div id="ws-profile-color-swatches" style="display:flex;gap:6px;margin-top:8px;"></div>'
+    + '</div>'
     + '<button onclick="openAddSubcompanyModal(\'' + (grpKey || key) + '\')" style="padding:7px 14px;background:#fff;border:1px solid #A6EB93;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;flex-shrink:0;"><i class="ti ti-plus" style="font-size:13px;"></i> Add Subcompany</button>'
     + '</div>'
     + subsListSection
@@ -7304,6 +7301,8 @@ function renderClientProfile(key) {
     + '<div style="font-size:11px;color:#9898a6;margin-top:8px;margin-bottom:12px;">Turning a task off hides it from that subcompany\'s Tasks aggregate and the Group Overview\'s task-status table, and excludes it from task-completion counts.</div>'
     + '<button onclick="switchTab(\'ws-logs\')" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;background:#fff;border:1.5px solid #32CE13;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-arrow-right"></i> Log an out-of-scope item via Ad hoc logs</button>'
     + expandedScopeSection;
+
+  renderProfileColorSwatches(grpKey || key);
 }
 
 function initHub() {
