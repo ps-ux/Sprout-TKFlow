@@ -21569,6 +21569,38 @@ function dtmToDateInputValue(str) {
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 
+// Same fallback chain recomputeAllDisputeTAT() uses to find a dispute's real TAT basis time
+// (emailTime first, then a pushed ticket's real submittedAt, then the date-only fallback) --
+// shown here as an editable <input type="datetime-local"> instead of a frozen auto-stamp, so
+// a ticket logged well after the email actually came in can have its real received time
+// corrected. Reused rather than re-derived so this field can never disagree with what the
+// TAT badge itself is actually computed from.
+function dtmEmailTimeToInputValue(d) {
+  var basis = d.emailTime
+    || (typeof tatTimeFromISO === 'function' && tatTimeFromISO(d.submittedAt))
+    || (typeof tatTimeFromDateSubmitted === 'function' && tatTimeFromDateSubmitted(d.dateSubmitted));
+  var dt = (typeof parseTATEmailTime === 'function') ? parseTATEmailTime(basis) : null;
+  if (!dt) return '';
+  return dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0')
+    + 'T' + String(dt.getHours()).padStart(2,'0') + ':' + String(dt.getMinutes()).padStart(2,'0');
+}
+
+// Converts the datetime-local input's "YYYY-MM-DDTHH:mm" back into the "MMM D, h:mmAM/PM"
+// string every other emailTime in the app (seed tickets, tatTimeFromISO's output) already
+// uses, then saves it as the real emailTime -- taking priority over a pushed ticket's
+// submittedAt in the fallback chain above, exactly as a manual correction should.
+function dtmSaveEmailTime(inputValue) {
+  var m = (inputValue || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!m) return;
+  var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var hour = parseInt(m[4], 10), min = m[5];
+  var ap = hour >= 12 ? 'PM' : 'AM';
+  var hour12 = hour % 12; if (hour12 === 0) hour12 = 12;
+  var str = MONTHS[parseInt(m[2], 10) - 1] + ' ' + parseInt(m[3], 10) + ', ' + hour12 + ':' + min + ap;
+  dtmSaveField('emailTime', str);
+  if (typeof recomputeAllDisputeTAT === 'function') recomputeAllDisputeTAT();
+}
+
 // Date/s of Dispute supports multiple dates — stored as a comma-separated list of
 // "YYYY-MM-DD" values in d.disputeDates, same shape the ticketing tool's own
 // datesOfDispute array gets joined into on the way in.
@@ -21682,6 +21714,12 @@ function openDisputeTicket(id, clientContext) {
     ['Subcompany',       'entity',          d.entity || d.client, 'select', dtmSubcompanyOptions(d.client).concat(['Others'])],
     ['Manager',          'manager',         d.manager],
     ['Type of Request',  'nature',          d.nature, 'select', dtmRequestTypes],
+    // Basis time for TAT -- auto-stamped to the moment "Log ticket" was clicked (see
+    // _openNewDisputeTicketInner) but previously frozen there forever with no way to correct
+    // it if the ticket was actually logged some time after the email/report actually came in.
+    // Editing this recomputes TAT immediately (see dtmSaveEmailTime) instead of waiting on
+    // the 60s auto-refresh.
+    ['Email Received',     'emailTime',     d, 'datetime'],
     ['Date of Submission', 'dateSubmitted', d.dateSubmitted, 'date'],
     ['Date of Action',     'dateAction',    d.dateAction, 'date'],
     ['Payout Cut-off',     'payoutCutoff',  d.payoutCutoff || d.cutoff],
@@ -21689,6 +21727,13 @@ function openDisputeTicket(id, clientContext) {
   document.getElementById('dtm-fields-grid').innerHTML = fieldSpecs.map(function(f) {
     if (f[3] === 'select') {
       return dtmSelectWithOtherHtml(f[0], f[1], f[2], f[4], 'dtm-other-' + f[1]);
+    }
+    if (f[3] === 'datetime') {
+      return '<div style="background:var(--bg-secondary,#F4F4F8);border-radius:12px;padding:8px 12px;">'
+        + '<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">' + f[0] + '</div>'
+        + '<input type="datetime-local" value="' + dtmEmailTimeToInputValue(f[2]) + '" onchange="dtmSaveEmailTime(this.value)" '
+        + 'style="width:100%;border:none;background:transparent;padding:0;font-size:13px;font-weight:500;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;">'
+        + '</div>';
     }
     var isDate = f[3] === 'date';
     var val = isDate ? dtmToDateInputValue(f[2]) : (f[2]||'').toString();
@@ -22239,6 +22284,7 @@ function dtmMapRowToDispute(row, companyIdToKey) {
     recommendedResolution: row.recommended_resolution || '', payoutCutoff: row.payout_cutoff || '',
     amount: row.amount || '', updateOpen: row.update_open || '', otherRemarks: row.other_remarks || '',
     cutoff: row.cutoff || '', tat: row.tat || 'tat-grey', tatLabel: row.tat_label || '',
+    emailTime: row.email_time || '',
     status: row.status, statusLabel: TICKET_STATUS_LABELS[row.status] || row.status,
     attendancePeriod: row.attendance_period || '', piPayout: row.pi_payout || '',
     piLines: piLines,
@@ -22266,6 +22312,7 @@ function dtmBuildDisputeRow(d) {
     payout_cutoff: d.payoutCutoff || null, amount: d.amount || null,
     update_open: d.updateOpen || null, other_remarks: d.otherRemarks || null,
     cutoff: d.cutoff || null, tat: d.tat || null, tat_label: d.tatLabel || null,
+    email_time: d.emailTime || null,
     status: d.status || 'dst-open',
     is_unrecognized_client: !!d._unrecognizedClient,
     attendance_period: d.attendancePeriod || null, pi_payout: d.piPayout || null
