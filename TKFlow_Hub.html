@@ -1814,13 +1814,13 @@ function assignAvClass(shortKey, siblingClasses) {
         <!-- Leave Monitoring manual add modal — one row per employee, "+ Add another" for bulk entry.
              Vacation Leave is what's entered here; the matching Sick Leave row is mirrored in automatically. -->
         <div id="lm-manual-add-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:2000;align-items:center;justify-content:center;">
-          <div style="background:#fff;border-radius:16px;width:560px;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.2);padding:24px;">
+          <div style="background:#fff;border-radius:16px;width:720px;max-width:94vw;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.2);padding:24px;">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
               <div style="font-size:15px;font-weight:600;color:#1a1a2e;">Add employee(s) to monitoring</div>
               <div onclick="lmCloseManualAddModal()" style="cursor:pointer;color:#9898a6;font-size:18px;">&times;</div>
             </div>
             <div style="font-size:12px;color:#9898a6;margin-bottom:14px;">Add one employee, or keep clicking "Add another" to enter several at once. A matching Sick Leave row is added automatically for each.</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 28px;gap:6px;margin-bottom:4px;">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr minmax(150px,1fr) 28px;gap:8px;margin-bottom:4px;">
               <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;">Employee ID</div>
               <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;">Last name</div>
               <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;">First name</div>
@@ -15954,12 +15954,16 @@ function lmAddManualRowField() {
   if (!container) return;
   var row = document.createElement('div');
   row.className = 'lm-manual-row';
-  row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr 1fr 28px;gap:6px;margin-bottom:6px;align-items:center;';
+  // Matches the header row's grid-template-columns exactly -- the date column gets a
+  // guaranteed minmax(150px,..) since a native date input can't render mm/dd/yyyy plus its
+  // calendar icon much narrower than that without clipping and forcing the whole row to
+  // overflow (which also threw the header/input alignment off).
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr minmax(150px,1fr) 28px;gap:8px;margin-bottom:6px;align-items:center;';
   row.innerHTML = ''
-    + '<input type="text" placeholder="Employee ID" class="modal-input lm-manual-empid" style="font-size:12px;padding:6px 8px;">'
-    + '<input type="text" placeholder="Last name" class="modal-input lm-manual-lastname" style="font-size:12px;padding:6px 8px;">'
-    + '<input type="text" placeholder="First name" class="modal-input lm-manual-firstname" style="font-size:12px;padding:6px 8px;">'
-    + '<input type="date" class="modal-input lm-manual-hiredate" style="font-size:12px;padding:6px 8px;">'
+    + '<input type="text" placeholder="Employee ID" class="modal-input lm-manual-empid" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;">'
+    + '<input type="text" placeholder="Last name" class="modal-input lm-manual-lastname" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;">'
+    + '<input type="text" placeholder="First name" class="modal-input lm-manual-firstname" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;">'
+    + '<input type="date" class="modal-input lm-manual-hiredate" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;">'
     + '<div onclick="this.closest(\'.lm-manual-row\').remove()" title="Remove row" style="cursor:pointer;color:#9898a6;text-align:center;"><i class="ti ti-x"></i></div>';
   container.appendChild(row);
 }
