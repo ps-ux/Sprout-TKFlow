@@ -1543,7 +1543,7 @@ function assignAvClass(shortKey, siblingClasses) {
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
               <button onclick="lmOpenUploadModal()" style="padding:8px 14px;background:#fff;border:1.5px solid #32CE13;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-upload"></i> Upload Reports</button>
-              <button onclick="lmAddManualRow()" style="padding:8px 14px;background:#fff;border:1px solid #EBEBEF;color:#6b6b80;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-plus"></i> Add row</button>
+              <button onclick="lmOpenManualAddModal()" style="padding:8px 14px;background:#fff;border:1px solid #EBEBEF;color:#6b6b80;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-plus"></i> Add row</button>
               <button onclick="downloadLeaveMonitoringXLSX()" style="padding:8px 14px;background:#fff;border:1px solid #EBEBEF;color:#6b6b80;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-file-spreadsheet"></i> Download file</button>
               <button onclick="downloadLeaveMonitoringICS()" style="padding:8px 14px;background:#fff;border:1px solid #EBEBEF;color:#6b6b80;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-calendar-plus"></i> Download calendar (.ics)</button>
             </div>
@@ -1802,6 +1802,28 @@ function assignAvClass(shortKey, siblingClasses) {
               <input type="file" id="lm-f-leave" accept=".xlsx,.xls,.csv" onchange="lmHandleFile('leave',this)">
             </div>
             <button class="task-run-btn" id="lm-run-btn" disabled onclick="runLeaveMonitoring()" style="margin-top:10px;"><i class="ti ti-calculator"></i> Process & Add to Monitoring</button>
+          </div>
+        </div>
+
+        <!-- Leave Monitoring manual add modal — one row per employee, "+ Add another" for bulk entry.
+             Vacation Leave is what's entered here; the matching Sick Leave row is mirrored in automatically. -->
+        <div id="lm-manual-add-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:2000;align-items:center;justify-content:center;">
+          <div style="background:#fff;border-radius:16px;width:560px;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.2);padding:24px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+              <div style="font-size:15px;font-weight:600;color:#1a1a2e;">Add employee(s) to monitoring</div>
+              <div onclick="lmCloseManualAddModal()" style="cursor:pointer;color:#9898a6;font-size:18px;">&times;</div>
+            </div>
+            <div style="font-size:12px;color:#9898a6;margin-bottom:14px;">Add one employee, or keep clicking "Add another" to enter several at once. A matching Sick Leave row is added automatically for each.</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 28px;gap:6px;margin-bottom:4px;">
+              <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;">Employee ID</div>
+              <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;">Last name</div>
+              <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;">First name</div>
+              <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;">Hire date</div>
+              <div></div>
+            </div>
+            <div id="lm-manual-rows"></div>
+            <div onclick="lmAddManualRowField()" style="text-align:center;padding:8px;font-size:12px;color:#32CE13;cursor:pointer;border:1.5px dashed #BBF7D0;border-radius:12px;margin:8px 0 16px;"><i class="ti ti-plus"></i> Add another employee</div>
+            <button class="task-run-btn" onclick="lmSubmitManualRows()"><i class="ti ti-user-plus"></i> Add to monitoring</button>
           </div>
         </div>
 
@@ -14960,29 +14982,22 @@ function nhFinalize() {
   if (typeof setTaskStatus === 'function') setTaskStatus('newhires', 'done', '');
 
   // Push new hires into Leave Credits Monitoring, if this client has that feature enabled —
-  // so they're tracked toward their eventual 1-year transfer without needing to separately
-  // re-enter them via the Employee List Report later.
-  if (clients[ck] && clients[ck].taskConfig && clients[ck].taskConfig.leave_monitoring && typeof lmGetStore === 'function') {
+  // so they're tracked toward their eventual 1-year transfer (both Vacation and, via
+  // lmPushManualRow's mirroring, Sick) without needing to separately re-enter them via the
+  // Employee List Report later.
+  if (clients[ck] && clients[ck].taskConfig && clients[ck].taskConfig.leave_monitoring && typeof lmPushManualRow === 'function') {
     var lmStore = lmGetStore(ck);
     (window.nhRows || []).forEach(function(nh) {
       if (!nh.empNo || !nh.hireDate) return;
       var hireDateObj = (typeof lmParseDate === 'function') ? lmParseDate(nh.hireDate) : new Date(nh.hireDate);
       if (!hireDateObj || isNaN(hireDateObj)) return;
-      var alreadyTracked = lmStore.oneYear.some(function(r){ return r.empId === String(nh.empNo); })
-        || lmStore.fiveYear.some(function(r){ return r.empId === String(nh.empNo); });
-      if (alreadyTracked) return;
       var nameParts = String(nh.name || '').split(',').map(function(s){ return s.trim(); });
       var lastName = nameParts[0] || '';
       var firstName = nameParts[1] || (String(nh.name||'').split(' ').slice(0,-1).join(' ')) || '';
-      var currentYear = new Date().getFullYear();
-      var anniversary = new Date(currentYear, hireDateObj.getMonth(), hireDateObj.getDate());
-      lmStore.oneYear.push({
-        empId: String(nh.empNo), lastName: lastName, firstName: firstName,
-        regDate: null, hireDate: hireDateObj, anniversary: anniversary,
-        supposed: 15, currentBalance: 0, used: 0, shouldBe: 15, forManualEdit: 15, checking: 15, done: false
-      });
+      lmPushManualRow(ck, String(nh.empNo), lastName, firstName, hireDateObj);
     });
     lmStore.oneYear.sort(function(a,b){ return a.anniversary - b.anniversary; });
+    lmStore.sickOneYear.sort(function(a,b){ return a.anniversary - b.anniversary; });
   }
 
   if (typeof showToast === 'function') showToast('New hires finalized — included in Payroll Instructions');
@@ -15849,41 +15864,105 @@ function lmConfirmRemoveRow(category, idx) {
   }, { okLabel: 'Remove' });
 }
 
-// Lets you manually add a single employee (e.g. one who slipped through, or a quick one-off)
-// without needing to re-upload full reports.
-function lmAddManualRow() {
-  var ck = window.currentWsClient || window._wsClient || '';
-  var empId = window.prompt('Employee ID:');
-  if (!empId) return;
-  var name = window.prompt('Name (Last, First):') || '';
-  var nameParts = name.split(',').map(function(s){ return s.trim(); });
-  var hireDateStr = window.prompt('Hire date (MM/DD/YYYY):');
-  var hireDate = hireDateStr ? new Date(hireDateStr) : null;
-  if (!hireDate || isNaN(hireDate)) { showToast('Invalid hire date', '#e67e00'); return; }
+// Builds and pushes the Vacation Leave row for a newly tracked employee, then mirrors a
+// matching Sick Leave row into the sick store — so adding someone once (manually, or via the
+// New Hires auto-enroll hook below) doesn't also require a separate Sick Leave entry. Returns
+// false without pushing anything if the employee is already tracked.
+function lmPushManualRow(ck, empId, lastName, firstName, hireDate) {
+  var store = lmGetStore(ck);
+  var alreadyTracked = store.oneYear.some(function(r){ return r.empId === empId; })
+    || store.fiveYear.some(function(r){ return r.empId === empId; });
+  if (alreadyTracked) return false;
 
   var currentYear = new Date().getFullYear();
   var yearsAtAnniversary = currentYear - hireDate.getFullYear();
   var anniversary = new Date(currentYear, hireDate.getMonth(), hireDate.getDate());
-  var store = lmGetStore(ck);
   var creditConfig = lmGetCreditConfig(ck);
 
   if (yearsAtAnniversary <= 1) {
     store.oneYear.push({
-      empId: empId, lastName: nameParts[0]||'', firstName: nameParts[1]||'',
+      empId: empId, lastName: lastName||'', firstName: firstName||'',
       regDate: null, hireDate: hireDate, anniversary: anniversary,
       supposed: creditConfig.baseCredits, currentBalance: 0, used: 0, shouldBe: creditConfig.baseCredits, forManualEdit: creditConfig.baseCredits, checking: creditConfig.baseCredits, done: false
+    });
+    store.sickOneYear.push({
+      empId: empId, lastName: lastName||'', firstName: firstName||'',
+      regDate: null, hireDate: hireDate, anniversary: anniversary,
+      supposed: creditConfig.sickBaseCredits, currentBalance: 0, used: 0, shouldBe: creditConfig.sickBaseCredits, forManualEdit: creditConfig.sickBaseCredits, checking: creditConfig.sickBaseCredits, done: false
     });
   } else {
     var yearsForCalc = Math.max(yearsAtAnniversary, 5);
     var totalCreditsForYear = lmCreditsForYear(creditConfig, yearsForCalc);
     var previousYearCredits = yearsForCalc === 5 ? creditConfig.baseCredits : lmCreditsForYear(creditConfig, yearsForCalc - 1);
     store.fiveYear.push({
-      empId: empId, lastName: nameParts[0]||'', firstName: nameParts[1]||'',
+      empId: empId, lastName: lastName||'', firstName: firstName||'',
       hireDate: hireDate, yearsOfService: yearsAtAnniversary, anniversary: anniversary,
       totalCreditsForYear: totalCreditsForYear, creditsToAdd: totalCreditsForYear - previousYearCredits, done: false
     });
+    // Sick Leave only escalates by tenure year if this client's policy says so (see
+    // lmGetCreditConfig) -- otherwise Sick only ever gets the 1st-year top-up above.
+    if (creditConfig.sickEscalates) {
+      var sickConfigLike = { creditsTable: creditConfig.sickCreditsTable, baseCredits: creditConfig.sickBaseCredits };
+      var sickTotal = lmCreditsForYear(sickConfigLike, yearsForCalc);
+      var sickPrev = yearsForCalc === 5 ? creditConfig.sickBaseCredits : lmCreditsForYear(sickConfigLike, yearsForCalc - 1);
+      store.sickFiveYear.push({
+        empId: empId, lastName: lastName||'', firstName: firstName||'',
+        hireDate: hireDate, yearsOfService: yearsAtAnniversary, anniversary: anniversary,
+        totalCreditsForYear: sickTotal, creditsToAdd: sickTotal - sickPrev, done: false
+      });
+    }
   }
+  return true;
+}
+
+// Opens the manual-add modal (single employee, or several via "Add another employee") in
+// place of the old prompt()-chain flow.
+function lmOpenManualAddModal() {
+  var container = document.getElementById('lm-manual-rows');
+  if (container) container.innerHTML = '';
+  lmAddManualRowField();
+  var modal = document.getElementById('lm-manual-add-modal');
+  if (modal) modal.style.display = 'flex';
+}
+function lmCloseManualAddModal() {
+  var modal = document.getElementById('lm-manual-add-modal');
+  if (modal) modal.style.display = 'none';
+}
+function lmAddManualRowField() {
+  var container = document.getElementById('lm-manual-rows');
+  if (!container) return;
+  var row = document.createElement('div');
+  row.className = 'lm-manual-row';
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr 1fr 28px;gap:6px;margin-bottom:6px;align-items:center;';
+  row.innerHTML = ''
+    + '<input type="text" placeholder="Employee ID" class="modal-input lm-manual-empid" style="font-size:12px;padding:6px 8px;">'
+    + '<input type="text" placeholder="Last name" class="modal-input lm-manual-lastname" style="font-size:12px;padding:6px 8px;">'
+    + '<input type="text" placeholder="First name" class="modal-input lm-manual-firstname" style="font-size:12px;padding:6px 8px;">'
+    + '<input type="date" class="modal-input lm-manual-hiredate" style="font-size:12px;padding:6px 8px;">'
+    + '<div onclick="this.closest(\'.lm-manual-row\').remove()" title="Remove row" style="cursor:pointer;color:#9898a6;text-align:center;"><i class="ti ti-x"></i></div>';
+  container.appendChild(row);
+}
+function lmSubmitManualRows() {
+  var ck = window.currentWsClient || window._wsClient || '';
+  var rowEls = document.querySelectorAll('#lm-manual-rows .lm-manual-row');
+  var added = 0, skipped = 0, duplicate = 0;
+  rowEls.forEach(function(rowEl) {
+    var empId = rowEl.querySelector('.lm-manual-empid').value.trim();
+    var lastName = rowEl.querySelector('.lm-manual-lastname').value.trim();
+    var firstName = rowEl.querySelector('.lm-manual-firstname').value.trim();
+    var hireDateStr = rowEl.querySelector('.lm-manual-hiredate').value;
+    if (!empId || !hireDateStr) { if (empId || lastName || firstName || hireDateStr) skipped++; return; }
+    var hireDate = new Date(hireDateStr + 'T00:00:00');
+    if (isNaN(hireDate)) { skipped++; return; }
+    if (lmPushManualRow(ck, empId, lastName, firstName, hireDate)) added++; else duplicate++;
+  });
+  if (added === 0 && skipped === 0 && duplicate === 0) { if (typeof showToast === 'function') showToast('Enter at least an Employee ID and hire date', '#e67e00'); return; }
   renderLeaveMonitoringLive();
+  lmCloseManualAddModal();
+  var msg = added + ' employee' + (added!==1?'s':'') + ' added to monitoring';
+  if (duplicate) msg += ', ' + duplicate + ' already tracked (skipped)';
+  if (skipped) msg += ', ' + skipped + ' incomplete row' + (skipped!==1?'s':'') + ' skipped';
+  if (typeof showToast === 'function') showToast(msg, added ? undefined : '#e67e00');
 }
 
 function downloadLeaveMonitoringXLSX() {
