@@ -5216,13 +5216,15 @@ function renderDashSchedule() {
         : (cl.name || ck);
 
       store.calPeriods.forEach(function(p) {
-        var yr = p.yr || now.getFullYear();
-        // Check payout date
+        // Check payout date -- compared/reconstructed from p.payout's OWN year/month/day, not
+        // the period's nominal p.month/p.yr. A payout can legitimately land in a different
+        // calendar month than the period label it belongs to (e.g. a "2nd" period paying out
+        // on the 1st of the next month); reconstructing with the period's month instead of the
+        // date's own would silently move it to the wrong day whenever those differ.
         if (p.payout) {
-          var pd = new Date(yr, p.month, p.payout.getDate());
-          if (pd.getFullYear()===now.getFullYear() && pd.getMonth()===now.getMonth() && pd.getDate()===now.getDate()) {
+          if (p.payout.getFullYear()===now.getFullYear() && p.payout.getMonth()===now.getMonth() && p.payout.getDate()===now.getDate()) {
             items.push({
-              time: new Date(yr, p.month, p.payout.getDate(), 17, 0),
+              time: new Date(p.payout.getFullYear(), p.payout.getMonth(), p.payout.getDate(), 17, 0),
               timeStr: 'Payout',
               label: p.monthName + ' ' + (p.period===1?'1st':'2nd') + ' Payout',
               sub: clientLabel,
@@ -5231,18 +5233,13 @@ function renderDashSchedule() {
             });
           }
         }
-        // Check each deadline
+        // Check each deadline -- same reasoning, always dl.date's own year/month/day.
         p.deadlines.forEach(function(dl) {
           if (!dl.date) return;
-          var dd = new Date(yr, p.month, dl.date.getDate());
-          if (dd.getFullYear()===now.getFullYear() && dd.getMonth()===now.getMonth() && dd.getDate()===now.getDate()) {
-            // Parse time from dl.date if it has a time component
-            var hr = dl.date.getHours ? dl.date.getHours() : 12;
-            var mn = dl.date.getMinutes ? dl.date.getMinutes() : 0;
-            var itemTime = new Date(yr, p.month, dl.date.getDate(), hr, mn);
-            var timeStr = dl.hasTime ? itemTime.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true}) : 'Today';
+          if (dl.date.getFullYear()===now.getFullYear() && dl.date.getMonth()===now.getMonth() && dl.date.getDate()===now.getDate()) {
+            var timeStr = dl.hasTime ? dl.date.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true}) : 'Today';
             items.push({
-              time: itemTime,
+              time: dl.date,
               timeStr: timeStr,
               label: dl.label,
               sub: clientLabel + ' · ' + p.monthName + ' ' + (p.period===1?'1st':'2nd'),
@@ -5353,20 +5350,20 @@ function renderMiniCal() {
         ? clientGroups[grpKey].name : (cl.name || ck);
 
       store.calPeriods.forEach(function(p) {
-        var yr = p.yr || now.getFullYear();
+        // Uses p.payout/dl.date directly rather than rebuilding from the period's nominal
+        // p.month/p.yr -- a payout or deadline can legitimately land in a different calendar
+        // month than the period label it belongs to, and reconstructing with the period's
+        // month instead of the date's own silently moved it to the wrong day whenever those
+        // differed.
         if (p.payout) {
-          var pd = new Date(yr, p.month, p.payout.getDate());
-          if (pd >= mon && pd <= fri)
-            weekEvents.push({client: clientLabel, activity: 'Payout ' + (p.period===1?'1st':'2nd'), day: pd, color: avClassAccentColor(cl.avClass), icon:'ti-cash', timeStr: null});
+          if (p.payout >= mon && p.payout <= fri)
+            weekEvents.push({client: clientLabel, activity: 'Payout ' + (p.period===1?'1st':'2nd'), day: p.payout, color: avClassAccentColor(cl.avClass), icon:'ti-cash', timeStr: null});
         }
         p.deadlines.forEach(function(dl) {
           if (!dl.date) return;
-          var hr = dl.hasTime ? dl.date.getHours() : 0;
-          var mn = dl.hasTime ? dl.date.getMinutes() : 0;
-          var dd = new Date(yr, p.month, dl.date.getDate(), hr, mn);
-          if (dd >= mon && dd <= fri)
-            weekEvents.push({client: clientLabel, activity: dl.label, day: dd, color: avClassAccentColor(cl.avClass), icon:'ti-clock',
-              timeStr: dl.hasTime ? dd.toLocaleTimeString('en-PH',{hour:'numeric',minute:'2-digit',hour12:true}) : null});
+          if (dl.date >= mon && dl.date <= fri)
+            weekEvents.push({client: clientLabel, activity: dl.label, day: dl.date, color: avClassAccentColor(cl.avClass), icon:'ti-clock',
+              timeStr: dl.hasTime ? dl.date.toLocaleTimeString('en-PH',{hour:'numeric',minute:'2-digit',hour12:true}) : null});
         });
       });
 
@@ -5410,7 +5407,11 @@ function renderMiniCal() {
     var byDay = [[],[],[],[],[]];
     var monMidnight = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate());
     weekEvents.forEach(function(ev) {
-      var idx = Math.round((ev.day - monMidnight) / 86400000);
+      // Whole calendar days elapsed since Monday, ignoring time-of-day -- Math.round here
+      // used to push any event past midday into the NEXT day's column (e.g. a 6 PM Wednesday
+      // deadline is 2.75 days after Monday midnight, which rounds up to 3 = Thursday), even
+      // though it correctly matched "today" everywhere else that compares by date alone.
+      var idx = Math.floor((ev.day - monMidnight) / 86400000);
       if (idx >= 0 && idx <= 4) byDay[idx].push(ev);
     });
 
@@ -23269,10 +23270,20 @@ function loadTKCalendarFile(input) {
 
 function _xlsDate(v) {
   if (typeof v === 'number' && v > 100) {
-    // Round to the nearest whole day first — Excel serial dates can carry tiny floating-point
-    // drift (e.g. 46411.0 stored as 46410.99999997), which parse_date_code would otherwise
-    // round DOWN into the previous day.
-    try { var p = XLSX.SSF.parse_date_code(Math.round(v)); return new Date(p.y, p.m-1, p.d); } catch(e){}
+    // Only snap to the nearest whole day when v is negligibly close to it -- that's floating-
+    // point drift (e.g. 46411.0 stored as 46410.99999997), which parse_date_code would
+    // otherwise round DOWN into the previous day. A cell that legitimately embeds a time of
+    // day alongside its date (e.g. an afternoon/evening deadline stored as one datetime
+    // serial, fraction >= 0.5) is NOT drift -- rounding that to the nearest integer bumped it
+    // into the NEXT calendar day for anything at or past noon, which is what was actually
+    // shifting deadlines a day late in the dashboard's Schedule/This workweek widgets. The
+    // calendar day is always floor(v) once genuine drift is ruled out.
+    try {
+      var rounded = Math.round(v);
+      var day = Math.abs(v - rounded) < 0.001 ? rounded : Math.floor(v);
+      var p = XLSX.SSF.parse_date_code(day);
+      return new Date(p.y, p.m-1, p.d);
+    } catch(e){}
   }
   var s = String(v||'').trim();
   var m2 = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if (m2) return new Date(+m2[1],+m2[2]-1,+m2[3]);
