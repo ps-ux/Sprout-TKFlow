@@ -12160,7 +12160,7 @@ function renderTKReview() {
     // a straight readout of the uploaded file's own "Days Absent" column. Surface that file
     // figure alongside it so a mismatch is visible immediately instead of assumed away.
     var fileAbsentVal = (typeof r.fileDaysAbsent === 'number') ? r.fileDaysAbsent : null;
-    var absentMismatch = fileAbsentVal !== null && Math.abs(fileAbsentVal - absentCount) > 0.001;
+    var absentMismatch = tkAbsentMismatch(r);
     // Undertime is reported as a total in minutes but flagged per-instance, so there's no
     // direct pass/fail equivalence like the absence check — this is shown as reference
     // context (does the reported total look plausible against how many instances got
@@ -12234,11 +12234,21 @@ function tkRecomputeDaysAbsent(r) {
     .reduce(function(sum, e){ return sum + (e.isHalfDay ? 0.5 : 1); }, 0);
   r._absentMismatchAcked = false; // evidence changed -- any prior mismatch acknowledgment is stale
 }
+// Some uploaded files tally their own "Days Absent" summary column as a raw count of
+// flagged dates (1 per date, whether half-day or full), not weighted by 0.5 like our
+// badge/payroll figure -- e.g. one half-day + one full day reads as "2" in the file but
+// 1.5 in our weighted total. Both are legitimate; only flag a real mismatch when the
+// file's number matches neither convention, since that's the actual sign of a missed or
+// extra date rather than a weighting difference.
 function tkAbsentMismatch(r) {
-  var absentCount = (r.evidence||[]).filter(function(e){ return (e.flagType||'absent')==='absent'; })
-    .reduce(function(sum,e){ return sum + (e.isHalfDay ? 0.5 : 1); }, 0);
+  var absentEvs = (r.evidence||[]).filter(function(e){ return (e.flagType||'absent')==='absent'; });
+  var weighted = absentEvs.reduce(function(sum,e){ return sum + (e.isHalfDay ? 0.5 : 1); }, 0);
+  var unweighted = absentEvs.length;
   var fileAbsentVal = (typeof r.fileDaysAbsent === 'number') ? r.fileDaysAbsent : null;
-  return fileAbsentVal !== null && Math.abs(fileAbsentVal - absentCount) > 0.001;
+  if (fileAbsentVal === null) return false;
+  var matchesWeighted = Math.abs(fileAbsentVal - weighted) <= 0.001;
+  var matchesUnweighted = Math.abs(fileAbsentVal - unweighted) <= 0.001;
+  return !matchesWeighted && !matchesUnweighted;
 }
 function tkUpdateRemark(rowIdx, evIdx, val) {
   if (tkReviewRows[rowIdx] && tkReviewRows[rowIdx].evidence[evIdx]) {
