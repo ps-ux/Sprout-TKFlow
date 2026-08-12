@@ -5880,21 +5880,7 @@ function churnClientFromAssignments(groupKey) {
   if (!grp) return;
   var subs = (grp.subs || [groupKey]).filter(function(sk){ return clients[sk] && !clients[sk]._churned; });
   if (!subs.length) return;
-  var reason = window.prompt('Churn ' + grp.name + ' entirely? This archives the whole company (all ' + subs.length + ' subcompan' + (subs.length>1?'ies':'y') + ') and removes it from the dashboard.\n\nOptional: enter a reason for the record.', '');
-  if (reason === null) return; // cancelled
-  var today = new Date().toISOString().slice(0,10);
-
-  subs.forEach(function(sk) {
-    clients[sk].status = 'Churned';
-    clients[sk]._churned = true;
-  });
-  _persistCompanyStatus(subs, 'Churned');
-  addToArchives(groupKey, subs, today, reason || 'No reason given', '', false);
-
-  if (typeof renderClientCards === 'function') renderClientCards();
-  if (typeof renderSidebarClients === 'function') renderSidebarClients();
-  if (typeof showToast === 'function') showToast(grp.name + ' churned and moved to Archives');
-  renderClientAssignments();
+  openChurnGroupModal(groupKey); // actual churn logic lives in confirmChurn(), see window._churnPendingTarget
 }
 
 // Churns just ONE subcompany while the rest of the main company stays active — e.g. one
@@ -6008,30 +5994,7 @@ function churnSubcompany(groupKey, subKey) {
   var grp = clientGroups[groupKey];
   var c = clients[subKey];
   if (!grp || !c) return;
-  var remainingActive = (grp.subs || [groupKey]).filter(function(sk){ return sk !== subKey && clients[sk] && !clients[sk]._churned; });
-  var reason = window.prompt('Churn just "' + c.name + '" while keeping the rest of ' + grp.name + ' active?\n\nOptional: enter a reason for the record.', '');
-  if (reason === null) return;
-  var today = new Date().toISOString().slice(0,10);
-
-  c.status = 'Churned';
-  c._churned = true;
-  _persistCompanyStatus(subKey, 'Churned');
-  addToArchives(groupKey, [subKey], today, reason || 'No reason given', '', true);
-
-  // Policy Bank's file list can be scoped to exactly this one subcompany (see
-  // renderPolicyFiles' window._policyFilterSub) -- if that's the sub just churned, the
-  // list would otherwise keep filtering to a key nothing renders under anymore, which reads
-  // as "the uploaded files disappeared" even though nothing was actually deleted. Clear the
-  // filter back to the group aggregate and refresh both it and Client Profile's own
-  // subcompany list, neither of which this function used to re-render at all.
-  if (window._policyFilterSub === subKey) window._policyFilterSub = null;
-  if (typeof renderClientProfile === 'function') renderClientProfile(groupKey);
-  if (typeof filterPolicyFiles === 'function') filterPolicyFiles();
-  if (typeof renderTKCalendar === 'function') renderTKCalendar();
-  if (typeof renderClientCards === 'function') renderClientCards();
-  if (typeof renderSidebarClients === 'function') renderSidebarClients();
-  if (typeof showToast === 'function') showToast(c.name + ' churned' + (remainingActive.length ? ' \u2014 ' + grp.name + ' stays active' : ''));
-  renderClientAssignments();
+  openChurnSubModal(groupKey, subKey); // actual churn logic lives in confirmChurn(), see window._churnPendingTarget
 }
 
 // Renames a client — for business name changes (e.g. after a rebrand or ownership change).
@@ -6041,9 +6004,24 @@ function churnSubcompany(groupKey, subKey) {
 function renameClientGroup(groupKey) {
   var grp = clientGroups[groupKey];
   if (!grp) return;
-  var newName = window.prompt('Rename "' + grp.name + '" to:', grp.name);
-  if (!newName || !newName.trim() || newName.trim() === grp.name) return;
-  newName = newName.trim();
+  window._renameGroupPendingKey = groupKey;
+  var input = document.getElementById('rename-group-input');
+  if (input) input.value = grp.name;
+  var modal = document.getElementById('rename-group-modal');
+  if (modal) { modal.style.display = 'flex'; if (input) setTimeout(function(){ input.focus(); input.select(); }, 30); }
+}
+function closeRenameGroupModal() {
+  var modal = document.getElementById('rename-group-modal');
+  if (modal) modal.style.display = 'none';
+  window._renameGroupPendingKey = null;
+}
+function confirmRenameGroup() {
+  var groupKey = window._renameGroupPendingKey;
+  var grp = groupKey && clientGroups[groupKey];
+  if (!grp) { closeRenameGroupModal(); return; }
+  var input = document.getElementById('rename-group-input');
+  var newName = ((input ? input.value : '') || '').trim();
+  if (!newName || newName === grp.name) { closeRenameGroupModal(); return; }
   var oldName = grp.name;
 
   (grp.subs || [groupKey]).forEach(function(sk) {
@@ -6053,6 +6031,7 @@ function renameClientGroup(groupKey) {
     }
   });
   grp.name = newName;
+  closeRenameGroupModal();
 
   if (typeof renderClientCards === 'function') renderClientCards();
   if (typeof renderSidebarClients === 'function') renderSidebarClients();
@@ -9306,10 +9285,25 @@ window.groupProcessingHistory = window.groupProcessingHistory || {};
 // actually opened (the point where someone would begin uploading files / doing the work),
 // not when the first task happens to get marked done. Only sets startedAt once per period;
 // re-opening tasks afterward doesn't push the start time forward.
+// Live cutoff-period label for a client, matching exactly what buildCurrentPeriodBannerHTML
+// shows (same getRealCalendarPeriods()/findCurrentCutoffStartedIdx() call, same "Nth Payout ·
+// att X" format) -- used anywhere a "which cutoff is this for" label needs to be RECORDED, not
+// just displayed, so it can't drift stale the way clients[ck].cutoff does (that field is only
+// ever advanced by the Tasks-tab "Catch up" rollover dialog, which nothing guarantees has been
+// clicked through before a task is opened and its progress logged).
+function getCurrentCutoffLabel(ck) {
+  var realPeriods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
+  var idx = realPeriods.length ? findCurrentCutoffStartedIdx(realPeriods) : -1;
+  var p = idx >= 0 ? realPeriods[idx] : null;
+  if (p) return p.monthName + ' ' + (p.period === 1 ? '1st' : '2nd') + ' Payout · att ' + p.attCov;
+  var c = clients[ck];
+  return (c && c.cutoff) || 'Not yet set';
+}
+
 function markTaskStarted(clientKey) {
   if (!clientKey || !clients[clientKey]) return;
   var c = clients[clientKey];
-  var label = c.cutoff || 'Unlabeled period';
+  var label = getCurrentCutoffLabel(clientKey);
   if (!window.groupProcessingHistory[clientKey]) window.groupProcessingHistory[clientKey] = [];
   var hist = window.groupProcessingHistory[clientKey];
   var entry = hist.find(function(e){ return e.cutoffLabel === label && !e.finishedAt; });
@@ -9326,7 +9320,7 @@ function markTaskStarted(clientKey) {
 function logTaskProgress(clientKey) {
   if (!clientKey || !clients[clientKey]) return;
   var c = clients[clientKey];
-  var label = c.cutoff || 'Unlabeled period';
+  var label = getCurrentCutoffLabel(clientKey);
   if (!window.groupProcessingHistory[clientKey]) window.groupProcessingHistory[clientKey] = [];
   var hist = window.groupProcessingHistory[clientKey];
   var entry = hist.find(function(e){ return e.cutoffLabel === label && !e.finishedAt; });
@@ -9588,10 +9582,27 @@ function finalizeTask(taskKey) {
   }
 }
 
+// Opens the in-app skip-reason modal instead of a native browser window.prompt() -- the
+// browser dialog is unstyled (shows the raw vercel.app URL) and can't be dismissed with Esc
+// consistently across browsers the way the rest of this app's modals are.
 function skipTask(taskKey) {
-  var reason = window.prompt('Reason for skipping (e.g. Not applicable this cut-off, Client request, etc.):');
-  if (reason === null) return; // cancelled
-  if (!reason.trim()) reason = 'Not applicable this period';
+  window._skipTaskPendingKey = taskKey;
+  var input = document.getElementById('skip-task-reason-input');
+  if (input) input.value = '';
+  var modal = document.getElementById('skip-task-reason-modal');
+  if (modal) { modal.style.display = 'flex'; if (input) setTimeout(function(){ input.focus(); }, 30); }
+}
+function closeSkipTaskModal() {
+  var modal = document.getElementById('skip-task-reason-modal');
+  if (modal) modal.style.display = 'none';
+  window._skipTaskPendingKey = null;
+}
+function confirmSkipTask() {
+  var taskKey = window._skipTaskPendingKey;
+  if (!taskKey) return;
+  var input = document.getElementById('skip-task-reason-input');
+  var reason = ((input ? input.value : '') || '').trim() || 'Not applicable this period';
+  closeSkipTaskModal();
   // Cache body without footer
   var ck = window.currentWsClient || window._wsClient || '';
   var cacheKey = taskKey + '_' + ck;
@@ -9602,10 +9613,10 @@ function skipTask(taskKey) {
     if (footerEl) footerEl.remove();
     window._taskBodyCache[cacheKey] = body.innerHTML;
   }
-  var batchNamesSkip = finalizeBatchTaskIfApplicable(taskKey, 'skipped', reason.trim());
-  if (!batchNamesSkip) setTaskStatus(taskKey, 'skipped', reason.trim());
+  var batchNamesSkip = finalizeBatchTaskIfApplicable(taskKey, 'skipped', reason);
+  if (!batchNamesSkip) setTaskStatus(taskKey, 'skipped', reason);
   closeTaskRunner();
-  if (typeof showToast === 'function') showToast('Task skipped: ' + reason.trim());
+  if (typeof showToast === 'function') showToast('Task skipped: ' + reason);
 }
 
 function clearTaskCache(taskKey) {
@@ -15715,6 +15726,18 @@ function lmBuildUpcomingRows(ck, year) {
   return rows;
 }
 
+// Shared by the 1yr tier's "Add" (For Manual Edit) and the 5+yr tier's "Credits to Add" --
+// same column now, signed and color-coded so a shortfall (red, needs subtracting) reads
+// differently at a glance from a top-up (green, needs adding) without a separate label.
+function lmSignedColorValue(value) {
+  if (value === null || value === undefined || isNaN(value)) return '—';
+  var num = Number(value);
+  var color = num > 0 ? '#32CE13' : (num < 0 ? '#c0392b' : '#6b6b80');
+  var sign = num > 0 ? '+' : '';
+  var formatted = Number.isInteger(num) ? String(num) : num.toFixed(2);
+  return '<span style="font-weight:600;color:' + color + ';">' + sign + formatted + '</span>';
+}
+
 function lmRenderUpcomingSection(ck) {
   var allRows = lmBuildUpcomingRows(ck, window._lmActiveYear);
   var storeForCount = lmGetStore(ck, window._lmActiveYear);
@@ -15745,7 +15768,7 @@ function lmRenderUpcomingSection(ck) {
     + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">'
     + '<thead><tr style="background:#F4F4F8;">'
     + hdr('Emp ID') + hdr('Name') + hdr('Leave Type') + hdr('Tier') + hdr('Hire Date') + hdr('Anniversary')
-    + hdr('Current Bal.') + hdr('Used') + hdr('Should Be') + hdr('Add') + hdr('Total for Year') + hdr('Credits to Add')
+    + hdr('Current Bal.') + hdr('Used') + hdr('Should Be') + hdr('Total for Year') + hdr('Add')
     + '<th style="' + actionsThStyle + '"></th></tr></thead><tbody>'
     + allRows.map(function(x) {
         var r = x.row;
@@ -15761,9 +15784,8 @@ function lmRenderUpcomingSection(ck) {
           + '<td style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? lmEditableCell(x.category, x.idx, 'currentBalance', r.currentBalance) : '—') + '</td>'
           + '<td style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? lmEditableCell(x.category, x.idx, 'used', r.used) : '—') + '</td>'
           + '<td id="lm-shouldbe-' + x.category + '-' + x.idx + '" style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? r.shouldBe.toFixed(2) : '—') + '</td>'
-          + '<td id="lm-formanual-' + x.category + '-' + x.idx + '" style="padding:8px 10px;text-align:right;font-weight:600;color:#32CE13;">' + (isOneYearTier ? r.forManualEdit.toFixed(2) : '—') + '</td>'
           + '<td style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? '—' : r.totalCreditsForYear) + '</td>'
-          + '<td style="padding:8px 10px;text-align:right;font-weight:600;color:#32CE13;">' + (isOneYearTier ? '—' : ((r.creditsToAdd>=0?'+':'') + r.creditsToAdd)) + '</td>'
+          + '<td id="lm-formanual-' + x.category + '-' + x.idx + '" style="padding:8px 10px;text-align:right;">' + lmSignedColorValue(isOneYearTier ? r.forManualEdit : r.creditsToAdd) + '</td>'
           + '<td style="' + actionsTdStyleBase + rowBg + ';">' + lmActionButtons(x.category, x.idx, r.done) + '</td></tr>';
       }).join('')
     + '</tbody></table></div></div>';
@@ -15811,7 +15833,7 @@ function lmEditRowLive(category, idx, field, value) {
   var shouldBeEl = document.getElementById('lm-shouldbe-' + category + '-' + idx);
   var forManualEditEl = document.getElementById('lm-formanual-' + category + '-' + idx);
   if (shouldBeEl) shouldBeEl.textContent = row.shouldBe.toFixed(2);
-  if (forManualEditEl) forManualEditEl.textContent = row.forManualEdit.toFixed(2);
+  if (forManualEditEl) forManualEditEl.innerHTML = lmSignedColorValue(row.forManualEdit);
   if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, window._lmActiveYear);
 }
 
@@ -18189,6 +18211,31 @@ function openAuditFromDashboard() {
   </div>
 </div>
 
+<div id="rename-group-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:5000;align-items:center;justify-content:center;backdrop-filter:blur(2px);">
+  <div style="background:#fff;border-radius:16px;width:min(420px,92vw);padding:22px;">
+    <div style="font-size:15px;font-weight:600;color:#1a1a2e;margin-bottom:4px;">Rename client</div>
+    <div style="font-size:11px;color:#9898a6;margin-bottom:14px;">Also updates every subcompany name that starts with the current name.</div>
+    <div class="field-label" style="margin-bottom:5px;">New name</div>
+    <input id="rename-group-input" style="width:100%;padding:9px 12px;border:1px solid #EBEBEF;border-radius:12px;font-size:13px;font-family:Rubik,sans-serif;margin-bottom:16px;box-sizing:border-box;" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmRenameGroup();}">
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button onclick="closeRenameGroupModal()" style="padding:8px 16px;border:1px solid #EBEBEF;border-radius:12px;background:#fff;font-size:12.5px;cursor:pointer;font-family:Rubik,sans-serif;">Cancel</button>
+      <button onclick="confirmRenameGroup()" style="padding:8px 16px;border:none;border-radius:12px;background:var(--ub-500);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="skip-task-reason-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:5000;align-items:center;justify-content:center;backdrop-filter:blur(2px);">
+  <div style="background:#fff;border-radius:16px;width:min(440px,92vw);padding:22px;">
+    <div style="font-size:15px;font-weight:600;color:#1a1a2e;margin-bottom:12px;">Skip this task</div>
+    <div class="field-label" style="margin-bottom:5px;">Reason for skipping</div>
+    <input id="skip-task-reason-input" placeholder="e.g. Not applicable this cut-off, Client request, etc." style="width:100%;padding:9px 12px;border:1px solid #EBEBEF;border-radius:12px;font-size:13px;font-family:Rubik,sans-serif;margin-bottom:16px;box-sizing:border-box;" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmSkipTask();}">
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button onclick="closeSkipTaskModal()" style="padding:8px 16px;border:1px solid #EBEBEF;border-radius:12px;background:#fff;font-size:12.5px;cursor:pointer;font-family:Rubik,sans-serif;">Cancel</button>
+      <button onclick="confirmSkipTask()" style="padding:8px 16px;border:none;border-radius:12px;background:var(--ub-500);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;">Skip task</button>
+    </div>
+  </div>
+</div>
+
 <div id="rename-client-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:3000;align-items:center;justify-content:center;backdrop-filter:blur(2px);">
   <div style="background:#fff;border-radius:16px;width:min(420px,92vw);padding:22px;">
     <div style="font-size:15px;font-weight:600;color:#1a1a2e;margin-bottom:4px;">Rename client</div>
@@ -18597,13 +18644,54 @@ function openChurnModal() {
   const cm = document.getElementById('churn-modal'); cm.style.display = 'flex'; cm.style.pointerEvents = 'auto';
 }
 
+// Admin > Client Assignments' "Churn" (whole group) and "Churn this one" (single subcompany)
+// actions reuse this same modal instead of a separate window.prompt() reason box -- sets
+// window._churnPendingTarget so confirmChurn() knows to churn THAT target instead of
+// currentWsClient (its original, still-default behavior below).
+function openChurnGroupModal(groupKey) {
+  window._churnPendingTarget = { groupKey: groupKey, subKeys: null };
+  openChurnModal();
+}
+function openChurnSubModal(groupKey, subKey) {
+  window._churnPendingTarget = { groupKey: groupKey, subKeys: [subKey] };
+  openChurnModal();
+}
+
 function confirmChurn() {
   const date   = document.getElementById('churn-date').value;
   const reason = document.getElementById('churn-reason').value;
   const notes  = document.getElementById('churn-notes').value;
-  if (!date || !reason) { alert('Please fill in the date and reason'); return; }
+  if (!date || !reason) { if (typeof showToast === 'function') showToast('Please fill in the date and reason', '#e67e00'); return; }
 
   document.getElementById('churn-modal').style.display = 'none';
+
+  if (window._churnPendingTarget) {
+    var target = window._churnPendingTarget;
+    window._churnPendingTarget = null;
+    var grp = clientGroups[target.groupKey];
+    if (!grp) return;
+    var subKeys = target.subKeys || (grp.subs || [target.groupKey]).filter(function(sk){ return clients[sk] && !clients[sk]._churned; });
+    if (!subKeys.length) return;
+    var isPartial = !!target.subKeys; // a single-sub churn is always partial relative to the group
+    var churnedName = isPartial ? (clients[subKeys[0]] && clients[subKeys[0]].name) || subKeys[0] : grp.name;
+    subKeys.forEach(function(sk) {
+      if (!clients[sk]) return;
+      clients[sk].status = 'Churned';
+      clients[sk]._churned = true;
+    });
+    _persistCompanyStatus(subKeys, 'Churned');
+    addToArchives(target.groupKey, subKeys, date, reason, notes, isPartial);
+
+    if (isPartial && window._policyFilterSub === subKeys[0]) window._policyFilterSub = null;
+    if (typeof renderClientProfile === 'function') renderClientProfile(target.groupKey);
+    if (typeof filterPolicyFiles === 'function') filterPolicyFiles();
+    if (typeof renderTKCalendar === 'function') renderTKCalendar();
+    if (typeof renderClientCards === 'function') renderClientCards();
+    if (typeof renderSidebarClients === 'function') renderSidebarClients();
+    if (typeof renderClientAssignments === 'function') renderClientAssignments();
+    if (typeof showToast === 'function') showToast(churnedName + ' churned and moved to Archives');
+    return;
+  }
 
   // Update status pill in profile
   const statusEl = document.querySelector('#profile-service-info .status-pill');
