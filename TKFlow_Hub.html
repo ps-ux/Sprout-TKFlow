@@ -752,7 +752,6 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
     console.error('Session check failed', err);
     showLoginForm();
   });
-
 })();
 
 // Auto-logout after inactivity: warns 60s before actually signing out, so an idle tab doesn't
@@ -1132,10 +1131,10 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
         <!-- WS Overview -->
         <div class="tab-content active" id="ws-overview">
           <!-- Metrics -->
-          <div class="metrics-row">
+          <div class="metrics-row" id="ws-metrics-row">
             <div class="mcard"><div class="mcard-top"><div class="mcard-label">Headcount</div><div class="mcard-icon mi-blue"><i class="ti ti-id-badge"></i></div></div><div class="mcard-val vc-dark" id="ws-hc">—</div><div class="mcard-sub">this cut-off</div></div>
             <div class="mcard"><div class="mcard-top"><div class="mcard-label">Days absent</div><div class="mcard-icon mi-orange"><i class="ti ti-user-off"></i></div></div><div class="mcard-val vc-orange" id="ws-absent">—</div><div class="mcard-sub">across employees</div></div>
-            <div class="mcard"><div class="mcard-top"><div class="mcard-label">Open disputes</div><div class="mcard-icon mi-orange"><i class="ti ti-ticket"></i></div></div><div class="mcard-val vc-orange" id="ws-disp">—</div><div class="mcard-sub" id="ws-disp-sub">—</div></div>
+            <div class="mcard" id="ws-disp-card"><div class="mcard-top"><div class="mcard-label">Open disputes</div><div class="mcard-icon mi-orange"><i class="ti ti-ticket"></i></div></div><div class="mcard-val vc-orange" id="ws-disp">—</div><div class="mcard-sub" id="ws-disp-sub">—</div></div>
             <div class="mcard"><div class="mcard-top"><div class="mcard-label">Tasks done</div><div class="mcard-icon mi-green"><i class="ti ti-checklist"></i></div></div><div class="mcard-val vc-green" id="ws-tasks-done">—</div><div class="mcard-sub">this cut-off</div></div>
           </div>
 
@@ -21862,6 +21861,18 @@ function refreshWsDisputesBadgesAndList(key) {
   var elDisp = document.getElementById('ws-disp'); if (elDisp) elDisp.textContent = liveOpenDisp.length;
   var elDispSub = document.getElementById('ws-disp-sub'); if (elDispSub) elDispSub.textContent = liveRevDisp.length ? (liveRevDisp.length + ' pending reply') : (liveOpenDisp.length ? 'awaiting action' : 'all clear');
   var elTab = document.getElementById('tab-disputes-badge'); if (elTab) elTab.textContent = liveOpenDisp.length;
+
+  // A "0 open disputes" card reads as real signal for a client that actually tracks
+  // disputes -- but for one with neither Dispute Summary enabled nor Employee Email Support
+  // on (same flag that already hides the whole Disputes tab, see openWorkspace), it's not
+  // "zero disputes", it's "this metric doesn't apply here" and shouldn't be shown at all.
+  var dispCardRelevant = badgeClientKeys.some(function(k){
+    return isTaskEnabled(k, 'disputes_summary') || !(clients[k].taskConfig && clients[k].taskConfig.email_support === false);
+  });
+  var dispCard = document.getElementById('ws-disp-card');
+  if (dispCard) dispCard.style.display = dispCardRelevant ? '' : 'none';
+  var metricsRow = document.getElementById('ws-metrics-row');
+  if (metricsRow) metricsRow.style.gridTemplateColumns = 'repeat(' + (dispCardRelevant ? 4 : 3) + ',1fr)';
 }
 
 // Ticket numbers/rows for a NEW ticket are now only ever claimed/inserted by clicking Save
