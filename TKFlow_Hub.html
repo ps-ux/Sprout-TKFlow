@@ -15734,15 +15734,23 @@ function lmRenderUpcomingSection(ck) {
 
   function hdr(label) { return '<th style="padding:8px 10px;text-align:left;white-space:nowrap;">' + label + '</th>'; }
 
+  // Actions column is pinned to the right edge of the scroll area (position:sticky) so Mark
+  // done/Delete stay reachable without scrolling sideways through the credit columns first --
+  // a solid background + left border keep it visually separated from whatever's scrolled
+  // underneath it.
+  var actionsThStyle = 'padding:8px 10px;position:sticky;right:0;background:#F4F4F8;border-left:1px solid #EBEBEF;';
+  var actionsTdStyleBase = 'padding:8px 10px;position:sticky;right:0;border-left:1px solid #EBEBEF;background:';
+
   return '<div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow:hidden;">' + toolbar
     + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">'
     + '<thead><tr style="background:#F4F4F8;">'
     + hdr('Emp ID') + hdr('Name') + hdr('Leave Type') + hdr('Tier') + hdr('Hire Date') + hdr('Anniversary')
     + hdr('Current Bal.') + hdr('Used') + hdr('Should Be') + hdr('For Manual Edit') + hdr('Total for Year') + hdr('Credits to Add')
-    + '<th style="padding:8px 10px;"></th></tr></thead><tbody>'
+    + '<th style="' + actionsThStyle + '"></th></tr></thead><tbody>'
     + allRows.map(function(x) {
         var r = x.row;
         var isOneYearTier = (x.category === 'oneYear' || x.category === 'sickOneYear');
+        var rowBg = r.done ? '#fbfbfb' : '#fff';
         return '<tr style="border-bottom:1px solid #F4F4F8;' + (r.done?'opacity:0.5;':'') + '">'
           + '<td style="padding:8px 10px;white-space:nowrap;">' + r.empId + '</td>'
           + '<td style="padding:8px 10px;white-space:nowrap;">' + r.lastName + ', ' + r.firstName + '</td>'
@@ -15756,7 +15764,7 @@ function lmRenderUpcomingSection(ck) {
           + '<td id="lm-formanual-' + x.category + '-' + x.idx + '" style="padding:8px 10px;text-align:right;font-weight:600;color:#32CE13;">' + (isOneYearTier ? r.forManualEdit.toFixed(2) : '—') + '</td>'
           + '<td style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? '—' : r.totalCreditsForYear) + '</td>'
           + '<td style="padding:8px 10px;text-align:right;font-weight:600;color:#32CE13;">' + (isOneYearTier ? '—' : ((r.creditsToAdd>=0?'+':'') + r.creditsToAdd)) + '</td>'
-          + '<td style="padding:8px 10px;">' + lmActionButtons(x.category, x.idx, r.done) + '</td></tr>';
+          + '<td style="' + actionsTdStyleBase + rowBg + ';">' + lmActionButtons(x.category, x.idx, r.done) + '</td></tr>';
       }).join('')
     + '</tbody></table></div></div>';
 }
