@@ -5041,8 +5041,13 @@ async function _saveClientConfirmed() {
     supabaseClient.from(newGroupId ? 'company_groups' : 'companies')
       .update({ profile_meta: clientGroups[key].profileMeta })
       .eq('id', profileMetaScopeId)
+      .select()
       .then(function(res) {
-        if (res.error) console.warn('Could not save profile meta', res.error);
+        if (res.error) { console.warn('Could not save profile meta', res.error); return; }
+        // company_groups had no UPDATE RLS policy at all until this was caught via the color
+        // picker's own diagnostic -- this reported success with 0 rows saved the entire time
+        // for any real multi-entity group, exactly like the users table incident.
+        if (!res.data || !res.data.length) console.warn('Profile meta save for ' + key + ' reported success but saved 0 rows -- check RLS policies');
       });
   }
 
@@ -18597,8 +18602,13 @@ function saveProfile() {
       supabaseClient.from(scope.type === 'group' ? 'company_groups' : 'companies')
         .update({ profile_meta: target.obj.profileMeta })
         .eq('id', scope.id)
+        .select()
         .then(function(res) {
-          if (res.error) { console.warn('Could not save profile meta', res.error); if (typeof showToast === 'function') showToast('Could not save profile changes: ' + res.error.message, '#c0392b'); }
+          if (res.error) { console.warn('Could not save profile meta', res.error); if (typeof showToast === 'function') showToast('Could not save profile changes: ' + res.error.message, '#c0392b'); return; }
+          // company_groups had no UPDATE RLS policy at all until now -- this reported success
+          // with 0 rows saved for any real multi-entity group the entire time, exactly like
+          // the users table incident.
+          if (!res.data || !res.data.length) { if (typeof showToast === 'function') showToast('Profile changes did not save (permissions issue)', '#c0392b'); }
         });
     }
   }
