@@ -1061,8 +1061,16 @@ function assignAvClass(shortKey, siblingClasses) {
 
     <!-- Mini workweek calendar -->
     <div style="background:#fff;border:1px solid #EBEBEF;border-radius:14px;overflow:hidden;">
-      <div style="padding:14px 16px 10px;border-bottom:1px solid #EBEBEF;">
-        <div style="font-size:13px;font-weight:600;color:#1a1a2e;">This workweek</div>
+      <div style="padding:14px 16px 10px;border-bottom:1px solid #EBEBEF;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:#1a1a2e;">This workweek</div>
+          <div style="font-size:11px;color:#9898a6;margin-top:1px;" id="dash-mini-cal-range"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">
+          <button onclick="navMiniCalWeek(-1)" title="Previous week" style="width:24px;height:24px;border:1px solid #EBEBEF;border-radius:8px;background:#fff;color:#6b6b80;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;"><i class="ti ti-chevron-left" style="font-size:14px;"></i></button>
+          <button onclick="navMiniCalWeek(0)" id="dash-mini-cal-today-btn" title="Back to this week" style="display:none;font-size:11px;padding:3px 8px;border:1px solid #EBEBEF;border-radius:8px;background:#fff;color:#6b6b80;cursor:pointer;font-family:Rubik,sans-serif;">Today</button>
+          <button onclick="navMiniCalWeek(1)" title="Next week" style="width:24px;height:24px;border:1px solid #EBEBEF;border-radius:8px;background:#fff;color:#6b6b80;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;"><i class="ti ti-chevron-right" style="font-size:14px;"></i></button>
+        </div>
       </div>
       <div id="dash-mini-cal" style="padding:12px 14px;">
         <!-- Populated by renderMiniCal() -->
@@ -5328,14 +5336,35 @@ function renderDashSchedule() {
   }).join('');
 }
 
+// Lets the dashboard's mini calendar look back/ahead of the real current workweek.
+// 0 = this week, +1 = next week, -1 = last week, etc. -- reset elsewhere is unnecessary since
+// "Today" (navMiniCalWeek(0)) is always one click away and it's a harmless view-only offset.
+window._miniCalWeekOffset = window._miniCalWeekOffset || 0;
+function navMiniCalWeek(delta) {
+  window._miniCalWeekOffset = delta === 0 ? 0 : (window._miniCalWeekOffset || 0) + delta;
+  renderMiniCal();
+}
+
 function renderMiniCal() {
   var el = document.getElementById('dash-mini-cal');
   if (!el) return;
   var now = new Date();
   var day = now.getDay(); // 0=Sun
+  var weekOffset = window._miniCalWeekOffset || 0;
   // Workweek Mon-Fri
   var mon = new Date(now);
-  mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+  mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1) + weekOffset * 7);
+
+  var rangeEl = document.getElementById('dash-mini-cal-range');
+  if (rangeEl) {
+    var monthsShort = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var friForLabel = new Date(mon); friForLabel.setDate(mon.getDate() + 4);
+    rangeEl.textContent = (mon.getMonth() === friForLabel.getMonth())
+      ? monthsShort[mon.getMonth()] + ' ' + mon.getDate() + '–' + friForLabel.getDate()
+      : monthsShort[mon.getMonth()] + ' ' + mon.getDate() + ' – ' + monthsShort[friForLabel.getMonth()] + ' ' + friForLabel.getDate();
+  }
+  var todayBtn = document.getElementById('dash-mini-cal-today-btn');
+  if (todayBtn) todayBtn.style.display = weekOffset === 0 ? 'none' : 'inline-block';
 
   var days = ['M','T','W','T','F'];
   var html = '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin-bottom:8px;">';
