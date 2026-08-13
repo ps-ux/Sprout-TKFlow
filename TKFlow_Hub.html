@@ -17716,9 +17716,32 @@ function emailDetectTk() {
   return out;
 }
 
-function emailDetectVar() {
+// window.varResults only ever gets (re)populated by actually opening/restoring the Variance
+// Analysis task modal this session (varRenderResultCard) -- going straight from a reload to
+// the Email tab without doing that left this looking empty even when a finalized Variance run
+// was safely sitting in Supabase, wrongly reporting "no variance data available" and making it
+// look like reprocessing was needed. Falls back to fetching directly from the same
+// task_cutoff_review_state rows Variance itself restores from, scoped per sub's own companyId
+// (Variance snapshots are saved per individual sub, not per group).
+async function emailDetectVar() {
   var out = [];
   var vr = window.varResults || {};
+  if (!Object.keys(vr).length) {
+    var cks = emailClientKeys();
+    for (var i = 0; i < cks.length; i++) {
+      var companyId = clients[cks[i]] && clients[cks[i]].companyId;
+      if (!companyId) continue;
+      var res = await supabaseClient.from('task_cutoff_review_state').select('*')
+        .eq('company_id', companyId).eq('task_key', 'variance');
+      if (res.error || !res.data) continue;
+      res.data.forEach(function(row) {
+        var data = row.data || {};
+        if (!data.finalized) return;
+        vr[row.cutoff_label] = { attData: data.attData || [], finalized: true };
+      });
+    }
+    window.varResults = vr;
+  }
   Object.keys(vr).forEach(function(p) {
     var wv = (vr[p].attData || []).filter(function(e){ return e.hasVar; });
     if (!wv.length) {
@@ -17732,10 +17755,16 @@ function emailDetectVar() {
   return out;
 }
 
+// "This cut-off" was counting every ticket ever logged for the client, with zero regard for
+// which reporting period the ticket was actually about -- a client's dispute count only ever
+// grew, never resetting between cut-offs, and mixed tickets from genuinely different periods
+// into one number. Scoped to attendancePeriod === 'current', same convention Payroll
+// Instructions already uses to split current-vs-previous-period tickets (attendancePeriod
+// defaults to 'previous' unless a ticket is explicitly marked current).
 function emailDetectDisp() {
   var allDisp = (typeof allDisputes !== 'undefined') ? allDisputes : [];
   var cks = emailClientKeys();
-  var cd = allDisp.filter(function(d){ return cks.indexOf(d.client) >= 0; });
+  var cd = allDisp.filter(function(d){ return cks.indexOf(d.client) >= 0 && d.attendancePeriod === 'current'; });
   var op = cd.filter(function(d){ return d.status !== 'dst-closed'; }).length;
   return [{ id: 'disp-count', text: 'A total of ' + cd.length + ' ticket' + (cd.length !== 1 ? 's were' : ' was') + ' received this cut-off, and ' + op + ' ticket' + (op !== 1 ? 's remain' : ' remains') + ' open.' }];
 }
@@ -17788,7 +17817,9 @@ function emailFindingsSectionHtml(svc, findings) {
     + '</div></div>';
 }
 
-function emailRefreshFindings() {
+// async because emailDetectVar() may need to fetch from Supabase the first time it runs this
+// session -- other detectors are still plain sync functions, which await handles transparently.
+async function emailRefreshFindings() {
   var checked = emailCheckedServices();
   var body = document.getElementById('email-findings-body');
   var panel = document.getElementById('email-findings-panel');
@@ -17800,17 +17831,20 @@ function emailRefreshFindings() {
   }
   if (panel) panel.style.display = 'block';
 
-  body.innerHTML = checked.map(function(svc) {
+  var sections = [];
+  for (var i = 0; i < checked.length; i++) {
+    var svc = checked[i];
     var detector = EMAIL_DETECTORS[svc];
-    var candidates = detector ? detector() : [];
+    var candidates = detector ? await detector() : [];
     // Preserve previously checked state (and any custom-added lines) for findings that still exist.
     var prevState = window._emailFindings[svc] || [];
     var prevMap = {}; prevState.forEach(function(f){ prevMap[f.id] = f; });
     var customLines = prevState.filter(function(f){ return (f.id + '').indexOf('custom-') === 0; });
     var findings = candidates.map(function(c) { return { id: c.id, text: c.text, checked: prevMap[c.id] ? prevMap[c.id].checked : true }; }).concat(customLines);
     window._emailFindings[svc] = findings;
-    return emailFindingsSectionHtml(svc, findings);
-  }).join('');
+    sections.push(emailFindingsSectionHtml(svc, findings));
+  }
+  body.innerHTML = sections.join('');
 }
 
 function emailToggleFinding(svc, idx, checked) {
