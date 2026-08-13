@@ -2916,7 +2916,13 @@ function switchPage(page) {
 
 function switchTab(tab) {
   var _tb2 = document.getElementById('tab-bar'); if (_tb2) _tb2.style.display = 'flex';
-  if (tab === 'ws-profile')  { setTimeout(function(){ if (typeof renderClientProfile==='function') { var _pk2 = (window.currentWsGroup && typeof clientGroups !== 'undefined' && clientGroups[window.currentWsGroup]) ? window.currentWsGroup : (window.currentWsClient||''); renderClientProfile(_pk2); } if (typeof renderPolicyFiles==='function') renderPolicyFiles(); if (typeof renderTKCalendar==='function') renderTKCalendar(); }, 30); }
+  if (tab === 'ws-profile')  { setTimeout(function(){ if (typeof renderClientProfile==='function') { var _pk2 = (window.currentWsGroup && typeof clientGroups !== 'undefined' && clientGroups[window.currentWsGroup]) ? window.currentWsGroup : (window.currentWsClient||''); renderClientProfile(_pk2); } if (typeof renderPolicyFiles==='function') renderPolicyFiles(); if (typeof renderTKCalendar==='function') renderTKCalendar();
+    // #policy-viewer is one static element shared by every client's Client Profile tab --
+    // opening a file leaves it showing until explicitly closed, so switching to a different
+    // client and reopening this tab left the PREVIOUS client's open preview (name + content)
+    // visibly sitting on top of the new client's Policy Bank.
+    if (typeof closeViewer === 'function') closeViewer();
+  }, 30); }
   if (tab === 'ws-email')    { setTimeout(function(){ if (typeof _emailRestore==='function') _emailRestore();  }, 30); }
   if (tab === 'ws-logs')    { setTimeout(function(){ if (typeof renderAdhocLogs==='function') renderAdhocLogs(); }, 30); }
   if (tab === 'ws-tasks')   {
