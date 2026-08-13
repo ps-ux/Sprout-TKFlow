@@ -6424,6 +6424,17 @@ function setPayrollType(subKeysCsv, type) {
   if (typeof showToast === 'function') showToast('Payroll type updated to ' + type);
 }
 
+// Current Attendance Validation's onDone callback updates clients[ck].hc in memory from the
+// real Summary-sheet roster count, but never wrote it back to companies.headcount -- so it
+// looked right for the rest of the session, then silently reverted to whatever stale/zero
+// value was in the DB (from Add Client time) on the next reload, which is what made Admin's
+// total headcount undercount.
+function _persistCompanyHeadcount(clientKey, hc) {
+  supabaseClient.from('companies').update({ headcount: hc }).eq('short_key', clientKey).then(function(res) {
+    if (res.error) console.warn('Could not save headcount for ' + clientKey, res.error);
+  });
+}
+
 // The cutoffs array is small and always read/written as a single unit, so edits debounce per
 // sub (not per field) before persisting the whole array -- matches the ticketing URL autosave
 // pattern elsewhere in this file.
@@ -13475,6 +13486,7 @@ function runValidationBatch() {
         // full roster count from the Summary sheet, not the old static/hardcoded number.
         if (typeof window._tkFullHeadcount === 'number' && clients[g.clientKey]) {
           clients[g.clientKey].hc = window._tkFullHeadcount;
+          if (typeof _persistCompanyHeadcount === 'function') _persistCompanyHeadcount(g.clientKey, window._tkFullHeadcount);
           if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
           if (typeof updateAdminOverviewMetrics === 'function') updateAdminOverviewMetrics();
           if (typeof renderClientCards === 'function') renderClientCards();
