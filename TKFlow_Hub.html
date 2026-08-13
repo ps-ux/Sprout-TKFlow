@@ -1088,7 +1088,7 @@ function assignAvClass(shortKey, siblingClasses) {
         <div class="metrics-row" style="margin-bottom:20px;position:relative;z-index:1;">
           <div class="mcard"><div class="mcard-top"><div class="mcard-label">Total clients</div><div class="mcard-icon mi-purple"><i class="ti ti-building-community"></i></div></div><div class="mcard-val" id="admin-total-clients">3</div><div class="mcard-sub">active accounts</div></div>
           <div class="mcard"><div class="mcard-top"><div class="mcard-label">Total headcount</div><div class="mcard-icon mi-blue"><i class="ti ti-id-badge"></i></div></div><div class="mcard-val" id="admin-total-headcount">284</div><div class="mcard-sub">across all clients</div></div>
-          <div class="mcard"><div class="mcard-top"><div class="mcard-label">Open disputes</div><div class="mcard-icon mi-orange"><i class="ti ti-ticket"></i></div></div><div class="mcard-val" id="admin-open-disputes">4</div><div class="mcard-sub">team-wide</div></div>
+          <div class="mcard" onclick="openPreviewAllTickets()" title="View and download every company's disputes in one file" style="cursor:pointer;"><div class="mcard-top"><div class="mcard-label">Open disputes</div><div class="mcard-icon mi-orange"><i class="ti ti-ticket"></i></div></div><div class="mcard-val" id="admin-open-disputes">4</div><div class="mcard-sub">team-wide · click to view/download</div></div>
           <div class="mcard"><div class="mcard-top"><div class="mcard-label">Team members</div><div class="mcard-icon mi-green"><i class="ti ti-users"></i></div></div><div class="mcard-val" id="admin-team-members">4</div><div class="mcard-sub">active</div></div>
         </div>
 
@@ -3968,11 +3968,25 @@ async function saveBulkLog() {
   if(typeof showToast==='function') showToast('Logged '+rows.length+' employee'+(rows.length!==1?'s':'')+' for '+type);
 }
 
+// Ad hoc logs, Leave Monitoring downloads, and any other report whose content spans an
+// entire multi-sub group must be named/titled after the GROUP, not whichever individual
+// subcompany happens to be selected in the switcher -- the content already covers every sub
+// in the group (e.g. both KNI and KNLSI under KN), so naming it after just one of them is
+// misleading even though the data itself was correct. Falls back to the single client's own
+// name/key when there's no group or the group has only one (non-churned) sub.
+function currentWsReportScopeName() {
+  var grpKey = window.currentWsGroup;
+  var grp = grpKey && typeof clientGroups !== 'undefined' ? clientGroups[grpKey] : null;
+  var grpSubs = grp && grp.subs ? grp.subs.filter(function(sk){ return clients[sk] && !clients[sk]._churned; }) : [];
+  if (grp && grpSubs.length > 1) return grp.name || grpKey;
+  var ck = (typeof currentWsClient !== 'undefined' ? currentWsClient : null) || window._wsClient || '';
+  return (clients[ck] && clients[ck].name) || ck || 'Client';
+}
+
 function generateAdhocReport() {
   if (typeof XLSX === 'undefined') { if(typeof showToast==='function') showToast('XLSX not loaded yet','#e67e00'); return; }
   var ck = (typeof currentWsClient!=='undefined'?currentWsClient:null)||window._wsClient||'';
-  var clientObj = ck && clients[ck] ? clients[ck] : null;
-  var clientName = clientObj ? clientObj.name : (ck||'Client');
+  var clientName = currentWsReportScopeName();
 
   // Get log cards from the workspace adhoc section (not any modal)
   var container = document.getElementById('ws-adhoc-full') || document.getElementById('adhoc-list') || document.getElementById('ws-adhoc');
@@ -4018,7 +4032,7 @@ function generateAdhocReport() {
   ws['!cols'] = [14,18,10,22,32,20,20,18].map(function(w){return{wch:w};});
   XLSX.utils.book_append_sheet(wb, ws, 'Ad Hoc Log');
 
-  var filename = (ck||'Client') + '_AdHoc_Log_' + new Date().toISOString().slice(0,10) + '.xlsx';
+  var filename = clientName.replace(/[^a-z0-9]/gi,'_') + '_AdHoc_Log_' + new Date().toISOString().slice(0,10) + '.xlsx';
 
   // Style via JSZip: purple header row, grid borders on data
   if (typeof JSZip === 'undefined') {
@@ -16093,7 +16107,7 @@ function downloadLeaveMonitoringXLSX() {
   var ck = window.currentWsClient || window._wsClient || '';
   var year = window._lmActiveYear || new Date().getFullYear();
   var store = lmGetStore(ck, year);
-  var clientName = (clients[ck] && clients[ck].name) || ck;
+  var clientName = currentWsReportScopeName();
 
   var oneYearSheet = [['Employee ID','Last Name','First Name','Hire Date','Regularization Date','Work Anniversary (' + year + ')','Supposed','Current Balance','Leaves Used','Should be VL Credits','For Manual Edit']];
   store.oneYear.forEach(function(r) {
@@ -16118,7 +16132,7 @@ function downloadLeaveMonitoringXLSX() {
 function downloadLeaveMonitoringICS() {
   var ck = window.currentWsClient || window._wsClient || '';
   var store = lmGetStore(ck, window._lmActiveYear || new Date().getFullYear());
-  var clientName = (clients[ck] && clients[ck].name) || ck;
+  var clientName = currentWsReportScopeName();
 
   function icsDate(d) {
     var dt = new Date(d);
