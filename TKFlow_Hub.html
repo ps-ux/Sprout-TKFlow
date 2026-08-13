@@ -5355,6 +5355,11 @@ function renderMiniCal() {
   // Workweek Mon-Fri
   var mon = new Date(now);
   mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1) + weekOffset * 7);
+  // Zeroed out so date-only comparisons below (payout/deadline/holiday >= mon) don't silently
+  // exclude anything landing exactly on this week's Monday -- mon otherwise carries forward
+  // "now"'s real time-of-day (e.g. 2pm), so a midnight-normalized event date on that same
+  // Monday would compare as earlier than "Monday 2pm" and get dropped.
+  mon.setHours(0, 0, 0, 0);
 
   var rangeEl = document.getElementById('dash-mini-cal-range');
   if (rangeEl) {
@@ -5394,6 +5399,11 @@ function renderMiniCal() {
 
   if (typeof _calStore !== 'undefined' && typeof currentUser !== 'undefined') {
     var seenGrps = {};
+    // PH public holidays are national, not per-client -- pushing one for every assigned
+    // group (each of which merges the same shared _PH_HOLS table) showed the exact same
+    // holiday once per group instead of once for the week. Deduped by date key across every
+    // group's iteration, so a client's own genuinely distinct calHolidays entry still shows.
+    var seenHolidayKeys = {};
     currentUser.assignedClients.forEach(function(ck) {
       var cl = (typeof clients !== 'undefined') && clients[ck];
       if (!cl) return;
@@ -5425,6 +5435,8 @@ function renderMiniCal() {
 
       var allH = (typeof _PH_HOLS !== 'undefined') ? Object.assign({}, _PH_HOLS, store.calHolidays||{}) : (store.calHolidays||{});
       Object.keys(allH).forEach(function(k) {
+        if (seenHolidayKeys[k]) return;
+        seenHolidayKeys[k] = true;
         var pts = k.split('-');
         var hd = new Date(+pts[0], +pts[1]-1, +pts[2]);
         if (hd >= mon && hd <= fri)
