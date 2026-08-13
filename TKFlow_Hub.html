@@ -3788,6 +3788,25 @@ function openBulkLogModal() {
   if (tbody) tbody.innerHTML = '';
   window._bulkRows = [];
   for (var r = 0; r < 3; r++) bulkAddRow();
+
+  // Multi-sub groups need to say which sub a batch of employees belongs to -- previously
+  // there was no field for this at all, so every bulk-logged entry silently defaulted to
+  // whichever sub happened to be selected in the switcher. Same pattern as the single
+  // "Log Request" modal's own subcompany selector (adHocOpenTailored).
+  var grpKey = window.currentWsGroup;
+  var subGroup = document.getElementById('bulk-log-sub-group');
+  var subSelect = document.getElementById('bulk-log-sub');
+  var defaultClientKey = window.currentWsClient || window._wsClient || '';
+  if (grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey]) {
+    var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
+    subSelect.innerHTML = '<option value="">All subcompanies</option>'
+      + subs.map(function(k){ return '<option value="' + k + '">' + (clients[k].name||k) + '</option>'; }).join('');
+    subGroup.style.display = 'block';
+    defaultClientKey = subs.indexOf(defaultClientKey) >= 0 ? defaultClientKey : subs[0];
+    subSelect.value = defaultClientKey;
+  } else if (subGroup) {
+    subGroup.style.display = 'none';
+  }
 }
 
 function closeBulkLogModal() {
@@ -3940,6 +3959,8 @@ async function saveBulkLog() {
   var channelsObj = window._bulkChannels || {};
   var channels = ['email','viber','chat'].filter(function(c){ return channelsObj[c]; }).join(',');
   var rows     = (window._bulkRows||[]).filter(function(r){ return r && r.emp && r.emp.trim(); });
+  var subGroup = document.getElementById('bulk-log-sub-group');
+  var subKey   = (subGroup && subGroup.style.display !== 'none') ? document.getElementById('bulk-log-sub').value : (window.currentWsClient || window._wsClient || '');
 
   if (!rows.length) {
     if(typeof showToast==='function') showToast('No employees with names entered','#e67e00');
@@ -3953,7 +3974,7 @@ async function saveBulkLog() {
     var r = rows[i];
     await buildAndInsertAdhocCard({
       type: type, emp: r.emp.trim(), desc: (r.desc||'').trim(), before: r.from||'', after: r.to||'',
-      channels: channels, silent: true
+      channels: channels, subKey: subKey, silent: true
     });
   }
 
@@ -19817,6 +19838,10 @@ function toggleWsClosedDisputes(suffix) {
       <div onclick="closeBulkLogModal()" style="width:30px;height:30px;border-radius:12px;border:1px solid #EBEBEF;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9898a6;font-size:18px;">&times;</div>
     </div>
     <div style="padding:14px 20px;">
+      <div id="bulk-log-sub-group" style="display:none;margin-bottom:10px;">
+        <label class="task-field-label">Subcompany (applies to all rows)</label>
+        <select id="bulk-log-sub" class="task-input" style="width:100%;"></select>
+      </div>
       <!-- Shared settings -->
       <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px;margin-bottom:12px;align-items:end;">
         <div>
