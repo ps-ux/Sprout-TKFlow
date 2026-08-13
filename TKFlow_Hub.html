@@ -1460,7 +1460,13 @@ function assignAvClass(shortKey, siblingClasses) {
             </div>
           </div>
 
-          <div style="margin-top:24px;border-top:1px solid #EBEBEF;padding-top:20px;">
+          <div style="margin-top:10px;background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow:hidden;">
+            <div onclick="toggleProfileAccordion('docs')" style="display:flex;align-items:center;gap:10px;padding:14px 16px;cursor:pointer;">
+              <i id="profile-acc-chev-docs" class="ti ti-chevron-right" style="font-size:14px;color:#9898a6;transition:transform .15s;flex-shrink:0;transform:rotate(0deg);"></i>
+              <div><div style="font-size:13px;font-weight:600;color:#1a1a2e;">Documents & Calendar</div>
+              <div style="font-size:11px;color:#9898a6;margin-top:1px;">Policy & document bank, TK calendar</div></div>
+            </div>
+            <div id="profile-acc-body-docs" style="display:none;padding:0 16px 16px;">
             <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:start;">
               <div style="min-width:0;overflow:hidden;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;" class="generic-dz" id="policy-drop-zone" ondragover="return dzDragOver(event)" ondragleave="dzDragLeave(event)" ondrop="dzDrop(event,'policy-file-input')">
@@ -1545,6 +1551,7 @@ function assignAvClass(shortKey, siblingClasses) {
           <!-- Day detail panel -->
           <div id="cal-detail" style="display:none;margin-bottom:14px;background:#fff;border:1px solid #EBEBEF;border-radius:16px;padding:16px;"></div>
               </div>
+            </div>
             </div>
           </div>
         </div>
@@ -6928,6 +6935,38 @@ function setTicketingUrl(subKeysCsv, url) {
   }
 }
 
+// Client Profile groups its many small cards (contacts, schedule, tasks, documents...) into
+// a handful of collapsible sections instead of one long always-open scroll -- the previous
+// layout stacked ~9 separately-bordered cards plus a dozen scattered buttons/pills, which read
+// as cluttered even though each individual piece was fine. Open/closed state persists across
+// re-renders (every profile edit rebuilds this HTML from scratch) via this plain object rather
+// than resetting to defaults on every save. All start collapsed -- the section's own header
+// already says what it is, so there's no need to force one open by default.
+window._profileAccordionOpen = window._profileAccordionOpen || { overview: false, schedule: false, scope: false, docs: false };
+function toggleProfileAccordion(sectionKey) {
+  window._profileAccordionOpen[sectionKey] = !window._profileAccordionOpen[sectionKey];
+  var body = document.getElementById('profile-acc-body-' + sectionKey);
+  var chev = document.getElementById('profile-acc-chev-' + sectionKey);
+  if (body) body.style.display = window._profileAccordionOpen[sectionKey] ? 'block' : 'none';
+  if (chev) chev.style.transform = window._profileAccordionOpen[sectionKey] ? 'rotate(90deg)' : 'rotate(0deg)';
+}
+// headerExtra (e.g. a per-section action button) is wrapped so clicking it doesn't also
+// toggle the section -- it sits in the same header row but shouldn't fight the click-to-expand.
+function profileAccordionSection(sectionKey, title, subtitle, bodyHtml, headerExtraHtml) {
+  var open = !!window._profileAccordionOpen[sectionKey];
+  return '<div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;margin-bottom:14px;overflow:hidden;">'
+    + '<div onclick="toggleProfileAccordion(\'' + sectionKey + '\')" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;cursor:pointer;">'
+    + '<div style="display:flex;align-items:center;gap:10px;min-width:0;">'
+    + '<i id="profile-acc-chev-' + sectionKey + '" class="ti ti-chevron-right" style="font-size:14px;color:#9898a6;transition:transform .15s;flex-shrink:0;transform:' + (open ? 'rotate(90deg)' : 'rotate(0deg)') + ';"></i>'
+    + '<div style="min-width:0;"><div style="font-size:13px;font-weight:600;color:#1a1a2e;">' + title + '</div>'
+    + (subtitle ? '<div style="font-size:11px;color:#9898a6;margin-top:1px;">' + subtitle + '</div>' : '') + '</div>'
+    + '</div>'
+    + (headerExtraHtml ? '<div onclick="event.stopPropagation()" style="display:flex;align-items:center;gap:8px;flex-shrink:0;">' + headerExtraHtml + '</div>' : '')
+    + '</div>'
+    + '<div id="profile-acc-body-' + sectionKey + '" style="display:' + (open ? 'block' : 'none') + ';padding:0 16px 16px;">' + bodyHtml + '</div>'
+    + '</div>';
+}
+
 function renderClientProfile(key) {
   var el = document.getElementById('ws-profile-content');
   if (!el) return;
@@ -7332,6 +7371,25 @@ function renderClientProfile(key) {
       }).join('')
     + '</div>';
 
+  var overviewBody = subsListSection
+    + profileMetaSection
+    // POCs
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><div style="font-size:12px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;">Points of Contact</div><button onclick="openAddPOCModal()" style="padding:5px 12px;background:#F8F8FA;border:1px solid #EBEBEF;border-radius:7px;font-size:11px;color:#1a1a2e;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:4px;"><i class="ti ti-plus" style="font-size:11px;"></i> Add POC</button></div>'
+    + pocsSection
+    + processorHistorySection;
+
+  var scheduleHeaderExtra =
+    '<button onclick="showCutoffHistoryModal(\'' + cutoffEditKey + '\')" style="padding:5px 12px;background:#F8F8FA;border:1px solid #EBEBEF;border-radius:7px;font-size:11px;color:#1a1a2e;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:4px;"><i class="ti ti-history" style="font-size:11px;"></i> History</button>'
+    + '<button onclick="toggleCutoffEditMode(\'' + cutoffEditKey + '\')" style="padding:5px 12px;background:' + (cutoffEditing ? '#DCFCE7' : '#F8F8FA') + ';border:1px solid ' + (cutoffEditing ? '#32CE13' : '#EBEBEF') + ';border-radius:7px;font-size:11px;color:' + (cutoffEditing ? '#1F7A0A' : '#1a1a2e') + ';cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:4px;">'
+    + (cutoffEditing ? '<i class="ti ti-check" style="font-size:11px;"></i> Done editing' : '<i class="ti ti-pencil" style="font-size:11px;"></i> Edit')
+    + '</button>';
+  var scheduleBody = payrollTypeControl + cutoffSection + basicPayOffsetControl;
+
+  var scopeBody = tasksSection
+    + '<div style="font-size:11px;color:#9898a6;margin-top:8px;margin-bottom:12px;">Turning a task off hides it from that subcompany\'s Tasks aggregate and the Group Overview\'s task-status table, and excludes it from task-completion counts.</div>'
+    + '<button onclick="switchTab(\'ws-logs\')" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;background:#fff;border:1.5px solid #32CE13;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-arrow-right"></i> Log an out-of-scope item via Ad hoc logs</button>'
+    + expandedScopeSection;
+
   el.innerHTML =
     // Client header
     '<div class="dm-green-header" style="display:flex;align-items:center;gap:14px;padding:16px;background:linear-gradient(135deg,#DCFCE7,#E4FBEC);border-radius:16px;margin-bottom:16px;">'
@@ -7347,31 +7405,9 @@ function renderClientProfile(key) {
     + '</div>'
     + '<button onclick="openAddSubcompanyModal(\'' + (grpKey || key) + '\')" style="padding:7px 14px;background:#fff;border:1px solid #A6EB93;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;flex-shrink:0;"><i class="ti ti-plus" style="font-size:13px;"></i> Add Subcompany</button>'
     + '</div>'
-    + subsListSection
-    + profileMetaSection
-    // POCs
-    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><div style="font-size:12px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;">Points of Contact</div><button onclick="openAddPOCModal()" style="padding:5px 12px;background:#F8F8FA;border:1px solid #EBEBEF;border-radius:7px;font-size:11px;color:#1a1a2e;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:4px;"><i class="ti ti-plus" style="font-size:11px;"></i> Add POC</button></div>'
-    + pocsSection
-    + processorHistorySection
-    // Cutoff schedule
-    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'
-    + '<div style="font-size:12px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;">Cut-off Schedule</div>'
-    + '<div style="display:flex;gap:8px;">'
-    + '<button onclick="showCutoffHistoryModal(\'' + cutoffEditKey + '\')" style="padding:5px 12px;background:#F8F8FA;border:1px solid #EBEBEF;border-radius:7px;font-size:11px;color:#1a1a2e;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:4px;"><i class="ti ti-history" style="font-size:11px;"></i> History</button>'
-    + '<button onclick="toggleCutoffEditMode(\'' + cutoffEditKey + '\')" style="padding:5px 12px;background:' + (cutoffEditing ? '#DCFCE7' : '#F8F8FA') + ';border:1px solid ' + (cutoffEditing ? '#32CE13' : '#EBEBEF') + ';border-radius:7px;font-size:11px;color:' + (cutoffEditing ? '#1F7A0A' : '#1a1a2e') + ';cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:4px;">'
-    + (cutoffEditing ? '<i class="ti ti-check" style="font-size:11px;"></i> Done editing' : '<i class="ti ti-pencil" style="font-size:11px;"></i> Edit')
-    + '</button>'
-    + '</div>'
-    + '</div>'
-    + payrollTypeControl
-    + cutoffSection
-    + basicPayOffsetControl
-    // Applicable tasks
-    + '<div style="font-size:12px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Applicable Tasks</div>'
-    + tasksSection
-    + '<div style="font-size:11px;color:#9898a6;margin-top:8px;margin-bottom:12px;">Turning a task off hides it from that subcompany\'s Tasks aggregate and the Group Overview\'s task-status table, and excludes it from task-completion counts.</div>'
-    + '<button onclick="switchTab(\'ws-logs\')" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;background:#fff;border:1.5px solid #32CE13;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-arrow-right"></i> Log an out-of-scope item via Ad hoc logs</button>'
-    + expandedScopeSection;
+    + profileAccordionSection('overview', 'Overview', 'Entities, status, contacts, processor history', overviewBody)
+    + profileAccordionSection('schedule', 'Cut-off Schedule & Payroll', 'Payroll type, cut-off periods, Basic Pay offset', scheduleBody, scheduleHeaderExtra)
+    + profileAccordionSection('scope', 'Applicable Tasks & Scope', 'Task matrix, Expanded Scope features', scopeBody);
 
   renderProfileColorSwatches(grpKey || key);
 }
