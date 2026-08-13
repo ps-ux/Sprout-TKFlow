@@ -1919,6 +1919,7 @@ function assignAvClass(shortKey, siblingClasses) {
           <div class="settings-row"><div><div class="settings-label">Full name</div><div class="settings-sub">From your Google account</div></div><div class="settings-val" id="settings-fullname">Zona Rocelle Merto</div></div>
           <div class="settings-row"><div><div class="settings-label">Email</div></div><div class="settings-val" id="settings-email">zmerto@sprout.ph</div></div>
           <div class="settings-row"><div><div class="settings-label">Role</div></div><div class="settings-val" id="settings-role">Admin</div></div>
+          <div class="settings-row"><div><div class="settings-label">Password</div><div class="settings-sub">Sends a reset link to your own email</div></div><button onclick="requestPasswordReset()" style="padding:8px 16px;background:#fff;border:1px solid var(--n-200);color:var(--text-primary);border-radius:10px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;">Reset password</button></div>
         </div>
         <!-- Member Permissions -->
         <div class="settings-section" id="permissions-section">
@@ -3390,21 +3391,6 @@ function closeWorkspace() {
     <!-- STEP 4: Schedule -->
     <div id="modal-step-4" style="padding:20px 24px;display:none;">
       <div style="margin-bottom:16px;">
-        <div class="field-label">Submission schedule</div>
-        <div style="font-size:11px;color:#9898a6;margin-bottom:8px;">How are files submitted to the client?</div>
-        <div style="display:flex;gap:8px;">
-          <div class="radio-opt selected" id="sched-simul" onclick="selectSched('simul')" style="flex:1;text-align:center;">
-            <div style="font-weight:500;">Simultaneous</div>
-            <div style="font-size:11px;color:#9898a6;margin-top:2px;">All tasks submitted at the same time</div>
-          </div>
-          <div class="radio-opt" id="sched-stagger" onclick="selectSched('stagger')" style="flex:1;text-align:center;">
-            <div style="font-weight:500;">Staggered</div>
-            <div style="font-size:11px;color:#9898a6;margin-top:2px;">Tasks submitted on different dates</div>
-          </div>
-        </div>
-      </div>
-
-      <div style="margin-bottom:16px;">
         <div class="field-label">Cut-off schedule</div>
         <div style="font-size:11px;color:#9898a6;margin-bottom:10px;">Starting values for Client Profile — if you upload a TK Calendar below (or later), the real calendar takes over automatically and these become the fallback for clients without one.</div>
         <div id="ac-cutoff-fields-container" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;"><!-- Rendered by renderCutoffFields() based on the selected payroll type --></div>
@@ -4345,7 +4331,6 @@ function openAddClient() {
   if (acUmbrellaName) acUmbrellaName.value = '';
   if (typeof toggleUmbrellaFields === 'function') toggleUmbrellaFields();
   if (typeof selectPayroll === 'function') selectPayroll('semi');
-  if (typeof selectSched === 'function') selectSched('simul');
   if (typeof renderAssignRows === 'function') renderAssignRows();
   var acDateStarted = document.getElementById('ac-date-started');
   if (acDateStarted) {
@@ -4480,11 +4465,6 @@ function selectPayroll(type) {
   var notice = document.getElementById('ac-cal-weekly-notice');
   if (dz) dz.style.display = isWeekly ? 'none' : 'block';
   if (notice) notice.style.display = isWeekly ? 'block' : 'none';
-}
-
-function selectSched(type) {
-  ['simul','stagger'].forEach(t => document.getElementById('sched-' + t).classList.remove('selected'));
-  document.getElementById('sched-' + type).classList.add('selected');
 }
 
 function toggleEmailSupport(el) { el.classList.toggle('off'); }
@@ -18505,13 +18485,6 @@ function openAuditFromDashboard() {
         </div>
       </div>
       <div style="margin-bottom:12px;">
-        <label class="task-field-label">Submission schedule</label>
-        <div style="display:flex;gap:8px;">
-          <div class="radio-opt selected" id="ep-simul" onclick="selectEPSched('simul')" style="flex:1;text-align:center;font-size:12px;">Simultaneous</div>
-          <div class="radio-opt" id="ep-stagger" onclick="selectEPSched('stagger')" style="flex:1;text-align:center;font-size:12px;">Staggered</div>
-        </div>
-      </div>
-      <div style="margin-bottom:12px;">
         <label class="task-field-label">Special instructions / notes</label>
         <textarea class="task-input" id="ep-notes" rows="4" placeholder="Any important context, preferences, or instructions the next handler needs to know..." style="resize:none;width:100%;"></textarea>
       </div>
@@ -18895,12 +18868,6 @@ function openEditProfileModal() {
   notesEl.value = meta.notes || '';
   const handoffEl = document.getElementById('ep-handoff');
   if (handoffEl) handoffEl.value = '';
-  selectEPSched(meta.schedule === 'stagger' ? 'stagger' : 'simul');
-}
-
-function selectEPSched(type) {
-  document.getElementById('ep-simul').classList.toggle('selected', type === 'simul');
-  document.getElementById('ep-stagger').classList.toggle('selected', type === 'stagger');
 }
 
 function saveProfile() {
@@ -18908,7 +18875,6 @@ function saveProfile() {
   const handoff = document.getElementById('ep-handoff').value.trim();
   const date    = document.getElementById('ep-date-started').value;
   const status  = document.getElementById('ep-status').value;
-  const schedule = document.getElementById('ep-simul').classList.contains('selected') ? 'simul' : 'stagger';
 
   var target = epMetaTargetKey();
   if (target) {
@@ -18916,7 +18882,6 @@ function saveProfile() {
     target.obj.profileMeta.dateStarted = date;
     target.obj.profileMeta.status = status;
     target.obj.profileMeta.notes = notes;
-    target.obj.profileMeta.schedule = schedule;
     if (handoff) {
       if (!target.obj.profileMeta.handoffLog) target.obj.profileMeta.handoffLog = [];
       target.obj.profileMeta.handoffLog.unshift({ note: handoff, date: new Date().toISOString() });
