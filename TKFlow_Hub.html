@@ -5201,6 +5201,7 @@ function renderDashSchedule() {
     var col = tatCls === 'red' ? '#c0392b' : tatCls === 'yellow' ? '#e67e00' : '#32CE13';
     items.push({
       time: deadline,
+      pastEligible: true, // real TAT deadline time, dimming once it's passed is meaningful
       timeStr: deadline.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true}),
       label: d.id + ' — ' + d.name,
       sub: d.client + ' dispute reply due',
@@ -5238,6 +5239,7 @@ function renderDashSchedule() {
           if (p.payout.getFullYear()===now.getFullYear() && p.payout.getMonth()===now.getMonth() && p.payout.getDate()===now.getDate()) {
             items.push({
               time: new Date(p.payout.getFullYear(), p.payout.getMonth(), p.payout.getDate(), 17, 0),
+              pastEligible: true, // 5pm is a reasonable "done for the day" cutoff for a payout
               timeStr: 'Payout',
               label: p.monthName + ' ' + (p.period===1?'1st':'2nd') + ' Payout',
               sub: clientLabel,
@@ -5253,6 +5255,10 @@ function renderDashSchedule() {
             var timeStr = dl.hasTime ? dl.date.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true}) : 'Today';
             items.push({
               time: dl.date,
+              // Date-only deadlines (no dl.hasTime) get a midnight placeholder time -- dimming
+              // those as "past" the instant the clock ticks past midnight made the whole list
+              // look grayed out nearly all day. Only dim when there's a real time to be past.
+              pastEligible: !!dl.hasTime,
               timeStr: timeStr,
               label: dl.label,
               sub: clientLabel + ' · ' + p.monthName + ' ' + (p.period===1?'1st':'2nd'),
@@ -5282,6 +5288,7 @@ function renderDashSchedule() {
       var transferLabel = r.yearsOfService ? (r.yearsOfService + 'yr transfer') : '1yr transfer';
       items.push({
         time: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0),
+        pastEligible: false, // 9am is just a sort-order anchor, not a real due time -- due all day
         timeStr: 'Today',
         label: r.lastName + ', ' + r.firstName + ' \u2014 ' + transferLabel + (isEarly ? ' (actual: ' + fmtLMDate(r.anniversary) + ')' : ''),
         sub: clientName + ' \u00b7 Leave Monitoring',
@@ -5300,7 +5307,7 @@ function renderDashSchedule() {
   }
 
   el.innerHTML = items.map(function(item) {
-    var isPast = item.time < now;
+    var isPast = item.pastEligible && item.time < now;
     var opacity = isPast ? '0.5' : '1';
     return '<div style="display:flex;gap:12px;padding:10px 18px;border-bottom:1px solid #F4F4F8;opacity:' + opacity + ';">'
       + '<div style="text-align:right;min-width:54px;flex-shrink:0;">'
