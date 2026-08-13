@@ -6943,12 +6943,17 @@ function setTicketingUrl(subKeysCsv, url) {
 // than resetting to defaults on every save. All start collapsed -- the section's own header
 // already says what it is, so there's no need to force one open by default.
 window._profileAccordionOpen = window._profileAccordionOpen || { overview: false, schedule: false, scope: false, docs: false };
+// Only one section open at a time -- opening a new one collapses whatever was previously open,
+// rather than letting them stack up and defeat the point of collapsing in the first place.
 function toggleProfileAccordion(sectionKey) {
-  window._profileAccordionOpen[sectionKey] = !window._profileAccordionOpen[sectionKey];
-  var body = document.getElementById('profile-acc-body-' + sectionKey);
-  var chev = document.getElementById('profile-acc-chev-' + sectionKey);
-  if (body) body.style.display = window._profileAccordionOpen[sectionKey] ? 'block' : 'none';
-  if (chev) chev.style.transform = window._profileAccordionOpen[sectionKey] ? 'rotate(90deg)' : 'rotate(0deg)';
+  var willOpen = !window._profileAccordionOpen[sectionKey];
+  Object.keys(window._profileAccordionOpen).forEach(function(k) {
+    window._profileAccordionOpen[k] = (k === sectionKey) ? willOpen : false;
+    var body = document.getElementById('profile-acc-body-' + k);
+    var chev = document.getElementById('profile-acc-chev-' + k);
+    if (body) body.style.display = window._profileAccordionOpen[k] ? 'block' : 'none';
+    if (chev) chev.style.transform = window._profileAccordionOpen[k] ? 'rotate(90deg)' : 'rotate(0deg)';
+  });
 }
 // headerExtra (e.g. a per-section action button) is wrapped so clicking it doesn't also
 // toggle the section -- it sits in the same header row but shouldn't fight the click-to-expand.
