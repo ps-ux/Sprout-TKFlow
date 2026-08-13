@@ -17707,10 +17707,10 @@ function emailDetectTk() {
     if (!rows.length) {
       out.push({ id: 'tk-' + k, text: name + ': No unusual pattern detected among the causes of absences.' });
     } else {
-      var counts = {};
-      rows.forEach(function(r){ (r.remarks || []).forEach(function(rk){ if (!rk) return; var kk = rk.split(';')[0].trim(); counts[kk] = (counts[kk]||0)+1; }); });
-      var parts = Object.keys(counts).map(function(kk){ return kk + ' (' + counts[kk] + ')'; });
-      out.push({ id: 'tk-' + k, text: name + ': About ' + rows.length + ' employee(s) were captured with absences this cut-off' + (parts.length ? ' \u2014 ' + parts.join(', ') : '') + '.' });
+      // Just the total -- per user feedback, listing every distinct remark type with its own
+      // count read as "every reason of findings/absence remarks was written" rather than a
+      // useful summary.
+      out.push({ id: 'tk-' + k, text: name + ': About ' + rows.length + ' employee(s) were captured with absences this cut-off.' });
     }
   });
   return out;
