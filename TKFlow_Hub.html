@@ -1461,7 +1461,7 @@ function assignAvClass(shortKey, siblingClasses) {
           </div>
 
           <div style="margin-top:10px;background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow:hidden;">
-            <div onclick="toggleProfileAccordion('docs')" style="display:flex;align-items:center;gap:10px;padding:14px 16px;cursor:pointer;">
+            <div id="profile-acc-header-docs" onclick="toggleProfileAccordion('docs')" style="display:flex;align-items:center;gap:10px;padding:14px 16px;cursor:pointer;">
               <i id="profile-acc-chev-docs" class="ti ti-chevron-right" style="font-size:14px;color:#9898a6;transition:transform .15s;flex-shrink:0;transform:rotate(0deg);"></i>
               <div><div style="font-size:13px;font-weight:600;color:#1a1a2e;">Documents & Calendar</div>
               <div style="font-size:11px;color:#9898a6;margin-top:1px;">Policy & document bank, TK calendar</div></div>
@@ -6954,13 +6954,20 @@ function toggleProfileAccordion(sectionKey) {
     if (body) body.style.display = window._profileAccordionOpen[k] ? 'block' : 'none';
     if (chev) chev.style.transform = window._profileAccordionOpen[k] ? 'rotate(90deg)' : 'rotate(0deg)';
   });
+  // Collapsing whatever was previously open can shift this section up/down the page --
+  // scroll its header back into view so opening one doesn't leave you looking at whatever
+  // now happens to be under your cursor instead of the section you just asked for.
+  if (willOpen) {
+    var header = document.getElementById('profile-acc-header-' + sectionKey);
+    if (header) header.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 }
 // headerExtra (e.g. a per-section action button) is wrapped so clicking it doesn't also
 // toggle the section -- it sits in the same header row but shouldn't fight the click-to-expand.
 function profileAccordionSection(sectionKey, title, subtitle, bodyHtml, headerExtraHtml) {
   var open = !!window._profileAccordionOpen[sectionKey];
   return '<div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;margin-bottom:14px;overflow:hidden;">'
-    + '<div onclick="toggleProfileAccordion(\'' + sectionKey + '\')" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;cursor:pointer;">'
+    + '<div id="profile-acc-header-' + sectionKey + '" onclick="toggleProfileAccordion(\'' + sectionKey + '\')" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;cursor:pointer;">'
     + '<div style="display:flex;align-items:center;gap:10px;min-width:0;">'
     + '<i id="profile-acc-chev-' + sectionKey + '" class="ti ti-chevron-right" style="font-size:14px;color:#9898a6;transition:transform .15s;flex-shrink:0;transform:' + (open ? 'rotate(90deg)' : 'rotate(0deg)') + ';"></i>'
     + '<div style="min-width:0;"><div style="font-size:13px;font-weight:600;color:#1a1a2e;">' + title + '</div>'
