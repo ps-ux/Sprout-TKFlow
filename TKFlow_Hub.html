@@ -7529,12 +7529,18 @@ function getTATLabel(emailTimeStr, status) {
   const msLeft = deadline - now;
   if (msLeft < 0) {
     const over = Math.abs(msLeft);
-    const h = Math.floor(over / 3600000);
+    const d = Math.floor(over / 86400000);
+    const h = Math.floor((over % 86400000) / 3600000);
     const m = Math.floor((over % 3600000) / 60000);
+    // Past a day, minutes stop being useful precision -- show days + hours instead of
+    // hours climbing past 24 (e.g. "168h 0m ago" for a week-old ticket).
+    if (d > 0) return 'Overdue by ' + d + 'd ' + h + 'h ago';
     return 'Overdue by ' + (h) + 'h ' + (m) + 'm ago';
   }
-  const h = Math.floor(msLeft / 3600000);
+  const d = Math.floor(msLeft / 86400000);
+  const h = Math.floor((msLeft % 86400000) / 3600000);
   const m = Math.floor((msLeft % 3600000) / 60000);
+  if (d > 0) return 'Due in ' + d + 'd ' + h + 'h';
   if (h === 0) return 'Due in ' + (m) + 'm';
   return 'Due in ' + (h) + 'h ' + (m) + 'm';
 }
