@@ -5531,6 +5531,10 @@ function renderNotifCard() {
   if (!el) return;
 
   var notifs = [];
+  // Rebuilt fresh every render -- maps a work-anniversary notif's id to enough info for
+  // markNotifDone() to find and toggle the exact same Leave Monitoring row, wherever that
+  // client's workspace/year currently is (which may not be the one open right now).
+  window._notifDoneActions = {};
 
   // Tickets pushed in from the ticketing tool with a client key TKFlow doesn't recognize —
   // these have no client, so they'd otherwise be invisible anywhere except by opening this
@@ -5614,7 +5618,9 @@ function renderNotifCard() {
     var lmStore = window.leaveMonitoringStore && window.leaveMonitoringStore[ck] && window.leaveMonitoringStore[ck][new Date().getFullYear()];
     if (!lmStore) return;
     var clientName = (clients[ck] && clients[ck].name) || ck;
-    (lmStore.oneYear || []).concat(lmStore.fiveYear || []).forEach(function(r) {
+    var lmYearForNotif = new Date().getFullYear();
+    ['oneYear','fiveYear'].forEach(function(category) {
+      (lmStore[category] || []).forEach(function(r) {
       if (!r.anniversary) return;
       if (r.done) { if (r.doneAt !== todayISOForLM) return; }
       var reminderDate = lastWorkingDayOnOrBefore(r.anniversary, ck);
@@ -5625,12 +5631,18 @@ function renderNotifCard() {
       var statusText = r.done
         ? ' \u2014 marked done'
         : (overdueDays > 0 ? (' \u2014 ' + overdueDays + ' day' + (overdueDays > 1 ? 's' : '') + ' overdue') : (isEarly ? ' \u2014 actual date is ' + fmtLMDate(r.anniversary) : ' today'));
+      var notifId = 'lm-anniv-' + ck + '-' + r.empId;
+      // Only offer "Mark done" while it isn't already done -- once done, this notif only
+      // keeps showing (as a completed recap) through the rest of today via the doneAt check
+      // above, and un-checking it back to pending is Leave Monitoring's own job, not this card's.
+      if (!r.done) window._notifDoneActions[notifId] = { ck: ck, year: lmYearForNotif, category: category, empId: r.empId };
       notifs.push({
-        id: 'lm-anniv-' + ck + '-' + r.empId,
+        id: notifId,
         timeSensitive: !r.done, icon: 'ti-calendar-heart', color: '#7c3aed', bg: '#f3e8ff',
         text: r.lastName + ', ' + r.firstName + ' \u2014 ' + transferLabel + statusText,
         sub: clientName + ' \u00b7 ' + fmtLMDate(r.anniversary),
         action: function(){ openWorkspace(ck); setTimeout(function(){ switchTab('ws-leave'); }, 80); }
+      });
       });
     });
   });
@@ -5661,6 +5673,7 @@ function renderNotifCard() {
       + (n.timeSensitive ? ' <span style="font-size:9.5px;font-weight:600;padding:2px 8px;border-radius:999px;background:' + n.bg + ';color:' + n.color + ';text-transform:none;">Time-sensitive</span>' : '') + '</div>'
       + '<div style="font-size:11px;color:#9898a6;margin-top:2px;">' + n.sub + '</div></div>'
       + '<div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">'
+      + (window._notifDoneActions[n.id] ? '<button onclick="event.stopPropagation();markNotifDone(\'' + n.id + '\')" title="Mark this Leave Monitoring transfer done" style="padding:5px 10px;border:1px solid #EBEBEF;border-radius:7px;background:#fff;cursor:pointer;font-size:11px;font-weight:600;color:#7c3aed;font-family:Rubik,sans-serif;">Mark done</button>' : '')
       + (isRead ? '' : '<button onclick="event.stopPropagation();markNotifRead(\'' + n.id + '\')" title="Mark as read" style="width:26px;height:26px;border:1px solid #EBEBEF;border-radius:7px;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#9898a6;"><i class="ti ti-check" style="font-size:13px;"></i></button>')
       + (n.timeSensitive
           ? '<span title="Stays until the ticket is closed" style="width:26px;height:26px;display:flex;align-items:center;justify-content:center;color:#d0d0dc;"><i class="ti ti-lock" style="font-size:13px;"></i></span>'
@@ -15919,22 +15932,42 @@ function lmEditRowLive(category, idx, field, value) {
   if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, window._lmActiveYear);
 }
 
+// Shared by lmToggleDone (Leave Monitoring tab's own row checkbox) and markNotifDone
+// (Notifications' "Mark done" button on a work-anniversary reminder) -- both need to flip the
+// exact same row.done/doneAt and persist/re-render identically, just reached via different
+// context (idx into the currently-open tab's store vs. an explicit ck/year/category/empId from
+// a notification that may point at a client whose workspace isn't even open right now).
+function _lmApplyDoneToggle(ck, year, category, row) {
+  if (!row) return;
+  row.done = !row.done;
+  // Stamped so the anniversary-transfer notification (see renderNotifCard) can keep
+  // showing it as "done" for the rest of today it was actually completed, then stop
+  // generating it at all from tomorrow -- rather than either vanishing mid-session or
+  // sticking around forever once marked done.
+  var d = new Date();
+  row.doneAt = row.done ? (d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')) : null;
+  if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, year);
+  // Only repaint the Leave Monitoring tab if it's actually showing this exact client+year right
+  // now -- toggling from a notification can target a client whose workspace isn't open at all.
+  if (window.currentWsClient === ck && window._lmActiveYear === year && typeof renderLeaveMonitoringLive === 'function') renderLeaveMonitoringLive();
+  if (typeof renderNotifCard === 'function') renderNotifCard();
+}
+
 function lmToggleDone(category, idx) {
   var ck = window.currentWsClient || window._wsClient || '';
   var store = lmGetStore(ck, window._lmActiveYear);
-  var row = store[category][idx];
-  if (row) {
-    row.done = !row.done;
-    // Stamped so the anniversary-transfer notification (see renderNotifCard) can keep
-    // showing it as "done" for the rest of today it was actually completed, then stop
-    // generating it at all from tomorrow -- rather than either vanishing mid-session or
-    // sticking around forever once marked done.
-    var d = new Date();
-    row.doneAt = row.done ? (d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')) : null;
-  }
-  if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, window._lmActiveYear);
-  renderLeaveMonitoringLive();
-  if (typeof renderNotifCard === 'function') renderNotifCard();
+  _lmApplyDoneToggle(ck, window._lmActiveYear, category, store[category] && store[category][idx]);
+}
+
+// Called from Notifications' "Mark done" button — window._notifDoneActions (built fresh each
+// renderNotifCard) maps the notif id to enough info to find the same row lmToggleDone would,
+// without requiring that client's workspace to be the one currently open.
+function markNotifDone(notifId) {
+  var a = window._notifDoneActions && window._notifDoneActions[notifId];
+  if (!a) return;
+  var store = lmGetStore(a.ck, a.year);
+  var idx = (store[a.category] || []).findIndex(function(r){ return r.empId === a.empId; });
+  _lmApplyDoneToggle(a.ck, a.year, a.category, idx >= 0 ? store[a.category][idx] : null);
 }
 // Confirms before actually removing a row, since this can't be undone.
 function lmConfirmRemoveRow(category, idx) {
