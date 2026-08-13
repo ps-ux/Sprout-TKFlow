@@ -9825,7 +9825,7 @@ async function varSaveCutoffSnapshot(clientKey, co) {
   }
   var res = await supabaseClient.from('task_cutoff_review_state').upsert({
     company_id: companyId, task_key: 'variance', cutoff_label: co._payout,
-    data: { attData: co._attData || [], attColors: co._attColors || {}, finalized: !!co._finalized },
+    data: { attData: co._attData || [], attColors: co._attColors || {}, finalized: !!co._finalized, filenamePayout: co._filenamePayout || null },
     wb_storage_path: wbPath,
     updated_at: new Date().toISOString()
   }, { onConflict: 'company_id,task_key,cutoff_label' });
@@ -9971,6 +9971,9 @@ async function varTryRestoreFromSupabase(gi) {
     g = varBatchGroups[gi];
     if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending') return;
     var data = row.data || {};
+    // Rows saved before filenamePayout started getting persisted have no data.filenamePayout --
+    // recompute it from the calendar via the saved cutoff_label rather than leaving the
+    // download filename silently wrong for every already-saved session.
     restored.push({
       id: ++varCutoffCounter,
       _payout: row.cutoff_label,
@@ -9978,6 +9981,7 @@ async function varTryRestoreFromSupabase(gi) {
       _attData: data.attData || [],
       _attColors: data.attColors || {},
       _finalized: !!data.finalized,
+      _filenamePayout: data.filenamePayout || _varFilenamePayoutFromShown(row.cutoff_label),
       _varWb: wbBuf ? XLSX.read(new Uint8Array(wbBuf), { type: 'array' }) : null
     });
   }
@@ -10689,6 +10693,25 @@ function runPayrollInstructions() {
   }
 }
 
+// Given a Variance cutoff's shown/saved payout date (Date object or a parseable date string),
+// finds the calendar period immediately before it and returns its payout formatted as "Month
+// Day" -- the output file's naming convention (named after the PREVIOUS payout run's cycle,
+// not the cutoff Variance is actually reviewing). Shared by buildVarCard (fresh cards) and
+// varTryRestoreFromSupabase's legacy-row fallback (restored cards saved before filenamePayout
+// itself started getting persisted).
+function _varFilenamePayoutFromShown(shownPayout) {
+  var d = (shownPayout instanceof Date) ? shownPayout : new Date(shownPayout);
+  if (!d || isNaN(d.getTime())) return null;
+  var periods = getRealCalendarPeriods();
+  var idx = periods.findIndex(function(p) {
+    return p.payout && p.payout.getFullYear() === d.getFullYear()
+      && p.payout.getMonth() === d.getMonth() && p.payout.getDate() === d.getDate();
+  });
+  if (idx <= 0) return null;
+  var earlier = periods[idx - 1];
+  return (earlier && earlier.payout) ? earlier.payout.toLocaleDateString('en-US', {month:'long', day:'numeric'}) : null;
+}
+
 function buildVarCard(co, index, showRemove, gi) {
   var id = co.id;
   // Auto-fill from the uploaded TK Calendar: Cut-off 1 = the period containing today,
@@ -10702,8 +10725,7 @@ function buildVarCard(co, index, showRemove, gi) {
     // The output file name references the payout one period earlier than the one shown here --
     // Variance reviews the most recently completed attendance cutoff, but by established
     // convention the output file is named after the PREVIOUS payout run's cycle.
-    var _pEarlier = _periods[_idx - 1];
-    if (_pEarlier && _pEarlier.payout) co._filenamePayout = _pEarlier.payout.toLocaleDateString('en-US', {month:'long', day:'numeric'});
+    if (_p && _p.payout) co._filenamePayout = _varFilenamePayoutFromShown(_p.payout);
   }
   return '<div class="var-cutoff-card" id="var-co-' + id + '" style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:14px;margin-bottom:10px;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
