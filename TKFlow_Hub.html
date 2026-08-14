@@ -1944,6 +1944,15 @@ function signInWithGoogle() {
 
             <div style="font-size:12px;font-weight:600;color:#c0392b;margin-bottom:10px;text-transform:uppercase;letter-spacing:.4px;margin-top:20px;">Sick Leave</div>
             <div style="margin-bottom:16px;">
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                <input type="checkbox" id="lm-setup-sick-enabled" checked onchange="lmToggleSickTracking(this.checked)" style="width:16px;height:16px;accent-color:#c0392b;">
+                <span style="font-size:12px;color:#1a1a2e;">Track Sick Leave for this client</span>
+              </label>
+              <div style="font-size:11px;color:#9898a6;margin-top:4px;margin-left:24px;">Uncheck if this client doesn't want Sick Leave transfers monitored at all — only Vacation will be tracked.</div>
+            </div>
+
+            <div id="lm-sick-fields">
+            <div style="margin-bottom:16px;">
               <label class="field-label">Base annual credits (Year 1 top-up)</label>
               <input type="number" id="lm-setup-sick-base" value="15" class="modal-input" style="width:100%;">
             </div>
@@ -1986,6 +1995,7 @@ function signInWithGoogle() {
                   <div style="font-size:11px;color:#9898a6;margin-top:2px;">Everyone transfers Jan 1, regardless of hire date</div>
                 </div>
               </div>
+            </div>
             </div>
 
             <div style="display:flex;gap:8px;">
@@ -6852,6 +6862,9 @@ function lmOpenEditPolicy(subKeysCsv) {
   document.getElementById('lm-setup-y14plus').value = (cfg.creditsTable && cfg.creditsTable['14plus'] !== undefined) ? cfg.creditsTable['14plus'] : cfg.baseCredits;
   lmSelectTiming(cfg.timing || 'anniversary');
 
+  var sickEnabled = cfg.sickEnabled !== false;
+  document.getElementById('lm-setup-sick-enabled').checked = sickEnabled;
+  lmToggleSickTracking(sickEnabled);
   document.getElementById('lm-setup-sick-base').value = cfg.sickBaseCredits || cfg.baseCredits;
   var sickEscalates = !!cfg.sickEscalates;
   document.getElementById('lm-setup-sick-escalates').checked = sickEscalates;
@@ -6893,6 +6906,11 @@ function lmToggleSickEscalation(checked) {
   if (el) el.style.display = checked ? 'block' : 'none';
 }
 
+function lmToggleSickTracking(checked) {
+  var el = document.getElementById('lm-sick-fields');
+  if (el) el.style.display = checked ? 'block' : 'none';
+}
+
 function lmSaveSetup() {
   var base = parseFloat(document.getElementById('lm-setup-base').value) || 15;
   var creditsTable = {};
@@ -6902,6 +6920,7 @@ function lmSaveSetup() {
   creditsTable['14plus'] = parseFloat(document.getElementById('lm-setup-y14plus').value) || base;
   var timing = window._lmSetupTiming || 'anniversary';
 
+  var sickEnabled = !!document.getElementById('lm-setup-sick-enabled').checked;
   var sickBase = parseFloat(document.getElementById('lm-setup-sick-base').value) || 15;
   var sickEscalates = !!document.getElementById('lm-setup-sick-escalates').checked;
   var sickTiming = window._lmSetupSickTiming || 'anniversary';
@@ -6921,6 +6940,7 @@ function lmSaveSetup() {
     if (!clients[sk]) return;
     clients[sk].leaveMonitoringConfig = {
       baseCredits: base, creditsTable: creditsTable, timing: timing,
+      sickEnabled: sickEnabled,
       sickBaseCredits: sickBase, sickEscalates: sickEscalates, sickCreditsTable: sickCreditsTable, sickTiming: sickTiming
     };
     if (!clients[sk].taskConfig) clients[sk].taskConfig = {};
@@ -6954,6 +6974,7 @@ function lmGetCreditConfig(ck) {
     baseCredits: 15,
     creditsTable: {5:16, 6:17, 7:18, 8:19, 9:20, 10:21, 11:22, 12:23, 13:24, '14plus':25},
     timing: 'anniversary',
+    sickEnabled: true,
     sickBaseCredits: 15,
     sickEscalates: false,
     sickCreditsTable: null,
@@ -15821,6 +15842,7 @@ function computeLeaveMonitoring(empRows, leaveRows, ck, targetYear) {
   var fiveYearTransfers = [];
   var sickOneYearTransfers = [];
   var sickFiveYearTransfers = [];
+  var sickEnabled = creditConfig.sickEnabled !== false;
   var sickBase = creditConfig.sickBaseCredits || creditConfig.baseCredits;
 
   for (var ei = empHdrIdx + 1; ei < empRows.length; ei++) {
@@ -15861,7 +15883,7 @@ function computeLeaveMonitoring(empRows, leaveRows, ck, targetYear) {
       });
     }
 
-    if (yearsAtAnniversary === 1) {
+    if (yearsAtAnniversary === 1 && sickEnabled) {
       // Sick Leave — only needs 1st-year top-up tracking; years 2+ renew automatically in
       // Sprout HR without needing our monitoring (unlike Vacation, it doesn't escalate).
       var sd = sickByEmpId[empId] || { currentBalance: 0, used: 0 };
@@ -15890,7 +15912,7 @@ function computeLeaveMonitoring(empRows, leaveRows, ck, targetYear) {
 
       // Sick Leave 5+ years escalation — only computed if this client's policy has it enabled
       // (most clients, like Kuehne + Nagel, only need the 1st-year top-up for Sick Leave).
-      if (creditConfig.sickEscalates && creditConfig.sickCreditsTable) {
+      if (sickEnabled && creditConfig.sickEscalates && creditConfig.sickCreditsTable) {
         var sickConfigForTier = { baseCredits: sickBase, creditsTable: creditConfig.sickCreditsTable };
         var sickTotalCreditsForYear = lmCreditsForYear(sickConfigForTier, yearsAtAnniversary);
         var sickPreviousYearCredits = yearsAtAnniversary === 5 ? sickBase : lmCreditsForYear(sickConfigForTier, yearsAtAnniversary - 1);
@@ -16036,8 +16058,13 @@ function lmEditableCell(category, i, field, value) {
 // unchanged against the merged view), then filters and sorts by nearest anniversary first.
 function lmBuildUpcomingRows(ck, year) {
   var store = lmGetStore(ck, year);
+  // If this client has Sick Leave tracking turned off, hide any sick rows already sitting in
+  // the store too (e.g. tracked before the toggle was switched off), not just stop generating
+  // new ones -- otherwise disabling it would look like it did nothing.
+  var sickEnabled = (typeof lmGetCreditConfig === 'function') ? (lmGetCreditConfig(ck).sickEnabled !== false) : true;
   var rows = [];
   ['oneYear', 'fiveYear', 'sickOneYear', 'sickFiveYear'].forEach(function(cat) {
+    if (!sickEnabled && cat.indexOf('sick') === 0) return;
     (store[cat] || []).forEach(function(r) {
       rows.push({
         row: r, category: cat, idx: store[cat].indexOf(r),
@@ -16239,6 +16266,7 @@ function lmPushManualRow(ck, empId, lastName, firstName, hireDate, targetYear) {
   var yearsAtAnniversary = currentYear - hireDate.getFullYear();
   var anniversary = new Date(currentYear, hireDate.getMonth(), hireDate.getDate());
   var creditConfig = lmGetCreditConfig(ck);
+  var sickEnabled = creditConfig.sickEnabled !== false;
 
   if (yearsAtAnniversary <= 1) {
     store.oneYear.push({
@@ -16246,11 +16274,13 @@ function lmPushManualRow(ck, empId, lastName, firstName, hireDate, targetYear) {
       regDate: null, hireDate: hireDate, anniversary: anniversary,
       supposed: creditConfig.baseCredits, currentBalance: 0, used: 0, shouldBe: creditConfig.baseCredits, forManualEdit: creditConfig.baseCredits, checking: creditConfig.baseCredits, done: false
     });
-    store.sickOneYear.push({
-      empId: empId, lastName: lastName||'', firstName: firstName||'',
-      regDate: null, hireDate: hireDate, anniversary: anniversary,
-      supposed: creditConfig.sickBaseCredits, currentBalance: 0, used: 0, shouldBe: creditConfig.sickBaseCredits, forManualEdit: creditConfig.sickBaseCredits, checking: creditConfig.sickBaseCredits, done: false
-    });
+    if (sickEnabled) {
+      store.sickOneYear.push({
+        empId: empId, lastName: lastName||'', firstName: firstName||'',
+        regDate: null, hireDate: hireDate, anniversary: anniversary,
+        supposed: creditConfig.sickBaseCredits, currentBalance: 0, used: 0, shouldBe: creditConfig.sickBaseCredits, forManualEdit: creditConfig.sickBaseCredits, checking: creditConfig.sickBaseCredits, done: false
+      });
+    }
   } else {
     var yearsForCalc = Math.max(yearsAtAnniversary, 5);
     var totalCreditsForYear = lmCreditsForYear(creditConfig, yearsForCalc);
@@ -16262,7 +16292,7 @@ function lmPushManualRow(ck, empId, lastName, firstName, hireDate, targetYear) {
     });
     // Sick Leave only escalates by tenure year if this client's policy says so (see
     // lmGetCreditConfig) -- otherwise Sick only ever gets the 1st-year top-up above.
-    if (creditConfig.sickEscalates) {
+    if (sickEnabled && creditConfig.sickEscalates) {
       var sickConfigLike = { creditsTable: creditConfig.sickCreditsTable, baseCredits: creditConfig.sickBaseCredits };
       var sickTotal = lmCreditsForYear(sickConfigLike, yearsForCalc);
       var sickPrev = yearsForCalc === 5 ? creditConfig.sickBaseCredits : lmCreditsForYear(sickConfigLike, yearsForCalc - 1);
