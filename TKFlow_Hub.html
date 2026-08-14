@@ -863,8 +863,15 @@ function assignAvClass(shortKey, siblingClasses) {
     // hang with literally nothing to fall back to.
     console.error('Session check failed', err);
     showLoginForm();
+  }).finally(function() {
+    // An OAuth redirect (Google, or the PASSWORD_RECOVERY link) briefly puts the access token
+    // in the URL fragment -- supabase-js reads it during getSession() above and clears it, but
+    // leaves a bare trailing "#" in the address bar instead of removing the fragment outright.
+    // Safe to strip only now, after getSession() has already had its one chance to read it.
+    if (window.location.hash) {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
   });
-
 })();
 
 // "Continue with Google" on the login screen -- redirects out to Google, then back to this
