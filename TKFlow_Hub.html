@@ -12646,15 +12646,21 @@ function tkRemoveEvidenceRow(rowIdx, evIdx) {
 // window by runValidation, see detectHalfDay/deriveRemark) -- so a manually (re-)added date
 // reads identically to one the scan itself flagged, including correctly marking it as a half
 // day (weight 0.5) instead of silently defaulting to a full absence.
-function tkBuildManualRemark(detRow, dayBios, hasApp, appType) {
+// forceFlag ('absent' | 'half' | null/undefined) lets a caller override the auto-detected
+// classification instead of just accepting whatever detectHalfDay decides -- used by the
+// Detailed Tab Browser's explicit Absent/Half Day buttons. Leave it unset (as the "+ Add date"
+// manual picker still does) to keep the original auto-detect-only behavior.
+function tkBuildManualRemark(detRow, dayBios, hasApp, appType, forceFlag) {
   var appSuffix = hasApp ? 'has ' + appType : 'no application submitted';
-  if (!detRow) return { remark: hasApp ? 'has ' + appType : '', isHalfDay: false };
+  if (!detRow) return { remark: hasApp ? 'has ' + appType : '', isHalfDay: forceFlag === 'half' };
   var biologs = detRow.biologs || '';
   var bioU = biologs.toUpperCase();
   if (bioU === 'NO LOGS' || bioU === '') {
+    var appSuffixCap = hasApp ? 'Has ' + appType : 'No Pending Application';
+    if (forceFlag === 'half') return { remark: 'Half Day Absent — manually flagged; ' + appSuffixCap, isHalfDay: true };
     return { remark: 'No Logs; ' + appSuffix, isHalfDay: false };
   }
-  if (typeof window._tkDetectHalfDay === 'function') {
+  if (forceFlag !== 'absent' && typeof window._tkDetectHalfDay === 'function') {
     var halfDayResult = window._tkDetectHalfDay(detRow.shift || '', biologs, detRow.totalHrs || 0, detRow.undertimeMins || 0);
     if (halfDayResult) {
       return {
@@ -12662,6 +12668,11 @@ function tkBuildManualRemark(detRow, dayBios, hasApp, appType) {
         isHalfDay: true
       };
     }
+  }
+  if (forceFlag === 'half') {
+    // User overrode to Half Day even though auto-detection didn't independently find a
+    // half-day condition -- still honor the manual choice, just without a detected reason.
+    return { remark: 'Half Day Absent — manually flagged' + (hasApp ? '; Has ' + appType : '; No Pending Application'), isHalfDay: true };
   }
   if (typeof window._tkDeriveRemark === 'function') {
     return { remark: window._tkDeriveRemark(biologs, dayBios || [], hasApp, appType), isHalfDay: false };
@@ -12787,7 +12798,10 @@ function tkOpenDetailedBrowser(rowIdx) {
           + (alreadyAdded
               ? '<span style="font-size:10px;color:var(--kk-600);font-weight:600;">✓ Added</span>'
               : (isSuspicious
-                  ? '<button data-rowidx="'+rowIdx+'" data-dk="'+row.dk+'" onclick="tkAddDateFromBrowser(this.dataset.rowidx,this.dataset.dk);event.stopPropagation();" style="padding:3px 10px;background:var(--ub-500);color:#fff;border:none;border-radius:6px;font-size:10px;cursor:pointer;font-family:Rubik,sans-serif;">+ Add</button>'
+                  ? '<div style="display:flex;gap:4px;">'
+                    + '<button data-rowidx="'+rowIdx+'" data-dk="'+row.dk+'" onclick="tkAddDateFromBrowser(this.dataset.rowidx,this.dataset.dk,\'absent\');event.stopPropagation();" title="Add as full-day absent" style="padding:3px 8px;background:var(--ub-500);color:#fff;border:none;border-radius:6px;font-size:10px;cursor:pointer;font-family:Rubik,sans-serif;">Absent</button>'
+                    + '<button data-rowidx="'+rowIdx+'" data-dk="'+row.dk+'" onclick="tkAddDateFromBrowser(this.dataset.rowidx,this.dataset.dk,\'half\');event.stopPropagation();" title="Add as half-day absent" style="padding:3px 8px;background:#e67e00;color:#fff;border:none;border-radius:6px;font-size:10px;cursor:pointer;font-family:Rubik,sans-serif;">½ Day</button>'
+                    + '</div>'
                   : '<span style="font-size:10px;color:var(--text-muted);">—</span>'))
           + '</td></tr>';
       }).join('')
@@ -12796,7 +12810,7 @@ function tkOpenDetailedBrowser(rowIdx) {
   document.body.insertAdjacentHTML('beforeend', html);
 }
 
-function tkAddDateFromBrowser(rowIdx, dk) {
+function tkAddDateFromBrowser(rowIdx, dk, forceFlag) {
   var r = tkReviewRows[rowIdx]; if (!r) return;
   var detRow = (r.allDetailedRows||[]).find(function(row){ return row.dk === dk; });
   if (!detRow) return;
@@ -12823,7 +12837,7 @@ function tkAddDateFromBrowser(rowIdx, dk) {
   var hasApp = matchedApps.length > 0;
   var appType = hasApp ? (matchedApps.length > 1 ? matchedApps.length + ' applications (check dates)' : matchedApps[0].type+(matchedApps[0].status?' ('+matchedApps[0].status+')':'')) : '';
 
-  var built = tkBuildManualRemark(detRow, dayBios, hasApp, appType);
+  var built = tkBuildManualRemark(detRow, dayBios, hasApp, appType, forceFlag);
 
   // Update biologs
   var prev=new Date(d); prev.setDate(prev.getDate()-1);
@@ -12851,7 +12865,7 @@ function tkAddDateFromBrowser(rowIdx, dk) {
   document.getElementById('tk-detail-browser').remove();
   renderTKReview();
   tkOpenDetailedBrowser(rowIdx);
-  if (typeof showToast === 'function') showToast('Added: ' + dateStr);
+  if (typeof showToast === 'function') showToast('Added: ' + dateStr + (built.isHalfDay ? ' (Half Day)' : ' (Absent)'));
 }
 
 function tkDownloadOutput() {
