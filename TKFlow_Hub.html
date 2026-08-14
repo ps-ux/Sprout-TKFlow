@@ -22540,8 +22540,12 @@ function openDisputeTicket(id, clientContext) {
   // hiding anything behind an extra click.
   var findingsSection = document.getElementById('dtm-section-findings');
   if (findingsSection) findingsSection.open = !!(d.findings || d.recommendedResolution || d.updateOpen || d.otherRemarks);
+  // d.piPayout is auto-computed for every ticket at creation time (the cutoff-label
+  // auto-fill), so it's always truthy regardless of whether the user has entered anything --
+  // checking it here meant this section showed expanded on literally every ticket. Only real
+  // user-added payroll instruction lines should trigger auto-expand.
   var piSection = document.getElementById('dtm-section-pi');
-  if (piSection) piSection.open = !!(d.piPayout || (Array.isArray(d.piLines) && d.piLines.length));
+  if (piSection) piSection.open = !!(Array.isArray(d.piLines) && d.piLines.length);
 
   // Status buttons
   document.querySelectorAll('.dtm-st-btn').forEach(function(btn) {
