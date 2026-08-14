@@ -22690,6 +22690,21 @@ function dtmSaveField(field, value) {
   if (!d) return;
 
   d[field] = value;
+
+  // The Subcompany dropdown (dtmSubcompanyOptions) only ever saved into d.entity, a display-
+  // only field -- it never actually moved the ticket between clients, so picking e.g. "KNI"
+  // for a ticket really filed under d.client === 'KNLSI' kept it grouped under KNLSI
+  // everywhere that keys off d.client (renderDisputes' sections, dashboard badges) despite
+  // showing "KNI" right here. When the chosen name matches a real sibling subcompany in the
+  // same group as the ticket's current client, actually reassign d.client to match. Typed
+  // "Others" text (not a real sibling name) is left as display-only, same as before.
+  if (field === 'entity') {
+    var gk = Object.keys(clientGroups).find(function(g){ return (clientGroups[g].subs || [g]).indexOf(d.client) >= 0; });
+    var subs = gk ? (clientGroups[gk].subs || [d.client]) : [d.client];
+    var matchedKey = subs.find(function(sk){ return clients[sk] && clients[sk].name === value; });
+    if (matchedKey && matchedKey !== d.client) d.client = matchedKey;
+  }
+
   if (d._isDraft) return;
   dtmScheduleDisputeSave(dtmCurrentId);
 }
