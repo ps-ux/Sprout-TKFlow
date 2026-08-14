@@ -5224,9 +5224,31 @@ function renderDashSchedule() {
   // TAT-based items from open disputes
   allDisputes.forEach(function(d) {
     if ((currentUser.processClients||[]).indexOf(d.client) === -1) return;
-    if (d.status === 'dst-closed') return;
     var emailTime = d.emailTime;
     if (!emailTime) return;
+    if (d.status === 'dst-closed') {
+      // A ticket closed the same day it came in still belongs on today's schedule -- shown
+      // grayed out like any other finished item, instead of disappearing outright, so the
+      // day's timeline reflects what actually happened rather than just what's still open.
+      // Keyed off when it was RECEIVED, not the TAT deadline -- closed tickets have no
+      // deadline left to track.
+      var receivedDt = parseTATEmailTime(emailTime);
+      if (!receivedDt) return;
+      var receivedToday = receivedDt.getFullYear() === now.getFullYear() &&
+                           receivedDt.getMonth() === now.getMonth() &&
+                           receivedDt.getDate() === now.getDate();
+      if (!receivedToday) return;
+      items.push({
+        time: receivedDt,
+        pastEligible: true, // always show closed tickets as done, regardless of clock time
+        timeStr: receivedDt.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true}),
+        label: d.id + ' — ' + d.name,
+        sub: d.client + ' dispute — closed',
+        color: '#9898a6',
+        icon: 'ti-ticket'
+      });
+      return;
+    }
     var deadline = getTATDeadline(emailTime);
     if (!deadline) return;
     var isToday = deadline.getFullYear() === now.getFullYear() &&
@@ -5357,6 +5379,15 @@ function renderDashSchedule() {
       + '</div></div>';
   }).join('');
 }
+
+// renderDashSchedule() only recomputes "now" when something explicitly re-renders it (session
+// restore, opening the dashboard, a calendar upload, etc.) -- an item due at 9am stayed full
+// opacity forever if the dashboard was simply left open past that time with no navigation to
+// re-trigger a render. Same 60s-poll pattern already used for TAT dimming (updateDashboardTATAlerts/
+// refreshTATTimers above); only fires while the schedule list is actually on-screen.
+setInterval(function() {
+  if (document.getElementById('dash-schedule-list')) renderDashSchedule();
+}, 60000);
 
 // Lets the dashboard's mini calendar look back/ahead of the real current workweek.
 // 0 = this week, +1 = next week, -1 = last week, etc. -- reset elsewhere is unnecessary since
