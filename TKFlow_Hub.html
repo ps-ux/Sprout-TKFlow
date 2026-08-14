@@ -428,6 +428,15 @@ function toggleDarkMode(){var d=document.body.classList.toggle("dark-mode"),ic=d
       <div id="login-error" style="display:none;color:var(--color-danger);font-size:12px;margin:10px 0 0;"></div>
       <button type="submit" id="login-submit" class="login-btn" style="margin-top:16px;">Sign in</button>
     </form>
+    <div style="display:flex;align-items:center;gap:10px;margin:16px 0;">
+      <div style="flex:1;height:1px;background:var(--border,#EBEBEF);"></div>
+      <div style="font-size:11px;color:var(--text-muted,#9898a6);">or</div>
+      <div style="flex:1;height:1px;background:var(--border,#EBEBEF);"></div>
+    </div>
+    <button type="button" id="login-google-btn" onclick="signInWithGoogle()" style="width:100%;display:flex;align-items:center;justify-content:center;gap:10px;padding:10px;border:1px solid var(--border,#EBEBEF);border-radius:12px;background:#fff;color:var(--text-primary);font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">
+      <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 8 3l5.7-5.7C34.6 6.1 29.6 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.3-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 15.9 18.9 13 24 13c3.1 0 5.8 1.1 8 3l5.7-5.7C34.6 6.1 29.6 4 24 4c-7.7 0-14.4 4.4-17.7 10.7z"/><path fill="#4CAF50" d="M24 44c5.5 0 10.4-1.9 14.1-5.1l-6.5-5.5C29.6 34.9 26.9 36 24 36c-5.3 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.5 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.4l6.5 5.5C41.4 35.6 44 30.3 44 24c0-1.3-.1-2.3-.4-3.5z"/></svg>
+      Continue with Google
+    </button>
   </div>
 </div>
 
@@ -716,6 +725,32 @@ function assignAvClass(shortKey, siblingClasses) {
     });
   }
 
+  // A Google sign-in's real auth uid can't be known until the person actually signs in once,
+  // unlike the existing manual flow (admin creates the Dashboard Auth user first, pastes the
+  // known uid into Add Team Member). So someone added via Add Team Member's "will sign in
+  // with Google" mode gets a pending_team_invites row keyed by email instead of a users row.
+  // The first time that email successfully signs in with Google, promote it into a real
+  // users row using the uid we just received, then delete the pending invite.
+  async function _promotePendingInvite(uid, email) {
+    var inviteRes = await supabaseClient.from('pending_team_invites').select('*').ilike('email', email).maybeSingle();
+    if (inviteRes.error || !inviteRes.data) return false;
+    var invite = inviteRes.data;
+    var reportsToId = null;
+    if (invite.reports_to_short_key) {
+      var lookupRes = await supabaseClient.from('users').select('id').eq('short_key', invite.reports_to_short_key).maybeSingle();
+      reportsToId = lookupRes.data ? lookupRes.data.id : null;
+    }
+    var insRes = await supabaseClient.from('users').insert({
+      id: uid, short_key: invite.short_key, name: invite.name, initials: invite.initials, email: invite.email,
+      role_type: invite.role_type, role: invite.role, org_role: invite.org_role, reports_to: reportsToId,
+      can_service_view: invite.can_service_view, can_see_all_disputes: invite.can_see_all_disputes,
+      can_manage_access: invite.can_manage_access, can_assign: invite.can_assign, can_archive: invite.can_archive
+    });
+    if (insRes.error) { console.error('Could not promote pending invite for ' + email, insRes.error); return false; }
+    await supabaseClient.from('pending_team_invites').delete().eq('email', invite.email);
+    return true;
+  }
+
   async function loadCurrentUserFromSession(session) {
     // Wrapped in try/catch so a genuine exception (network hiccup, a bad query) always
     // falls back to the login form instead of leaving "Checking session..." stuck forever --
@@ -724,6 +759,10 @@ function assignAvClass(shortKey, siblingClasses) {
     try {
       var uid = session.user.id;
       var profileRes = await supabaseClient.from('users').select('*').eq('id', uid).maybeSingle();
+      if ((profileRes.error || !profileRes.data) && session.user.email) {
+        var promoted = await _promotePendingInvite(uid, session.user.email);
+        if (promoted) profileRes = await supabaseClient.from('users').select('*').eq('id', uid).maybeSingle();
+      }
       if (profileRes.error || !profileRes.data) {
         loginError.textContent = 'No TKFlow profile found for this account yet.';
         loginError.style.display = 'block';
@@ -825,7 +864,26 @@ function assignAvClass(shortKey, siblingClasses) {
     console.error('Session check failed', err);
     showLoginForm();
   });
+
 })();
+
+// "Continue with Google" on the login screen -- redirects out to Google, then back to this
+// same page once signed in. supabase-js's default detectSessionInUrl picks the resulting
+// session up automatically on reload, the same way the PASSWORD_RECOVERY redirect above
+// already relies on -- no extra handling needed here beyond kicking off the redirect.
+function signInWithGoogle() {
+  supabaseClient.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: window.location.origin + window.location.pathname,
+      // Hints Google's account picker to only show @sprout.ph accounts -- a convenience so
+      // someone with multiple Google logins doesn't accidentally pick a personal one, not a
+      // real access boundary (that's the pending_team_invites/users email match, enforced
+      // server-side by _promotePendingInvite regardless of which account they pick here).
+      queryParams: { hd: 'sprout.ph' }
+    }
+  });
+}
 
 // Auto-logout after inactivity: warns 60s before actually signing out, so an idle tab doesn't
 // leave payroll/employee data on-screen indefinitely. Only runs once signed in (started from
@@ -19865,17 +19923,29 @@ function toggleWsClosedDisputes(suffix) {
       <div style="height:1px;background:var(--border,#EBEBEF);margin:4px 0;"></div>
 
       <!-- Login access -- the actual account creation can't happen from the browser (it needs
-           the service-role key, which never touches this machine), so this is a two-step
-           manual + form flow: create the Auth account in the Dashboard first, then this form
-           records their real TKFlow profile against it. -->
+           the service-role key, which never touches this machine). Two ways to grant it:
+           Google mode just needs their work email now and defers the real Supabase Auth
+           account/uid until they actually click "Continue with Google" for the first time
+           (see _promotePendingInvite); Manual mode is the original flow -- create the Auth
+           account in the Dashboard first, then paste its uid here. -->
       <div style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:12px;padding:12px 14px;">
         <div style="font-size:12px;font-weight:600;color:#1a1a2e;margin-bottom:6px;">Login access</div>
-        <div style="font-size:11px;color:#9898a6;line-height:1.6;margin-bottom:10px;">
-          1. Supabase Dashboard → Authentication → Users → Add user (or Invite) with their work email.<br>
-          2. Copy their User UID from that row and paste it below.
+        <label class="settings-label">How will they sign in?</label>
+        <select class="field-group" id="nm-login-mode" onchange="nmToggleLoginMode()" style="width:100%;margin:4px 0 10px;">
+          <option value="google">Continue with Google (just needs their work email above)</option>
+          <option value="manual">Manual Supabase account (paste an Auth User ID)</option>
+        </select>
+        <div id="nm-login-google-note" style="font-size:11px;color:#9898a6;line-height:1.6;">
+          They'll get access the first time they sign in with Google using the work email entered above &mdash; no Supabase Dashboard setup needed.
         </div>
-        <label class="settings-label">Supabase Auth User ID *</label>
-        <input class="field-group" type="text" id="nm-auth-id" placeholder="e.g. 3fa85f64-5717-4562-b3fc-2c963f66afa6" style="width:100%;margin-top:4px;">
+        <div id="nm-login-manual-block" style="display:none;">
+          <div style="font-size:11px;color:#9898a6;line-height:1.6;margin-bottom:10px;">
+            1. Supabase Dashboard → Authentication → Users → Add user (or Invite) with their work email.<br>
+            2. Copy their User UID from that row and paste it below.
+          </div>
+          <label class="settings-label">Supabase Auth User ID *</label>
+          <input class="field-group" type="text" id="nm-auth-id" placeholder="e.g. 3fa85f64-5717-4562-b3fc-2c963f66afa6" style="width:100%;margin-top:4px;">
+        </div>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
@@ -20025,6 +20095,8 @@ function openAddMemberModal() {
     const el = document.getElementById(id); if (el) el.value = '';
   });
   var roleTypeEl = document.getElementById('nm-role-type'); if (roleTypeEl) roleTypeEl.value = 'member';
+  var loginModeEl = document.getElementById('nm-login-mode'); if (loginModeEl) loginModeEl.value = 'google';
+  nmToggleLoginMode();
   ['nm-perm-service-view','nm-perm-manage-access','nm-perm-assign','nm-perm-archive'].forEach(id => {
     const el = document.getElementById(id); if (el) el.checked = false;
   });
@@ -20043,6 +20115,14 @@ function openAddMemberModal() {
 function closeAddMemberModal() {
   const m = document.getElementById('add-member-modal');
   if (m) { m.style.display = 'none'; m.style.pointerEvents = 'none'; }
+}
+
+function nmToggleLoginMode() {
+  var mode = (document.getElementById('nm-login-mode')?.value) || 'google';
+  var manualBlock = document.getElementById('nm-login-manual-block');
+  var googleNote = document.getElementById('nm-login-google-note');
+  if (manualBlock) manualBlock.style.display = mode === 'manual' ? 'block' : 'none';
+  if (googleNote) googleNote.style.display = mode === 'google' ? 'block' : 'none';
 }
 
 function setNewMemberAv(avClass, bg, txt) {
@@ -20071,14 +20151,21 @@ function updateNewMemberPreview() {
 async function saveNewMember() {
   const name   = document.getElementById('nm-name')?.value.trim();
   const role   = document.getElementById('nm-role')?.value.trim();
+  const loginMode = document.getElementById('nm-login-mode')?.value || 'google';
   const authId = document.getElementById('nm-auth-id')?.value.trim();
   if (!name || !role) { alert('Name and role are required'); return; }
-  if (!authId) { alert('Supabase Auth User ID is required — create their login in the Supabase Dashboard first (Authentication → Users → Add user), then paste their User UID here.'); return; }
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(authId)) {
-    if (!window.confirm('That doesn\'t look like a Supabase User UID — continue anyway?')) return;
+  const get = id => document.getElementById(id)?.value.trim() || '';
+  const email = get('nm-email');
+  if (loginMode === 'manual') {
+    if (!authId) { alert('Supabase Auth User ID is required — create their login in the Supabase Dashboard first (Authentication → Users → Add user), then paste their User UID here.'); return; }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(authId)) {
+      if (!window.confirm('That doesn\'t look like a Supabase User UID — continue anyway?')) return;
+    }
+  } else if (!email) {
+    alert('Their work email is required so they can be recognized the first time they sign in with Google.');
+    return;
   }
 
-  const get = id => document.getElementById(id)?.value.trim() || '';
   const initials = name.split(' ').filter(Boolean).map(w => w[0]).join('').slice(0,2).toUpperCase();
 
   // Short key defaults to the first name, lowercased -- matches the existing convention
@@ -20090,7 +20177,6 @@ async function saveNewMember() {
 
   const roleType = document.getElementById('nm-role-type')?.value || 'member';
   const reportsToKey = document.getElementById('nm-reports-to')?.value || '';
-  const email = get('nm-email');
   const perms = {
     canServiceView: !!document.getElementById('nm-perm-service-view')?.checked,
     // canSeeAllDisputes has no UI to set it anymore (see renderMemberPermissions) -- disputes
@@ -20102,21 +20188,35 @@ async function saveNewMember() {
     canArchive: !!document.getElementById('nm-perm-archive')?.checked
   };
 
-  // reports_to is a real FK to another users.id -- resolve the picked USERS[] key to that
-  // real Supabase id via short_key, the same reconciliation loadUserRelationsFromSupabase() uses.
-  var reportsToId = null;
-  if (reportsToKey) {
-    var lookupRes = await supabaseClient.from('users').select('id').eq('short_key', reportsToKey).maybeSingle();
-    if (lookupRes.error) { if (typeof showToast === 'function') showToast('Could not resolve "Reports to": ' + lookupRes.error.message, '#c0392b'); return; }
-    reportsToId = lookupRes.data ? lookupRes.data.id : null;
+  var insRes;
+  if (loginMode === 'manual') {
+    // reports_to is a real FK to another users.id -- resolve the picked USERS[] key to that
+    // real Supabase id via short_key, the same reconciliation loadUserRelationsFromSupabase() uses.
+    var reportsToId = null;
+    if (reportsToKey) {
+      var lookupRes = await supabaseClient.from('users').select('id').eq('short_key', reportsToKey).maybeSingle();
+      if (lookupRes.error) { if (typeof showToast === 'function') showToast('Could not resolve "Reports to": ' + lookupRes.error.message, '#c0392b'); return; }
+      reportsToId = lookupRes.data ? lookupRes.data.id : null;
+    }
+    insRes = await supabaseClient.from('users').insert({
+      id: authId, short_key: shortKey, name: name, initials: initials, email: email,
+      role_type: roleType, role: role, org_role: role, reports_to: reportsToId,
+      can_service_view: perms.canServiceView, can_see_all_disputes: perms.canSeeAllDisputes,
+      can_manage_access: perms.canManageAccess, can_assign: perms.canAssign, can_archive: perms.canArchive
+    });
+  } else {
+    // Google mode -- no real Supabase Auth uid exists yet (can't be known until this person
+    // actually signs in). Park the profile in pending_team_invites keyed by email;
+    // _promotePendingInvite() (login flow) turns it into a real users row -- including
+    // resolving reports_to_short_key to a real id at that point -- the first time this email
+    // successfully signs in with Google.
+    insRes = await supabaseClient.from('pending_team_invites').insert({
+      email: email, short_key: shortKey, name: name, initials: initials,
+      role_type: roleType, role: role, org_role: role, reports_to_short_key: reportsToKey || null,
+      can_service_view: perms.canServiceView, can_see_all_disputes: perms.canSeeAllDisputes,
+      can_manage_access: perms.canManageAccess, can_assign: perms.canAssign, can_archive: perms.canArchive
+    });
   }
-
-  var insRes = await supabaseClient.from('users').insert({
-    id: authId, short_key: shortKey, name: name, initials: initials, email: email,
-    role_type: roleType, role: role, org_role: role, reports_to: reportsToId,
-    can_service_view: perms.canServiceView, can_see_all_disputes: perms.canSeeAllDisputes,
-    can_manage_access: perms.canManageAccess, can_assign: perms.canAssign, can_archive: perms.canArchive
-  });
   if (insRes.error) {
     if (typeof showToast === 'function') showToast('Could not save team member: ' + insRes.error.message, '#c0392b');
     return;
@@ -20161,7 +20261,7 @@ async function saveNewMember() {
   renderOrgChart();
   if (typeof updateAdminOverviewMetrics === 'function') updateAdminOverviewMetrics();
   if (typeof renderTeamCapacity === 'function') renderTeamCapacity();
-  showToast(name + ' added to the team!');
+  showToast(loginMode === 'google' ? (name + ' added — they can sign in with "Continue with Google" using ' + email) : (name + ' added to the team!'));
 }
 
 // ── Org chart edit
