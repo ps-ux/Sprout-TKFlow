@@ -655,7 +655,7 @@ function assignAvClass(shortKey, siblingClasses) {
   // assignment was silently dropped. `users.short_key` exists specifically to map a Supabase
   // Auth account back to its USERS[] key for this reconciliation.
   async function loadUserRelationsFromSupabase() {
-    var usersRes = await supabaseClient.from('users').select('id, short_key, name, role, email, initials, phone, sprout_started, hr_started, certifications, can_service_view, can_manage_access, can_archive, can_assign').not('short_key', 'is', null);
+    var usersRes = await supabaseClient.from('users').select('id, short_key, name, role, role_type, org_role, email, initials, phone, sprout_started, hr_started, certifications, can_service_view, can_manage_access, can_archive, can_assign, reports_to').not('short_key', 'is', null);
     var relsRes = await supabaseClient
       .from('user_company_relations')
       .select('user_id, relation_type, companies(short_key)');
@@ -663,13 +663,50 @@ function assignAvClass(shortKey, siblingClasses) {
       console.warn('Failed to load user_company_relations for team roster', usersRes.error, relsRes.error);
       return;
     }
+    // Built up front (not inside the forEach below) so a person whose reports_to appears
+    // later in usersRes.data still resolves correctly regardless of row order.
     var shortKeyByUid = {};
+    (usersRes.data || []).forEach(function(u) { if (u.short_key) shortKeyByUid[u.id] = u.short_key; });
+
     (usersRes.data || []).forEach(function(u) {
       if (!u.short_key) return;
-      shortKeyByUid[u.id] = u.short_key;
+      // Someone onboarded entirely through Add Team Member's Google-invite flow (no
+      // hardcoded seed entry in this file at all) used to be silently skipped here -- they
+      // had a fully real, working login, but were invisible everywhere USERS[]/teamProfiles[]
+      // gets read (Team Members list, org chart, assignment pickers, Admin overview counts),
+      // since nothing ever created their entry. Build one from their real users row instead.
+      if (!USERS[u.short_key]) {
+        USERS[u.short_key] = {
+          name: u.name, initials: u.initials || '', email: u.email,
+          roleType: u.role_type || 'member', role: u.role || '', orgRole: u.org_role || u.role || '',
+          reportsTo: u.reports_to ? (shortKeyByUid[u.reports_to] || null) : null,
+          canServiceView: false, canSeeAllDisputes: false, canManageAccess: false, canAssign: false, canArchive: false,
+          assignedClients: [], processClients: [], auditClients: []
+        };
+      }
+      if (typeof teamProfiles !== 'undefined' && !teamProfiles[u.short_key]) {
+        teamProfiles[u.short_key] = {
+          name: u.name, initials: u.initials || '', role: u.role || '',
+          team: 'OTK Team', email: u.email, phone: u.phone || '',
+          sproutStarted: u.sprout_started || '', hrStarted: u.hr_started || '',
+          certifications: u.certifications || [],
+          schedule: 'Mon–Fri, 8AM–5PM', restDays: 'Sat–Sun', bio: '',
+          emergency: { name: '', phone: '' },
+          avBg: '#DCFCE7', avTxt: '#32CE13', avClass: assignAvClass(u.short_key)
+        };
+      }
+      if (typeof orgStructure !== 'undefined' && !orgStructure[u.short_key]) {
+        orgStructure[u.short_key] = {
+          isLead: false,
+          reportsTo: (u.reports_to && shortKeyByUid[u.reports_to])
+            || Object.keys(orgStructure).find(function(k){ return orgStructure[k].isLead; })
+            || null,
+          showInChart: true,
+          order: 99
+        };
+      }
       // Needed so toggleUserPermission() can write permission changes back to this person's
       // real users row -- absent for anyone without a Supabase Auth account yet.
-      if (!USERS[u.short_key]) return;
       USERS[u.short_key].id = u.id;
       // Without this, the admin's own permissions matrix always showed the hardcoded USERS[]
       // seed defaults after a reload -- toggleUserPermission()'s write to Supabase could be
