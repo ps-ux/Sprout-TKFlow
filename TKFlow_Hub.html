@@ -2679,7 +2679,7 @@ function renderGroupOverview(grpKey) {
     var c = clients[k];
     var hist = (window.groupProcessingHistory && window.groupProcessingHistory[k]) || [];
     hist.forEach(function(e) {
-      mergedHist.push({ sub: c.name, subKey: k, cutoffLabel: e.cutoffLabel, startedAt: e.startedAt, finishedAt: e.finishedAt, tasksDone: e.tasksDone, totalTasks: e.totalTasks });
+      mergedHist.push({ sub: c.name, subKey: k, cutoffLabel: e.cutoffLabel, startedAt: e.startedAt, finishedAt: e.finishedAt, tasksDone: e.tasksDone, totalTasks: e.totalTasks, processedBy: e.processedBy });
     });
   });
   mergedHist.sort(function(a,b){ return new Date(b.startedAt) - new Date(a.startedAt); });
@@ -2705,6 +2705,7 @@ function renderGroupOverview(grpKey) {
       + '<th style="padding:9px 14px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Cut-off period</th>'
       + '<th style="padding:9px 14px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Started</th>'
       + '<th style="padding:9px 14px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Finished</th>'
+      + '<th style="padding:9px 14px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Processed by</th>'
       + '<th style="padding:9px 14px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Tasks completed</th>'
       + '</tr></thead><tbody>'
       + mergedHist.map(function(e) {
@@ -2716,6 +2717,7 @@ function renderGroupOverview(grpKey) {
             + '<td style="padding:10px 14px;color:#1a1a2e;">' + e.cutoffLabel + '</td>'
             + '<td style="padding:10px 14px;color:#9898a6;white-space:nowrap;">' + fmtHistDate(e.startedAt) + '</td>'
             + '<td style="padding:10px 14px;color:#9898a6;white-space:nowrap;">' + fmtHistDate(e.finishedAt) + '</td>'
+            + '<td style="padding:10px 14px;color:#1a1a2e;">' + (e.processedBy || '\u2014') + '</td>'
             + '<td style="padding:10px 14px;">' + badge + '</td>'
             + '</tr>';
         }).join('')
@@ -8958,7 +8960,8 @@ function saveCutoffProcessing(clientKey, entry) {
   supabaseClient.from('client_cutoff_processing').upsert({
     company_id: companyId, cutoff_label: entry.cutoffLabel,
     started_at: entry.startedAt || null, finished_at: entry.finishedAt || null,
-    tasks_done: entry.tasksDone || 0, total_tasks: entry.totalTasks || 0
+    tasks_done: entry.tasksDone || 0, total_tasks: entry.totalTasks || 0,
+    processed_by: entry.processedBy || null
   }, { onConflict: 'company_id,cutoff_label' }).select().then(function(res) {
     if (res.error) { console.warn('Could not save cutoff processing history for ' + clientKey, res.error); return; }
     // RLS can let an upsert report success with res.error === null while returning 0 rows
@@ -8988,7 +8991,7 @@ async function loadCutoffProcessingFromSupabase() {
     if (!window.groupProcessingHistory[k]) window.groupProcessingHistory[k] = [];
     window.groupProcessingHistory[k].push({
       cutoffLabel: row.cutoff_label, startedAt: row.started_at, finishedAt: row.finished_at,
-      tasksDone: row.tasks_done, totalTasks: row.total_tasks
+      tasksDone: row.tasks_done, totalTasks: row.total_tasks, processedBy: row.processed_by || null
     });
   });
 }
@@ -9587,12 +9590,17 @@ function markTaskStarted(clientKey) {
   var hist = window.groupProcessingHistory[clientKey];
   var entry = hist.find(function(e){ return e.cutoffLabel === label && !e.finishedAt; });
   if (!entry) {
-    entry = { cutoffLabel: label, startedAt: new Date().toISOString(), finishedAt: null, tasksDone: 0, totalTasks: 0 };
+    entry = { cutoffLabel: label, startedAt: new Date().toISOString(), finishedAt: null, tasksDone: 0, totalTasks: 0, processedBy: null };
     hist.unshift(entry); // most recent first
   }
   // Safety net: if an entry somehow already exists without a start time, backfill it now
   // rather than leaving it null forever.
   if (!entry.startedAt) entry.startedAt = new Date().toISOString();
+  // Whoever most recently opened a task for this cutoff is who "processed" it -- if a
+  // different member picks it up later (e.g. after a coverage pass-off), this naturally
+  // updates to reflect them instead of whoever started it.
+  var cu = window.currentUser || currentUser;
+  if (cu && cu.name) entry.processedBy = cu.name;
   saveCutoffProcessing(clientKey, entry);
 }
 
@@ -9607,9 +9615,11 @@ function logTaskProgress(clientKey) {
     // Fallback only — normally markTaskStarted() already created this entry when the task
     // was first opened. This just guards against a task somehow being marked done without
     // ever going through openTaskRunner first.
-    entry = { cutoffLabel: label, startedAt: new Date().toISOString(), finishedAt: null, tasksDone: 0, totalTasks: 0 };
+    entry = { cutoffLabel: label, startedAt: new Date().toISOString(), finishedAt: null, tasksDone: 0, totalTasks: 0, processedBy: null };
     hist.unshift(entry);
   }
+  var cu = window.currentUser || currentUser;
+  if (cu && cu.name) entry.processedBy = cu.name;
   var allT = (c.tasks||[]).concat(c.tasks2||[]).concat(c.tasks3||[]).filter(function(t){ return isTaskEnabled(clientKey, t.taskKey); });
   var doneCount = allT.filter(function(t){
     var ts = taskStatus[clientKey] && taskStatus[clientKey][t.taskKey];
