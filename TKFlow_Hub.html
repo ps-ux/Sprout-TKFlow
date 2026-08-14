@@ -12796,11 +12796,18 @@ function tkOpenDetailedBrowser(rowIdx) {
         var alreadyAdded  = r.evidence.some(function(e){ return e.date === row.date && (e.flagType||'absent') === 'absent'; });
         var rowBg    = alreadyAdded ? '#edfae8' : (isSuspicious ? '#fffaec' : 'transparent');
         var bioColor = isNoLogs ? 'var(--tm-600)' : (isSuspicious ? 'var(--ca-600)' : 'var(--text-primary)');
+        // Note in the biologs cell when any punch for this date came from a Certificate of
+        // Attendance rather than an actual biometric scan (Biologs sheet Notes column), so a
+        // processor can tell at a glance without opening the raw file.
+        var dayCoaEntries = ((r.bioByDate && r.bioByDate[row.dk]) || []).filter(function(b){ return b.isCOA; });
+        var coaBadge = dayCoaEntries.length
+          ? ' <span style="font-size:9px;font-weight:700;color:#7c3aed;background:#f3e8ff;padding:1px 5px;border-radius:8px;" title="Certificate of Attendance on file">COA · ' + dayCoaEntries.map(function(b){ return (b.mode||'').toUpperCase(); }).join('/') + '</span>'
+          : '';
         return '<tr style="background:'+rowBg+';border-bottom:1px solid #EBEBEF;">'
           + '<td style="padding:8px 10px;font-weight:600;color:var(--ub-600);white-space:nowrap;">' + row.date + '</td>'
           + '<td style="padding:8px 10px;color:var(--text-muted);">' + row.day + '</td>'
           + '<td style="padding:8px 10px;color:var(--text-primary);max-width:180px;">' + row.shift + '</td>'
-          + '<td style="padding:8px 10px;color:'+bioColor+';font-weight:'+(isSuspicious?'600':'400')+';"">' + (row.biologs||'') + '</td>'
+          + '<td style="padding:8px 10px;color:'+bioColor+';font-weight:'+(isSuspicious?'600':'400')+';"">' + (row.biologs||'') + coaBadge + '</td>'
           + '<td style="padding:8px 10px;text-align:right;color:'+(row.lateMins>0?'var(--ca-700)':'var(--text-muted)')+';font-weight:'+(row.lateMins>0?'600':'400')+';">' + (row.lateMins>0?row.lateMins:'\u2014') + '</td>'
           + '<td style="padding:8px 10px;text-align:right;color:'+(row.undertimeMins>0?'var(--ub-600)':'var(--text-muted)')+';font-weight:'+(row.undertimeMins>0?'600':'400')+';">' + (row.undertimeMins>0?row.undertimeMins:'\u2014') + '</td>'
           + '<td style="padding:8px 10px;color:'+(isSuspicious?'var(--ca-600)':'var(--text-primary)')+';font-weight:'+(isSuspicious?'600':'400')+';"">' + (row.totalHrs||'') + '</td>'
@@ -14246,6 +14253,25 @@ function runValidation(opts) {
     return hasApp ? 'has ' + appType : '';
   }
 
+  // A "Missing IN/OUT Log" remark can itself be misleading: the employee may have filed a
+  // Certificate of Attendance (COA), but for the wrong direction -- e.g. missing an OUT log,
+  // yet the COA on file certifies an IN that's already covered by a genuine (non-COA) punch.
+  // That's a wrong filing (the COA should have covered the OUT gap instead), confirmed by the
+  // user against real cases. Appends a note to the remark when detected; leaves it unchanged
+  // otherwise (including when there's no Notes column data to check at all).
+  function tkAppendCoaMismatchNote(remark, bioEntries) {
+    if (!remark || !bioEntries || !bioEntries.length) return remark;
+    var missingDir = /^Missing IN Log/i.test(remark) ? 'in' : (/^Missing OUT Log/i.test(remark) ? 'out' : null);
+    if (!missingDir) return remark;
+    var oppositeDir = missingDir === 'in' ? 'out' : 'in';
+    var coaForOpposite = bioEntries.some(function(b){ return b.isCOA && (b.mode||'').toLowerCase() === oppositeDir; });
+    var genuineForOpposite = bioEntries.some(function(b){ return !b.isCOA && (b.mode||'').toLowerCase() === oppositeDir; });
+    if (coaForOpposite && genuineForOpposite) {
+      return remark + '; ' + missingDir.toUpperCase() + ' log not included in approved COA application';
+    }
+    return remark;
+  }
+
   // Check if same-time biolog is confirmed by biologs tab (if same-time in both, flag it)
   function isSameTimeBiologConfirmed(biologs, bioEntries) {
     var tParts = biologs.match(/(\d+:\d+\s*[AP]M)\s+TO\s+(\d+:\d+\s*[AP]M)/i);
@@ -14262,7 +14288,9 @@ function runValidation(opts) {
   // this logic. Safe to rely on: the review UI these two functions operate on only exists
   // after runValidation has already run at least once.
   window._tkDetectHalfDay = detectHalfDay;
-  window._tkDeriveRemark = deriveRemark;
+  window._tkDeriveRemark = function(biologs, bioEntries, hasApp, appType) {
+    return tkAppendCoaMismatchNote(deriveRemark(biologs, bioEntries, hasApp, appType), bioEntries);
+  };
 
   function readFile(file) {
     return new Promise(function(resolve) {
@@ -14350,20 +14378,22 @@ function runValidation(opts) {
       var bioRows = XLSX.utils.sheet_to_json(bioSheet, {header:1, defval:'', raw:false});
 
       // Find header row — scan first 10 rows
-      var bioCols = {id:-1, logTime:-1, mode:-1};
+      var bioCols = {id:-1, logTime:-1, mode:-1, notes:-1};
       var bioDataStart = 1;
       for (var bi=0; bi<Math.min(bioRows.length,10); bi++) {
         var bh = bioRows[bi].map(clean);
-        var tmpId=-1, tmpLog=-1, tmpMode=-1;
+        var tmpId=-1, tmpLog=-1, tmpMode=-1, tmpNotes=-1;
         bh.forEach(function(h,ci) {
           var hl = h.toLowerCase().replace(/[\s_\-\/]+/g,'');
           if (hl.match(/biometric|employeeno|empno|empid|idnumber/) || hl === 'id') tmpId = ci;
           else if (hl.match(/logtime|logdate|datetime|timestamp/)) tmpLog = ci;
           else if (hl.match(/inout|mode|type|direction/) || hl === 'io') tmpMode = ci;
+          else if (hl.match(/notes|remarks|comment/)) tmpNotes = ci;
         });
         if (tmpId >= 0 && tmpLog >= 0) {
           bioCols.id = tmpId; bioCols.logTime = tmpLog;
           bioCols.mode = tmpMode >= 0 ? tmpMode : tmpLog + 1;
+          bioCols.notes = tmpNotes;
           bioDataStart = bi + 1;
           break;
         }
@@ -14388,10 +14418,16 @@ function runValidation(opts) {
         var bId = br[bioCols.id]; if (!bId) continue;
         var logTime = br[bioCols.logTime]; if (!logTime) continue;
         var mode = br[bioCols.mode] || '';
+        var notes = bioCols.notes >= 0 ? (br[bioCols.notes] || '') : '';
+        // A punch whose Notes column references a Certificate of Attendance ID was manually
+        // certified, not an actual biometric scan -- distinguishing this matters because a COA
+        // filed for a direction that already has a genuine punch (instead of the direction
+        // that's actually missing) is a wrong filing, see tkAppendCoaMismatchNote below.
+        var isCOA = /certificateofattendance/i.test(notes);
         var logDateObj = parseLogDate(logTime);
         if (!logDateObj) continue;
         var dk = (logDateObj.getMonth()+1) + '/' + logDateObj.getDate();
-        indexBio(bId, dk, {logTime:logTime, mode:mode, dateObj:logDateObj});
+        indexBio(bId, dk, {logTime:logTime, mode:mode, dateObj:logDateObj, notes:notes, isCOA:isCOA});
         _bioDebugRows++;
         var nid = normalizeId(bId);
         if (_bioDebugIds.indexOf(nid)<0 && _bioDebugIds.length<5) _bioDebugIds.push(nid);
@@ -14655,7 +14691,7 @@ function runValidation(opts) {
         var appType = matchApp ? matchApp.type+(matchApp.status?' ('+matchApp.status+')':'') : '';
         var remark = isHalfDayAbsent
           ? 'Half Day Absent \u2014 ' + halfDayResult.reason + (hasApp ? '; Has ' + appType : '; No Pending Application')
-          : deriveRemark(biologs, dayBios, hasApp, appType);
+          : tkAppendCoaMismatchNote(deriveRemark(biologs, dayBios, hasApp, appType), dayBios);
 
         // Get matched applications for this date
         var matchedApps = (appsByEmp[_curKey]||[]).filter(function(a){
