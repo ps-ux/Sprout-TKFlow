@@ -9491,15 +9491,19 @@ function logTaskProgress(clientKey) {
   saveCutoffProcessing(clientKey, entry);
 }
 
-function setTaskStatus(taskKey, st, reason) {
+function setTaskStatus(taskKey, st, reason, targetOverride) {
   var ck = window.currentWsClient || window._wsClient || '';
   var grpKey = window.currentWsGroup;
   // Tasks without their own independent per-subcompany batch tracking (newhires, profile,
   // payroll_instructions) apply to the whole group when marked done/skipped — there's no
   // per-sub state for these to track separately, unlike variance/validation/disputes_summary.
-  var targets = (grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey])
-    ? clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; })
-    : [ck];
+  // targetOverride lets a caller (e.g. confirmSkipTask, when the user didn't opt into
+  // "apply to all subcompanies") narrow this to specific keys instead of the whole group.
+  var targets = (Array.isArray(targetOverride) && targetOverride.length)
+    ? targetOverride
+    : (grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey])
+      ? clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; })
+      : [ck];
   if (!targets.length) targets = [ck];
 
   targets.forEach(function(k) {
@@ -9736,6 +9740,17 @@ function skipTask(taskKey) {
   window._skipTaskPendingKey = taskKey;
   var input = document.getElementById('skip-task-reason-input');
   if (input) input.value = '';
+  var applyAllEl = document.getElementById('skip-task-apply-all');
+  if (applyAllEl) applyAllEl.checked = false;
+  // Only offer the whole-group option when there's actually more than one active sub to
+  // apply it to -- a single-sub group (or standalone client) has nothing else to skip.
+  var groupRow = document.getElementById('skip-task-group-row');
+  if (groupRow) {
+    var grpKey = window.currentWsGroup;
+    var multiSub = !!(grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey]
+      && clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; }).length > 1);
+    groupRow.style.display = multiSub ? 'block' : 'none';
+  }
   var modal = document.getElementById('skip-task-reason-modal');
   if (modal) { modal.style.display = 'flex'; if (input) setTimeout(function(){ input.focus(); }, 30); }
 }
@@ -9749,6 +9764,8 @@ function confirmSkipTask() {
   if (!taskKey) return;
   var input = document.getElementById('skip-task-reason-input');
   var reason = ((input ? input.value : '') || '').trim() || 'Not applicable this period';
+  var applyAllEl = document.getElementById('skip-task-apply-all');
+  var applyToWholeGroup = !!(applyAllEl && applyAllEl.checked);
   closeSkipTaskModal();
   // Cache body without footer
   var ck = window.currentWsClient || window._wsClient || '';
@@ -9761,9 +9778,11 @@ function confirmSkipTask() {
     window._taskBodyCache[cacheKey] = body.innerHTML;
   }
   var batchNamesSkip = finalizeBatchTaskIfApplicable(taskKey, 'skipped', reason);
-  if (!batchNamesSkip) setTaskStatus(taskKey, 'skipped', reason);
+  // Default to skipping just the sub actually open -- only spread to the rest of a
+  // multi-sub group when the user explicitly opted into that via the checkbox above.
+  if (!batchNamesSkip) setTaskStatus(taskKey, 'skipped', reason, applyToWholeGroup ? null : [ck]);
   closeTaskRunner();
-  if (typeof showToast === 'function') showToast('Task skipped: ' + reason);
+  if (typeof showToast === 'function') showToast('Task skipped: ' + reason + (applyToWholeGroup ? ' (all subcompanies)' : ''));
 }
 
 function clearTaskCache(taskKey) {
@@ -16700,6 +16719,29 @@ function dsApplicableCutoffKey(clientObj) {
   return m[3] + ' ' + m[1] + m[2];
 }
 
+// A newly-logged ticket's payout cut-off shouldn't just follow whichever cut-off has
+// "started" (dsApplicableCutoffKey's definition, tuned for Dispute Summary's own staggered
+// processing) -- once the timekeeping validation files for that cut-off have actually gone
+// out to the client (a calendar deadline expected to be labeled along the lines of "Sending
+// of Timekeeping Validation Reports"), a ticket logged afterward is too late for that batch
+// and belongs to the NEXT cut-off instead. Falls back to dsApplicableCutoffKey's plain
+// current-cutoff key when the client's calendar has no such deadline yet (true for most
+// calendars as of 2026-08-14 -- this is a forward-looking field, added to KN's calendar
+// first) or when there's no next period uploaded yet to roll into.
+function ticketApplicableCutoffKey(clientObj, receivedDate) {
+  var realPeriods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
+  if (!realPeriods.length) return dsApplicableCutoffKey(clientObj);
+  var idx = findCurrentCutoffStartedIdx(realPeriods);
+  if (idx < 0) return dsApplicableCutoffKey(clientObj);
+  var p = realPeriods[idx];
+  var now = receivedDate || new Date();
+  var sendDl = (p.deadlines || []).find(function(dl) { return /valid/i.test(dl.label || ''); });
+  if (sendDl && sendDl.date && now > sendDl.date && realPeriods[idx + 1]) {
+    p = realPeriods[idx + 1];
+  }
+  return p.monthName + ' ' + (p.period === 1 ? '1st' : '2nd');
+}
+
 function buildDisputeSummaryRunner(body) {
   document.getElementById('task-modal-sub').textContent = 'Pull all open tickets, plus everything raised this cut-off, then finalize before generating';
 
@@ -18452,7 +18494,13 @@ function openAuditFromDashboard() {
   <div style="background:#fff;border-radius:16px;width:min(440px,92vw);padding:22px;">
     <div style="font-size:15px;font-weight:600;color:#1a1a2e;margin-bottom:12px;">Skip this task</div>
     <div class="field-label" style="margin-bottom:5px;">Reason for skipping</div>
-    <input id="skip-task-reason-input" placeholder="e.g. Not applicable this cut-off, Client request, etc." style="width:100%;padding:9px 12px;border:1px solid #EBEBEF;border-radius:12px;font-size:13px;font-family:Rubik,sans-serif;margin-bottom:16px;box-sizing:border-box;" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmSkipTask();}">
+    <input id="skip-task-reason-input" placeholder="e.g. Not applicable this cut-off, Client request, etc." style="width:100%;padding:9px 12px;border:1px solid #EBEBEF;border-radius:12px;font-size:13px;font-family:Rubik,sans-serif;margin-bottom:12px;box-sizing:border-box;" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmSkipTask();}">
+    <div id="skip-task-group-row" style="display:none;margin-bottom:16px;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#6b6b80;cursor:pointer;">
+        <input type="checkbox" id="skip-task-apply-all" style="width:16px;height:16px;flex-shrink:0;">
+        Apply to all subcompanies in this group
+      </label>
+    </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;">
       <button onclick="closeSkipTaskModal()" style="padding:8px 16px;border:1px solid #EBEBEF;border-radius:12px;background:#fff;font-size:12.5px;cursor:pointer;font-family:Rubik,sans-serif;">Cancel</button>
       <button onclick="confirmSkipTask()" style="padding:8px 16px;border:none;border-radius:12px;background:var(--ub-500);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;">Skip task</button>
@@ -22111,10 +22159,10 @@ async function _openNewDisputeTicketInner(clientKey) {
     entity: clientObj ? clientObj.name : clientKey,
     nature: '', disputeDates: '', fullDetails: '',
     dateAction: todayISO, findings: '', recommendedResolution: '',
-    payoutCutoff: clientObj ? (dsApplicableCutoffKey(clientObj) || '') : '',
-    amount: '', piPayout: clientObj ? (dsApplicableCutoffKey(clientObj) || '') : '', piLines: [], updateOpen: '', otherRemarks: '',
+    payoutCutoff: clientObj ? (ticketApplicableCutoffKey(clientObj) || '') : '',
+    amount: '', piPayout: clientObj ? (ticketApplicableCutoffKey(clientObj) || '') : '', piLines: [], updateOpen: '', otherRemarks: '',
     sub: '', client: clientKey,
-    cutoff: clientObj ? (dsApplicableCutoffKey(clientObj) || '') : '',
+    cutoff: clientObj ? (ticketApplicableCutoffKey(clientObj) || '') : '',
     tat: initialTat, tatLabel: initialTatLabel,
     status: 'dst-open', statusLabel: 'Open'
   };
@@ -23027,7 +23075,8 @@ function receiveTicketUpdate(payload) {
       _unrecognizedClient: unrecognizedClient ? rawCompany : null,
       nature: payload.nature || '', disputeDates: disputeDatesStr,
       dateSubmitted: payload.dateSubmitted || '', submittedAt: payload.submittedAt || null, processor: payload.assignedTo || '',
-      cutoff: (clientObj && clientObj.cutoff) || '', payoutCutoff: (clientObj && clientObj.cutoff) || '',
+      cutoff: (clientObj ? (ticketApplicableCutoffKey(clientObj, payload.submittedAt ? new Date(payload.submittedAt) : null) || '') : ''),
+      payoutCutoff: (clientObj ? (ticketApplicableCutoffKey(clientObj, payload.submittedAt ? new Date(payload.submittedAt) : null) || '') : ''),
       status: statusKey, statusLabel: statusLabel,
       tat: pushedTat, tatLabel: pushedTatLabel,
       fullDetails: payload.details || '', findings: '', recommendedResolution: '', updateOpen: '', otherRemarks: '',
