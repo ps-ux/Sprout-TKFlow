@@ -5451,7 +5451,7 @@ function renderDashSchedule() {
       + '</div>'
       + '<div style="width:2px;background:' + item.color + ';border-radius:2px;flex-shrink:0;"></div>'
       + '<div style="flex:1;min-width:0;">'
-      + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
+      + '<div data-fulltext="' + _attrEsc(item.label) + '" onclick="previewCalEvent(this)" style="cursor:pointer;font-size:12px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
       + '<i class="ti ' + item.icon + '" style="font-size:11px;margin-right:4px;color:' + item.color + ';"></i>' + item.label + '</div>'
       + '<div style="font-size:11px;color:' + item.color + ';margin-top:1px;">' + item.sub + '</div>'
       + '</div></div>';
@@ -5617,7 +5617,8 @@ function renderMiniCal() {
     byDay.forEach(function(dayEvs) {
       html += '<div style="display:flex;flex-direction:column;gap:4px;min-width:0;">';
       dayEvs.forEach(function(ev) {
-        html += '<div title="' + ev.client + ' \u2014 ' + ev.activity + (ev.timeStr ? ' (' + ev.timeStr + ')' : '') + '" style="display:flex;flex-direction:column;gap:2px;padding:4px 6px;border-radius:6px;background:var(--bg-secondary);border-left:3px solid ' + ev.color + ';min-width:0;">'
+        var evFullText = ev.client + ' \u2014 ' + ev.activity + (ev.timeStr ? ' (' + ev.timeStr + ')' : '');
+        html += '<div title="' + evFullText + '" data-fulltext="' + _attrEsc(evFullText) + '" onclick="previewCalEvent(this)" style="cursor:pointer;display:flex;flex-direction:column;gap:2px;padding:4px 6px;border-radius:6px;background:var(--bg-secondary);border-left:3px solid ' + ev.color + ';min-width:0;">'
           + '<div style="display:flex;align-items:center;gap:5px;min-width:0;"><i class="ti ' + ev.icon + '" style="font-size:10px;color:' + ev.color + ';flex-shrink:0;"></i>'
           + '<div style="font-size:9px;font-weight:600;color:' + ev.color + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;min-width:0;">' + ev.client + '</div></div>'
           + '<div style="font-size:9px;font-weight:500;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;padding-left:15px;">' + ev.activity + (ev.timeStr ? ' <span style="color:var(--text-muted);font-weight:400;">\u00b7 ' + ev.timeStr + '</span>' : '') + '</div>'
@@ -6337,7 +6338,8 @@ function renderAdminCalendar() {
     html += '<div style="min-height:84px;border-right:1px solid #F4F4F8;border-bottom:1px solid #F4F4F8;padding:6px;box-sizing:border-box;overflow:hidden;">'
       + '<div style="font-size:11px;font-weight:600;margin-bottom:4px;' + (isToday ? 'color:#fff;background:#32CE13;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;' : 'color:#1a1a2e;') + '">' + d + '</div>'
       + evs.slice(0, 3).map(function(e) {
-          return '<div title="' + e.clientName + ': ' + e.text + '" style="font-size:9px;background:' + e.color + '1a;color:' + e.color + ';padding:1px 4px;border-radius:4px;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + e.clientName + ': ' + e.text + '</div>';
+          var evFullText = e.clientName + ': ' + e.text;
+          return '<div title="' + evFullText + '" data-fulltext="' + _attrEsc(evFullText) + '" onclick="previewCalEvent(this)" style="cursor:pointer;font-size:9px;background:' + e.color + '1a;color:' + e.color + ';padding:1px 4px;border-radius:4px;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + evFullText + '</div>';
         }).join('')
       + (evs.length > 3 ? '<div style="font-size:9px;color:#9898a6;">+' + (evs.length - 3) + ' more</div>' : '')
       + '</div>';
@@ -10045,6 +10047,43 @@ function handleTaskFile(id, input) {
 function checkTaskReady(id) {
   // Each runner defines its own readiness check
   if (window['checkReady_' + id]) window['checkReady_' + id]();
+}
+
+// Escapes a string for safe use inside an HTML attribute value (e.g. data-fulltext="...") --
+// dataset reads back the decoded text automatically, so this only needs to stop the value
+// from breaking out of the surrounding double quotes.
+function _attrEsc(s) {
+  return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+// Calendar event chips are truncated with ellipsis wherever they're rendered (Dashboard mini
+// calendar, admin Team Calendar) -- the native title="" tooltip already showed the full text
+// on hover, but that's not discoverable/available on touch. Click opens the same text in a
+// small dismissible preview instead. Reads from a data-fulltext attribute rather than an
+// inline onclick string so event names containing quotes/apostrophes (company names, deadline
+// labels) can't break the HTML.
+function previewCalEvent(el) {
+  var text = el && el.dataset ? el.dataset.fulltext : '';
+  if (!text) return;
+  var existing = document.getElementById('cal-event-preview');
+  if (existing) existing.remove();
+  var overlay = document.createElement('div');
+  overlay.id = 'cal-event-preview';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9998;background:rgba(15,23,42,0.35);display:flex;align-items:center;justify-content:center;';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  var box = document.createElement('div');
+  box.style.cssText = 'background:#fff;border-radius:14px;padding:18px 22px;max-width:min(420px,86vw);box-shadow:0 20px 60px rgba(15,23,42,0.15);font-family:Rubik,sans-serif;';
+  var textEl = document.createElement('div');
+  textEl.style.cssText = 'font-size:13px;color:var(--text-primary,#1a1a2e);line-height:1.5;word-break:break-word;';
+  textEl.textContent = text;
+  var closeBtn = document.createElement('button');
+  closeBtn.textContent = 'Close';
+  closeBtn.style.cssText = 'margin-top:14px;padding:7px 14px;border:1px solid var(--border,#EBEBEF);border-radius:10px;background:#F4F4F8;color:#6b6b80;font-size:12px;cursor:pointer;font-family:Rubik,sans-serif;';
+  closeBtn.onclick = function() { overlay.remove(); };
+  box.appendChild(textEl);
+  box.appendChild(closeBtn);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
 }
 
 function showToast(msg, color = '#32CE15') {
