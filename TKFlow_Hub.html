@@ -565,6 +565,11 @@ function assignAvClass(shortKey, siblingClasses) {
       // seed clients have real hardcoded cutoffs in this file that an unconditional overwrite
       // would otherwise wipe out on every load.
       if (c.cutoffs && c.cutoffs.length) existing.cutoffs = c.cutoffs;
+      // Same "only overwrite when Supabase actually has it" guard as cutoffs above -- this is
+      // the singular "which period are we currently on" tracker (see checkCutoffRollover's
+      // doReset), which previously had NO persistence at all: only ever the hardcoded seed
+      // value, or an in-memory update from a confirmed "Catch up" that vanished on reload.
+      if (c.cutoff) existing.cutoff = c.cutoff;
       existing.taskConfig = c.task_config;
       // Leave Monitoring's credit policy is stashed inside taskConfig itself (see
       // lmSaveSetup/_persistTaskConfig) rather than its own column -- pull it back out into
@@ -9248,12 +9253,17 @@ function findMostRecentlyCompletedPeriodIdx(periods) {
 // calendar. Returns -1 if no period's first deadline has started yet (e.g. before the very
 // first cutoff in an uploaded calendar).
 function findCurrentCutoffStartedIdx(periods) {
-  var now = new Date();
+  var now = new Date(); now.setHours(0,0,0,0);
   var idx = -1, idxFirstDl = null;
   periods.forEach(function(p, i) {
     var firstDl = p.deadlines && p.deadlines[0] && p.deadlines[0].date;
-    if (!firstDl || firstDl > now) return;
-    if (!idxFirstDl || firstDl > idxFirstDl) { idx = i; idxFirstDl = firstDl; }
+    if (!firstDl) return;
+    // Compare calendar days only -- a deadline's time-of-day (e.g. "1 PM", parsed from the
+    // column header) previously made a cutoff count as "started" only once that specific
+    // clock time passed, instead of at the start of its deadline's date.
+    var dlDay = new Date(firstDl.getFullYear(), firstDl.getMonth(), firstDl.getDate());
+    if (dlDay > now) return;
+    if (!idxFirstDl || dlDay > idxFirstDl) { idx = i; idxFirstDl = dlDay; }
   });
   return idx;
 }
@@ -9429,6 +9439,24 @@ function _drainCutoffRolloverQueue() {
   next(function() { window._cutoffRolloverQueueRunning = false; _drainCutoffRolloverQueue(); });
 }
 
+// Without this, a confirmed "Catch up" only ever reset taskStatus/clientObj.cutoff in memory:
+// task_runs has no cutoff-period column at all (one row per company_id+task_key, holding
+// whatever status was last saved), so the next loadTaskStatusFromSupabase() on reload pulled
+// the old Done/Skipped rows straight back out. clientObj.cutoff itself was never read from or
+// written to Supabase anywhere either -- only ever the hardcoded seed value. Both are fixed
+// here: delete the stale task_runs rows (task_run_history/groupProcessingHistory already keep
+// the real historical record, so nothing is lost) and persist the new label.
+function _persistCutoffRolloverReset(clientKey, newLabel) {
+  var companyId = clients[clientKey] && clients[clientKey].companyId;
+  if (!companyId) return;
+  supabaseClient.from('companies').update({ cutoff: newLabel }).eq('short_key', clientKey).then(function(res) {
+    if (res.error) console.warn('Could not persist cutoff label for ' + clientKey, res.error);
+  });
+  supabaseClient.from('task_runs').delete().eq('company_id', companyId).then(function(res) {
+    if (res.error) console.warn('Could not reset task_runs for ' + clientKey, res.error);
+  });
+}
+
 function checkCutoffRollover(key) {
   var clientObj = clients[key];
   if (!clientObj) return;
@@ -9454,6 +9482,7 @@ function checkCutoffRollover(key) {
     window.nhFinalized = false;
 
     clientObj.cutoff = newLabel;
+    _persistCutoffRolloverReset(key, newLabel);
     if (typeof showToast === 'function') showToast('Tasks reset for ' + clientObj.name + ' \u2014 ' + newLabel);
     // keepSwitcher=true so this reload stays on Tasks (currentWsTab is 'ws-tasks' at this
     // point, since that's the only tab checkCutoffRollover ever fires from now) instead of
