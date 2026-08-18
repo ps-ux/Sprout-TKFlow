@@ -2901,9 +2901,20 @@ var HIST_OTHER_TASK_LABELS = { newhires: 'New Hires', disputes_summary: 'Dispute
 // These four task types don't persist their actual computed output anywhere today -- only a
 // bare done/skipped status (with reason, if skipped) survives via task_run_history. Shown as a
 // simple status line each, per the user's request: skipped is indicated, never a viewable row.
+// Tasks a client has switched off in their Applicable Tasks matrix (isTaskEnabled) are left out
+// entirely -- matching what the live Tasks tab itself shows.
 function _histStatusOnlySectionsHtml(subKey, cutoffLabel) {
-  var byCutoff = (window.taskRunHistory && window.taskRunHistory[subKey] && window.taskRunHistory[subKey][cutoffLabel]) || {};
-  var rows = Object.keys(HIST_OTHER_TASK_LABELS).map(function(taskKey) {
+  // task_run_history keys its cutoff_label off clients[k].cutoff (the short "August 2nd" form,
+  // only advanced by "Catch up"), while the row passed in here carries client_cutoff_processing's
+  // longer getCurrentCutoffLabel form ("August 2nd Payout · att ..."). Both are built from the
+  // same monthName+ordinal prefix -- getCurrentCutoffLabel appends " Payout · att <attCov>" onto
+  // exactly that short form -- so strip that suffix back off rather than looking the long form
+  // up directly, which would silently never match anything.
+  var shortCutoffLabel = String(cutoffLabel || '').split(' Payout')[0];
+  var byCutoff = (window.taskRunHistory && window.taskRunHistory[subKey] && window.taskRunHistory[subKey][shortCutoffLabel]) || {};
+  var rows = Object.keys(HIST_OTHER_TASK_LABELS).filter(function(taskKey) {
+    return typeof isTaskEnabled !== 'function' || isTaskEnabled(subKey, taskKey);
+  }).map(function(taskKey) {
     var runs = byCutoff[taskKey] || [];
     var last = runs.length ? runs[runs.length - 1] : null;
     var statusHtml;
@@ -2917,7 +2928,7 @@ function _histStatusOnlySectionsHtml(subKey, cutoffLabel) {
     return '<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid #F4F4F8;">'
       + '<div style="font-size:12px;color:#1a1a2e;">' + HIST_OTHER_TASK_LABELS[taskKey] + '</div>' + statusHtml + '</div>';
   }).join('');
-  return _histSectionWrap('Other tasks', rows);
+  return _histSectionWrap('Other tasks', rows || '<div style="font-size:12px;color:#9898a6;">No other applicable tasks for this client.</div>');
 }
 
 function openGroupWorkspace(grpKey) {
@@ -9988,6 +9999,20 @@ function finalizeBatchTaskIfApplicable(taskKey, st, reason) {
     if (!taskStatus[g.clientKey]) taskStatus[g.clientKey] = {};
     taskStatus[g.clientKey][taskKey] = { st: st, reason: reason || '', timestamp: new Date().toISOString() };
     saveTaskRun(g.clientKey, taskKey, st, reason);
+
+    // Same per-run history append as setTaskStatus() -- without this, a batch task finalized
+    // through here (currently only disputes_summary; Variance/Validation have their own
+    // dedicated per-cutoff persistence instead) never got a task_run_history row at all, so
+    // the Processing History snapshot view always showed "Not run" for it regardless of label
+    // matching, even after it had genuinely been run and finalized.
+    var _cutoffLabel = (clients[g.clientKey] && clients[g.clientKey].cutoff) || 'Unlabeled period';
+    if (!window.taskRunHistory) window.taskRunHistory = {};
+    if (!window.taskRunHistory[g.clientKey]) window.taskRunHistory[g.clientKey] = {};
+    if (!window.taskRunHistory[g.clientKey][_cutoffLabel]) window.taskRunHistory[g.clientKey][_cutoffLabel] = {};
+    if (!window.taskRunHistory[g.clientKey][_cutoffLabel][taskKey]) window.taskRunHistory[g.clientKey][_cutoffLabel][taskKey] = [];
+    window.taskRunHistory[g.clientKey][_cutoffLabel][taskKey].push({ st: st, reason: reason || '', timestamp: new Date().toISOString() });
+    saveTaskRunHistory(g.clientKey, taskKey, _cutoffLabel, st, reason);
+
     logTaskProgress(g.clientKey);
     // Same open→done duration logging as setTaskStatus() — batch tasks (Variance,
     // Validation, Disputes Summary) finalize through here instead, so without this they'd
