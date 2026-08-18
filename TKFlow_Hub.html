@@ -155,8 +155,6 @@ body { font-family: 'Rubik', sans-serif; background: #F7F5F2; color: var(--text-
 .tc-clients { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
 .tc-right { text-align: right; }
 .tc-specialist { font-size: 12px; font-weight: 500; color: var(--kk-600); }
-.tc-auditor { font-size: 11px; color: #9898a6; }
-body.hide-auditor-role .auditor-only { display: none !important; }
 .tc-bar { width: 80px; height: 4px; background: var(--border); border-radius: 2px; margin-top: 5px; overflow: hidden; }
 .tc-fill { height: 100%; border-radius: 2px; }
 .fill-g { background: var(--kk-500); }
@@ -233,7 +231,6 @@ body.hide-auditor-role .auditor-only { display: none !important; }
 .cap-role { font-size: 11px; color: #9898a6; }
 .cap-td { font-size: 13px; color: var(--text-primary); }
 .cap-specialist { font-size: 13px; font-weight: 500; color: #32CE13; }
-.cap-auditor { font-size: 13px; color: #9898a6; }
 .cap-bar-wrap { display: flex; align-items: center; gap: 8px; }
 .cap-bar { flex: 1; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
 .cap-fill { height: 100%; border-radius: 3px; }
@@ -652,7 +649,7 @@ function assignAvClass(shortKey, siblingClasses) {
   // USERS (the hardcoded team roster) only ever reflects whatever's literally written in this
   // file -- it is never otherwise refreshed from Supabase. Every "who's the specialist for
   // this client" display elsewhere in the app (Team page, Client Assignments, Member Metrics,
-  // the dashboard) reads USERS[uk].processClients/assignedClients/auditClients directly, not
+  // the dashboard) reads USERS[uk].processClients/assignedClients directly, not
   // currentUser's own (correctly DB-backed) arrays. Without this, a specialist assignment made
   // via Add Client/Client Assignments persists fine to user_company_relations and even shows
   // correctly in the assigning user's own "My Clients" for the rest of that session, but
@@ -686,7 +683,7 @@ function assignAvClass(shortKey, siblingClasses) {
           roleType: u.role_type || 'member', role: u.role || '', orgRole: u.org_role || u.role || '',
           reportsTo: u.reports_to ? (shortKeyByUid[u.reports_to] || null) : null,
           canServiceView: false, canSeeAllDisputes: false, canManageAccess: false, canAssign: false, canArchive: false,
-          assignedClients: [], processClients: [], auditClients: []
+          assignedClients: [], processClients: []
         };
       }
       if (typeof teamProfiles !== 'undefined' && !teamProfiles[u.short_key]) {
@@ -744,14 +741,13 @@ function assignAvClass(shortKey, siblingClasses) {
     Object.keys(USERS).forEach(function(uk) {
       USERS[uk].assignedClients = [];
       USERS[uk].processClients = [];
-      USERS[uk].auditClients = [];
     });
 
     (relsRes.data || []).forEach(function(r) {
       var uk = shortKeyByUid[r.user_id];
       if (!uk || !USERS[uk] || !r.companies) return;
-      var listName = r.relation_type === 'assigned' ? 'assignedClients' : r.relation_type === 'processing' ? 'processClients' : 'auditClients';
-      if (USERS[uk][listName].indexOf(r.companies.short_key) === -1) USERS[uk][listName].push(r.companies.short_key);
+      var listName = r.relation_type === 'assigned' ? 'assignedClients' : r.relation_type === 'processing' ? 'processClients' : null;
+      if (listName && USERS[uk][listName].indexOf(r.companies.short_key) === -1) USERS[uk][listName].push(r.companies.short_key);
     });
   }
 
@@ -813,7 +809,7 @@ function assignAvClass(shortKey, siblingClasses) {
         .from('user_company_relations')
         .select('relation_type, companies(short_key)')
         .eq('user_id', profile.id);
-      var byType = { assigned: [], processing: [], audit: [] };
+      var byType = { assigned: [], processing: [] };
       (relRes.data || []).forEach(function(r) {
         if (r.companies && byType[r.relation_type]) byType[r.relation_type].push(r.companies.short_key);
       });
@@ -830,8 +826,7 @@ function assignAvClass(shortKey, siblingClasses) {
         canAssign: profile.can_assign,
         canArchive: profile.can_archive,
         assignedClients: byType.assigned,
-        processClients: byType.processing,
-        auditClients: byType.audit
+        processClients: byType.processing
       };
       await loadCompaniesFromSupabase();
       await loadUserRelationsFromSupabase();
@@ -2688,6 +2683,10 @@ function renderGroupOverview(grpKey) {
     });
   });
   mergedHist.sort(function(a,b){ return new Date(b.startedAt) - new Date(a.startedAt); });
+  // Read by toggleHistorySnapshot(idx) below to look up which sub/cutoff a given row
+  // represents, since the row HTML only carries its index, not the full entry.
+  window._histMergedRows = mergedHist;
+  window._histSnapshotLoaded = {};
 
   function fmtHistDate(iso) {
     if (!iso) return '\u2014';
@@ -2712,8 +2711,9 @@ function renderGroupOverview(grpKey) {
       + '<th style="padding:9px 14px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Finished</th>'
       + '<th style="padding:9px 14px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Processed by</th>'
       + '<th style="padding:9px 14px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Tasks completed</th>'
+      + '<th style="padding:9px 14px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;"></th>'
       + '</tr></thead><tbody>'
-      + mergedHist.map(function(e) {
+      + mergedHist.map(function(e, idx) {
           var badge = e.finishedAt
             ? '<span style="font-size:10px;background:#edfae8;color:#32CE13;padding:2px 8px;border-radius:20px;font-weight:600;">' + e.tasksDone + '/' + e.totalTasks + ' \u2713 Done</span>'
             : '<span style="font-size:10px;background:#fff4e6;color:#e67e00;padding:2px 8px;border-radius:20px;font-weight:600;">' + e.tasksDone + '/' + e.totalTasks + ' in progress</span>';
@@ -2724,6 +2724,10 @@ function renderGroupOverview(grpKey) {
             + '<td style="padding:10px 14px;color:#9898a6;white-space:nowrap;">' + fmtHistDate(e.finishedAt) + '</td>'
             + '<td style="padding:10px 14px;color:#1a1a2e;">' + (e.processedBy || '\u2014') + '</td>'
             + '<td style="padding:10px 14px;">' + badge + '</td>'
+            + '<td style="padding:10px 14px;"><button id="hist-view-btn-' + idx + '" onclick="toggleHistorySnapshot(' + idx + ')" style="font-size:11px;color:#32CE13;background:none;border:1px solid #A6EB93;border-radius:8px;padding:4px 10px;cursor:pointer;font-family:Rubik,sans-serif;white-space:nowrap;">View</button></td>'
+            + '</tr>'
+            + '<tr id="hist-expand-' + idx + '" style="display:none;">'
+            + '<td colspan="7" style="padding:0;border-bottom:1px solid #F4F4F8;"><div id="hist-expand-body-' + idx + '" style="padding:14px 18px;background:#FAFAFA;"></div></td>'
             + '</tr>';
         }).join('')
       + '</tbody>';
@@ -2733,6 +2737,162 @@ function renderGroupOverview(grpKey) {
   ovEl.appendChild(histWrap);
 }
 
+// ── Processing History snapshot viewer ──────────────────────────────────────
+// Expands a Processing History row in place to show whatever was actually saved for that
+// cutoff -- Validation and Variance get a real read-only render of their saved data, the other
+// four task types (which don't persist any output today, only a done/skipped status) get a
+// plain status line. Deliberately not a separate tab or modal -- see project notes on why.
+function toggleHistorySnapshot(idx) {
+  var e = window._histMergedRows && window._histMergedRows[idx];
+  if (!e) return;
+  var expandRow = document.getElementById('hist-expand-' + idx);
+  var btn = document.getElementById('hist-view-btn-' + idx);
+  if (!expandRow) return;
+  var isOpen = expandRow.style.display !== 'none';
+  if (isOpen) {
+    expandRow.style.display = 'none';
+    if (btn) btn.textContent = 'View';
+    return;
+  }
+  expandRow.style.display = 'table-row';
+  if (btn) btn.textContent = 'Hide';
+  if (window._histSnapshotLoaded[idx]) return; // already fetched once this render -- don't refetch
+  window._histSnapshotLoaded[idx] = true;
+  _renderHistorySnapshotBody(e, idx);
+}
+
+async function _renderHistorySnapshotBody(e, idx) {
+  var body = document.getElementById('hist-expand-body-' + idx);
+  if (!body) return;
+  body.innerHTML = '<div style="font-size:12px;color:#9898a6;"><i class="ti ti-loader"></i> Loading saved results…</div>';
+  var companyId = clients[e.subKey] && clients[e.subKey].companyId;
+  if (!companyId) { body.innerHTML = '<div style="font-size:12px;color:#9898a6;">No company record found for this subcompany.</div>'; return; }
+
+  var sectionsHtml = '';
+  try {
+    var tkRes = await supabaseClient.from('task_cutoff_review_state').select('*')
+      .eq('company_id', companyId).eq('task_key', 'validation').eq('cutoff_label', e.cutoffLabel).maybeSingle();
+    sectionsHtml += _histValidationSectionHtml(tkRes.error ? null : tkRes.data);
+  } catch (err) {
+    sectionsHtml += _histSectionWrap('Validation', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
+  }
+
+  try {
+    var varRes = await supabaseClient.from('task_cutoff_review_state').select('*')
+      .eq('company_id', companyId).eq('task_key', 'variance').order('updated_at', { ascending: false });
+    sectionsHtml += _histVarianceSectionHtml(varRes.error ? [] : (varRes.data || []));
+  } catch (err) {
+    sectionsHtml += _histSectionWrap('Variance', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
+  }
+
+  sectionsHtml += _histStatusOnlySectionsHtml(e.subKey, e.cutoffLabel);
+
+  // Re-fetch the element rather than reusing the one captured above -- this row could have
+  // been collapsed (and the DOM rebuilt by another render) while the awaits above were in flight.
+  body = document.getElementById('hist-expand-body-' + idx);
+  if (body) body.innerHTML = sectionsHtml;
+}
+
+function _histSectionWrap(title, innerHtml) {
+  return '<div style="margin-bottom:14px;"><div style="font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">' + title + '</div>' + innerHtml + '</div>';
+}
+
+// Plain, non-interactive read-out of a saved Validation snapshot's reviewed rows -- deliberately
+// not the live renderTKReview, which is wired to mutate the CURRENT tkReviewRows array by row
+// index and would misbehave (or corrupt live data) if pointed at a historical snapshot instead.
+function archiveBuildValidationSnapshotHtml(data) {
+  var rows = (data && data.tkReviewRows) || [];
+  if (!rows.length) return '<div style="font-size:12px;color:#9898a6;">No absences recorded.</div>';
+  var body = rows.map(function(r) {
+    var datesDisplay = (r.dates && r.dates.length) ? r.dates.join(', ') : '—';
+    var remarksDisplay = (r.remarks && r.remarks.length) ? r.remarks.join('; ') : '—';
+    return '<tr>'
+      + '<td style="padding:6px 10px;font-size:11px;color:#9898a6;font-family:monospace;white-space:nowrap;">' + (r.id||'') + '</td>'
+      + '<td style="padding:6px 10px;font-size:12px;font-weight:500;color:#1a1a2e;">' + (r.name||'') + '</td>'
+      + '<td style="padding:6px 10px;font-size:12px;color:#1a1a2e;">' + (r.daysAbsent||0) + '</td>'
+      + '<td style="padding:6px 10px;font-size:12px;color:#1a1a2e;">' + datesDisplay + '</td>'
+      + '<td style="padding:6px 10px;font-size:12px;color:#1a1a2e;">' + remarksDisplay + '</td>'
+      + '<td style="padding:6px 10px;font-size:11px;white-space:nowrap;">' + (r.checked ? '<span style="color:#32CE13;font-weight:600;">Confirmed</span>' : '<span style="color:#e67e00;font-weight:600;">Unconfirmed</span>') + '</td>'
+      + '</tr>';
+  }).join('');
+  return '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-radius:10px;"><table style="width:100%;border-collapse:collapse;">'
+    + '<thead><tr style="background:#F4F4F8;">'
+    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">ID</th>'
+    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Name</th>'
+    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Days Absent</th>'
+    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Dates</th>'
+    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Remarks</th>'
+    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Status</th>'
+    + '</tr></thead><tbody>' + body + '</tbody></table></div>';
+}
+
+// Validation's cutoff_label is saved via getCurrentCutoffLabel (see tkSaveFullSnapshot) --
+// the same label Processing History rows already use -- so this is a real exact match, not a
+// best-effort one.
+function _histValidationSectionHtml(row) {
+  if (!row) return _histSectionWrap('Validation', '<div style="font-size:12px;color:#9898a6;">Not run for this cutoff.</div>');
+  return _histSectionWrap('Validation', archiveBuildValidationSnapshotHtml(row.data || {}));
+}
+
+function _histDownloadStoredFile(buf, filename, mime) {
+  var blob = new Blob([buf], { type: mime || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function _histDownloadVarianceWorkbook(path, safeLabel) {
+  varDownloadWorkbook(path).then(function(buf) {
+    _histDownloadStoredFile(buf, 'Variance_' + safeLabel + '.xlsx');
+  }).catch(function(err) {
+    if (typeof showToast === 'function') showToast('Could not download saved workbook: ' + (err.message||err), '#e67e00');
+  });
+}
+
+// Variance deliberately keeps its OWN cutoff label (it reviews one period behind the one
+// Processing History calls "current"), so unlike Validation there's no reliable exact match --
+// list every saved cutoff for this subcompany instead of claiming one specific row is "the" one.
+function _histVarianceSectionHtml(rows) {
+  if (!rows.length) return _histSectionWrap('Variance', '<div style="font-size:12px;color:#9898a6;">No saved Variance cutoffs for this subcompany.</div>');
+  var body = rows.map(function(row) {
+    var data = row.data || {};
+    var safeLabel = String(row.cutoff_label||'').replace(/[^a-zA-Z0-9]/g, '_');
+    return '<div style="border:1px solid #EBEBEF;border-radius:10px;padding:10px 12px;margin-bottom:8px;background:#fff;">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
+      + '<div style="font-size:12px;font-weight:600;color:#1a1a2e;">' + (row.cutoff_label||'') + (data.finalized ? ' <span style="font-size:10px;color:#32CE13;font-weight:600;">(Finalized)</span>' : '') + '</div>'
+      + (row.wb_storage_path ? '<button onclick="_histDownloadVarianceWorkbook(\'' + row.wb_storage_path.replace(/'/g,"\\'") + '\',\'' + safeLabel + '\')" style="font-size:11px;color:#32CE13;background:none;border:1px solid #A6EB93;border-radius:8px;padding:3px 10px;cursor:pointer;font-family:Rubik,sans-serif;">Download</button>' : '')
+      + '</div>'
+      + varBuildSnapshotTableHtml(data.attData || [])
+      + '</div>';
+  }).join('');
+  return _histSectionWrap('Variance', body);
+}
+
+var HIST_OTHER_TASK_LABELS = { newhires: 'New Hires', disputes_summary: 'Dispute Summary', payroll_instructions: 'Payroll Instructions', profile: 'Profile Updates' };
+
+// These four task types don't persist their actual computed output anywhere today -- only a
+// bare done/skipped status (with reason, if skipped) survives via task_run_history. Shown as a
+// simple status line each, per the user's request: skipped is indicated, never a viewable row.
+function _histStatusOnlySectionsHtml(subKey, cutoffLabel) {
+  var byCutoff = (window.taskRunHistory && window.taskRunHistory[subKey] && window.taskRunHistory[subKey][cutoffLabel]) || {};
+  var rows = Object.keys(HIST_OTHER_TASK_LABELS).map(function(taskKey) {
+    var runs = byCutoff[taskKey] || [];
+    var last = runs.length ? runs[runs.length - 1] : null;
+    var statusHtml;
+    if (!last || last.st === 'pending') {
+      statusHtml = '<span style="font-size:11px;color:#9898a6;">Not run</span>';
+    } else if (last.st === 'skipped') {
+      statusHtml = '<span style="font-size:11px;color:#e67e00;">Skipped' + (last.reason ? ' — ' + last.reason : '') + '</span>';
+    } else {
+      statusHtml = '<span style="font-size:11px;color:#32CE13;font-weight:600;">Done' + (last.timestamp ? ' — ' + new Date(last.timestamp).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '') + '</span>';
+    }
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid #F4F4F8;">'
+      + '<div style="font-size:12px;color:#1a1a2e;">' + HIST_OTHER_TASK_LABELS[taskKey] + '</div>' + statusHtml + '</div>';
+  }).join('');
+  return _histSectionWrap('Other tasks', rows);
+}
 
 function openGroupWorkspace(grpKey) {
   var grp = clientGroups[grpKey];
@@ -3479,12 +3639,11 @@ function closeWorkspace() {
 
     <!-- STEP 3: Team assignment -->
     <div id="modal-step-3" style="padding:20px 24px;display:none;">
-      <div id="assign-step-desc" style="font-size:12px;color:#9898a6;margin-bottom:16px;">Assign specialists and auditors for this client. Each person can be assigned both roles.</div>
+      <div id="assign-step-desc" style="font-size:12px;color:#9898a6;margin-bottom:16px;">Assign a specialist for this client.</div>
       <div style="background:#F8F8FA;border-radius:14px;overflow:hidden;">
-        <div id="assign-header-row" style="display:grid;grid-template-columns:1fr 1fr 1fr;padding:10px 14px;border-bottom:1px solid #EBEBEF;">
+        <div id="assign-header-row" style="display:grid;grid-template-columns:1fr 1fr;padding:10px 14px;border-bottom:1px solid #EBEBEF;">
           <div style="font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;">Team member</div>
           <div style="font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;text-align:center;">Specialist</div>
-          <div id="assign-header-auditor" style="font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:0.5px;text-align:center;">Auditor</div>
         </div>
         <div id="assign-rows-container"><!-- Rendered by renderAssignRows() from real USERS data --></div>
       </div>
@@ -3566,7 +3725,7 @@ function closeWorkspace() {
 </div>
 
 <!-- Add Subcompany modal — lets an existing client (single-entity or group) gain a new
-     subcompany later, e.g. when a sibling entity signs on after the fact. Specialist/auditor
+     subcompany later, e.g. when a sibling entity signs on after the fact. Specialist
      assignment is inherited automatically from sibling subs; services/tasks are asked fresh
      since a new entity may have a different scope of work. -->
 <div id="add-subcompany-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:2000;align-items:center;justify-content:center;">
@@ -3598,7 +3757,7 @@ function closeWorkspace() {
         </div>
       </div>
 
-      <div style="font-size:11px;color:#9898a6;margin-bottom:12px;background:#F8F8FA;padding:8px 12px;border-radius:12px;"><i class="ti ti-info-circle" style="font-size:12px;vertical-align:-2px;"></i> Specialist/auditor assignment is inherited automatically from this client's other subcompanies. Pick which services apply below — a new entity may have a different scope of work than its siblings.</div>
+      <div style="font-size:11px;color:#9898a6;margin-bottom:12px;background:#F8F8FA;padding:8px 12px;border-radius:12px;"><i class="ti ti-info-circle" style="font-size:12px;vertical-align:-2px;"></i> Specialist assignment is inherited automatically from this client's other subcompanies. Pick which services apply below — a new entity may have a different scope of work than its siblings.</div>
 
       <div style="margin-bottom:16px;">
         <div style="font-size:13px;font-weight:600;color:#1a1a2e;margin-bottom:12px;">Section I — Timekeeping</div>
@@ -4233,12 +4392,6 @@ function generateAdhocReport() {
 // canArchive       : can churn/archive clients
 // canAssign        : can assign clients to members
 
-// ── Auditor role toggle ──────────────────────────────────────────────────
-// Set to false to hide the Auditor role throughout the app (Client Assignments, Add Client,
-// Team Capacity, Member Metrics, Org Chart) while keeping all underlying auditClients data
-// intact and untouched — flip back to true to fully restore it, no data loss either way.
-var AUDITOR_ROLE_ENABLED = false;
-
 const USERS = {
   zona: {
     name: 'Zona Rocelle Merto', initials: 'ZM',
@@ -4253,8 +4406,7 @@ const USERS = {
     canAssign:        true,
     canArchive:       true,
     assignedClients:  ['KNI','KNLSI','HDI_CG','HDI_EL','HDI_ADV','HDI_STF','HDI_HC','HDI_WLD'],
-    processClients:   ['KNI','KNLSI','HDI_CG','HDI_EL','HDI_ADV','HDI_STF','HDI_HC','HDI_WLD'],
-    auditClients:     []
+    processClients:   ['KNI','KNLSI','HDI_CG','HDI_EL','HDI_ADV','HDI_STF','HDI_HC','HDI_WLD']
   },
   arianne: {
     name: 'Arianne Mayie Carias', initials: 'AC',
@@ -4269,8 +4421,7 @@ const USERS = {
     canAssign:        true,
     canArchive:       true,
     assignedClients:  [],
-    processClients:   [],
-    auditClients:     []
+    processClients:   []
   },
   paula: {
     name: 'Paula Angila Vaflor', initials: 'PV',
@@ -4285,8 +4436,7 @@ const USERS = {
     canAssign:        false,
     canArchive:       false,
     assignedClients:  [],
-    processClients:   [],
-    auditClients:     []
+    processClients:   []
   },
   mhae: {
     name: 'Mhae Lorenzo', initials: 'ML',
@@ -4301,8 +4451,7 @@ const USERS = {
     canAssign:        false,
     canArchive:       false,
     assignedClients:  [],
-    processClients:   [],
-    auditClients:     []
+    processClients:   []
   },
 };
 let currentUser = USERS.zona;
@@ -4379,15 +4528,6 @@ function renderAssignRows() {
   var container = document.getElementById('assign-rows-container');
   if (!container) return;
 
-  var headerRow = document.getElementById('assign-header-row');
-  var headerAud = document.getElementById('assign-header-auditor');
-  var desc = document.getElementById('assign-step-desc');
-  if (headerRow) headerRow.style.gridTemplateColumns = AUDITOR_ROLE_ENABLED ? '1fr 1fr 1fr' : '1fr 1fr';
-  if (headerAud) headerAud.style.display = AUDITOR_ROLE_ENABLED ? '' : 'none';
-  if (desc) desc.textContent = AUDITOR_ROLE_ENABLED
-    ? 'Assign specialists and auditors for this client. Each person can be assigned both roles.'
-    : 'Assign a specialist for this client.';
-
   var keys = Object.keys(USERS);
   var avColorByKey = {zona:'av-g', arianne:'av-b', paula:'av-o', mhae:'av-p'};
   container.innerHTML = keys.map(function(uk, idx) {
@@ -4401,11 +4541,10 @@ function renderAssignRows() {
     // object built from the DB profile, never a reference into USERS, so `USERS[k] ===
     // currentUser` was always false and this never actually pre-checked anyone.
     var isSelf = currentUser && u.email === currentUser.email;
-    return '<div class="assign-row" data-user-key="' + uk + '" style="display:grid;grid-template-columns:' + (AUDITOR_ROLE_ENABLED ? '1fr 1fr 1fr' : '1fr 1fr') + ';' + (isLast ? 'border-bottom:none;' : '') + '">'
+    return '<div class="assign-row" data-user-key="' + uk + '" style="display:grid;grid-template-columns:1fr 1fr;' + (isLast ? 'border-bottom:none;' : '') + '">'
       + '<div class="assign-member"><div class="cap-av ' + avCls + '" style="width:30px;height:30px;font-size:10px;">' + u.initials + '</div>'
       + '<div><div style="font-size:13px;font-weight:500;color:#1a1a2e;">' + u.name + '</div><div style="font-size:11px;color:#9898a6;">' + u.role + '</div></div></div>'
       + '<div style="text-align:center;"><input type="checkbox" class="check-box"' + (isSelf ? ' checked' : '') + '></div>'
-      + (AUDITOR_ROLE_ENABLED ? '<div style="text-align:center;"><input type="checkbox" class="check-box"></div>' : '')
       + '</div>';
   }).join('');
 }
@@ -4698,11 +4837,9 @@ async function saveSubcompany() {
   Object.keys(USERS).forEach(function(uk) {
     var u = USERS[uk];
     var isSpecOfSibling = grp.subs.some(function(sk){ return (u.processClients||[]).indexOf(sk) >= 0; });
-    var isAudOfSibling  = grp.subs.some(function(sk){ return (u.auditClients||[]).indexOf(sk) >= 0; });
     var isAssignedToSibling = grp.subs.some(function(sk){ return (u.assignedClients||[]).indexOf(sk) >= 0; });
     if (isAssignedToSibling) relationsToGrant.push({ uk: uk, relation_type: 'assigned' });
     if (isSpecOfSibling) { relationsToGrant.push({ uk: uk, relation_type: 'assigned' }); relationsToGrant.push({ uk: uk, relation_type: 'processing' }); }
-    if (isAudOfSibling)  relationsToGrant.push({ uk: uk, relation_type: 'audit' });
   });
   Object.keys(USERS).forEach(function(uk) {
     if (USERS[uk].canAssign) relationsToGrant.push({ uk: uk, relation_type: 'assigned' });
@@ -4772,7 +4909,7 @@ async function saveSubcompany() {
 
   grp.subs.push(code);
 
-  // Inherit specialist/auditor/visibility from sibling subs automatically — the whole
+  // Inherit specialist/visibility from sibling subs automatically — the whole
   // point of "same specialist as its siblings" is that nobody has to remember to go
   // reassign this manually after the fact. Matches relationsToGrant above, computed before
   // grp.subs.push(code) so the persisted rows and this in-memory pass agree.
@@ -4780,11 +4917,9 @@ async function saveSubcompany() {
   Object.keys(USERS).forEach(function(uk) {
     var u = USERS[uk];
     var isSpecOfSibling = siblingSubs.some(function(sk){ return (u.processClients||[]).indexOf(sk) >= 0; });
-    var isAudOfSibling = siblingSubs.some(function(sk){ return (u.auditClients||[]).indexOf(sk) >= 0; });
     var isAssignedToSibling = siblingSubs.some(function(sk){ return (u.assignedClients||[]).indexOf(sk) >= 0; });
     if (isAssignedToSibling && u.assignedClients.indexOf(code) === -1) u.assignedClients.push(code);
     if (isSpecOfSibling) { if (!u.processClients) u.processClients = []; if (u.processClients.indexOf(code) === -1) u.processClients.push(code); }
-    if (isAudOfSibling)  { if (!u.auditClients) u.auditClients = []; if (u.auditClients.indexOf(code) === -1) u.auditClients.push(code); }
   });
   // Admins with canAssign always get visibility into every client, matching Add Client's behavior.
   Object.keys(USERS).forEach(function(uk) {
@@ -4795,7 +4930,7 @@ async function saveSubcompany() {
   // separate object from USERS[uk] once real auth is in place, so this session wouldn't
   // otherwise see its own new access until the next login. Matches Add Client's same fix-up.
   if (currentUser) {
-    ['assignedClients','processClients','auditClients'].forEach(function(listName) {
+    ['assignedClients','processClients'].forEach(function(listName) {
       var uMatch = Object.keys(USERS).find(function(uk){ return USERS[uk].email === currentUser.email; });
       if (!uMatch) return;
       if ((USERS[uMatch][listName]||[]).indexOf(code) >= 0) {
@@ -4942,7 +5077,7 @@ async function _saveClientConfirmed() {
   const entityTags = [...document.querySelectorAll('#entity-tags .entity-tag')]
     .map(t => t.textContent.replace('×','').trim()).filter(Boolean);
 
-  // Read specialist/auditor assignments from checkboxes — keyed by data-user-key, not
+  // Read specialist assignments from checkboxes — keyed by data-user-key, not
   // position, since the row order and the memberKeys array order previously didn't match
   // (Paula and Arianne's checkboxes were being silently attributed to each other).
   const assignRows = document.querySelectorAll('.assign-row');
@@ -4957,18 +5092,16 @@ async function _saveClientConfirmed() {
     if (!mk || !USERS[mk]) return;
     const checks = row.querySelectorAll('.check-box');
     const isSpec = checks[0] && checks[0].checked;
-    const isAud  = AUDITOR_ROLE_ENABLED && checks[1] && checks[1].checked;
-    if (isSpec || isAud) {
+    if (isSpec) {
       subKeysForAccess.forEach(function(sk) {
         if (!USERS[mk].assignedClients.includes(sk)) USERS[mk].assignedClients.push(sk);
-        // processClients/auditClients drive "My Clients" sidebar grouping, notifications,
-        // avg processing time, and dashboard schedule — assignedClients alone (visibility)
-        // was never enough; a newly added client used to silently never land in any of
-        // those for whoever was checked here.
-        if (isSpec) { if (!USERS[mk].processClients) USERS[mk].processClients = []; if (!USERS[mk].processClients.includes(sk)) USERS[mk].processClients.push(sk); }
-        if (isAud)  { if (!USERS[mk].auditClients) USERS[mk].auditClients = []; if (!USERS[mk].auditClients.includes(sk)) USERS[mk].auditClients.push(sk); }
+        // processClients drives "My Clients" sidebar grouping, notifications, avg processing
+        // time, and dashboard schedule — assignedClients alone (visibility) was never enough;
+        // a newly added client used to silently never land there for whoever was checked here.
+        if (!USERS[mk].processClients) USERS[mk].processClients = [];
+        if (!USERS[mk].processClients.includes(sk)) USERS[mk].processClients.push(sk);
       });
-      newAssigned.push({ mk, isSpec, isAud });
+      newAssigned.push({ mk, isSpec });
     }
   });
 
@@ -5100,7 +5233,6 @@ async function _saveClientConfirmed() {
   Object.keys(USERS).forEach(function(uk) { if (USERS[uk].canAssign) grantAccess(uk, 'assigned'); });
   newAssigned.forEach(function(a) {
     if (a.isSpec) { grantAccess(a.mk, 'assigned'); grantAccess(a.mk, 'processing'); }
-    if (a.isAud) grantAccess(a.mk, 'audit');
   });
 
   var userKeysNeeded = Object.keys(accessByUserKey);
@@ -5125,7 +5257,8 @@ async function _saveClientConfirmed() {
         accessByUserKey[uk].forEach(function(rel) {
           var sk = Object.keys(companyIdByShortKey).find(function(k){ return companyIdByShortKey[k] === rel.company_id; });
           if (!sk) return;
-          var listName = rel.relation_type === 'assigned' ? 'assignedClients' : rel.relation_type === 'processing' ? 'processClients' : 'auditClients';
+          var listName = rel.relation_type === 'assigned' ? 'assignedClients' : rel.relation_type === 'processing' ? 'processClients' : null;
+          if (!listName) return;
           if (!currentUser[listName]) currentUser[listName] = [];
           if (currentUser[listName].indexOf(sk) === -1) currentUser[listName].push(sk);
         });
@@ -5133,7 +5266,7 @@ async function _saveClientConfirmed() {
     });
     if (relationRows.length) {
       // Dedup -- 'assigned' can be queued twice for the same person (once via the canAssign
-      // admin auto-grant above, once via being checked as Specialist/Auditor themselves).
+      // admin auto-grant above, once via being checked as Specialist themselves).
       // Without this, two identical rows in one insert batch violate the table's primary key
       // and Postgres rejects the WHOLE batch -- silently, since only console.warn'd below --
       // so the specialist assignment (and everything else in this batch) never actually
@@ -5856,7 +5989,7 @@ function renderNotifCard() {
 
 // Team Capacity cards were previously 100% static HTML — 4 hardcoded team-card divs that
 // never reflected real USERS/assignment data at all, for anyone, not just newly added
-// members. This builds them live from USERS + processClients/auditClients + clientGroups.
+// members. This builds them live from USERS + processClients + clientGroups.
 function renderTeamCapacity() {
   var grid = document.getElementById('admin-team-grid');
   if (!grid) return;
@@ -5874,29 +6007,24 @@ function renderTeamCapacity() {
     var u = USERS[uk];
     var profile = teamProfiles[uk] || {};
     var specSubs = (u.processClients || []).filter(function(sk){ return clients[sk] && !clients[sk]._churned; });
-    var audSubs = (u.auditClients || []).filter(function(sk){ return clients[sk] && !clients[sk]._churned; });
     var specGroups = groupNamesFor(specSubs);
-    var audGroups = groupNamesFor(audSubs);
-    var allGroupNames = specGroups.concat(audGroups.filter(function(n){ return specGroups.indexOf(n) === -1; }));
     return {
       name: u.name, initials: u.initials,
       avBg: profile.avBg || '#F4F4F8', avTxt: profile.avTxt || '#9898a6',
-      clientsLabel: allGroupNames.length ? allGroupNames.join(' \u00b7 ') : '\u2014',
-      specCount: specGroups.length, audCount: audGroups.length,
-      isAuditor: audGroups.length > 0
+      clientsLabel: specGroups.length ? specGroups.join(' \u00b7 ') : '\u2014',
+      specCount: specGroups.length
     };
   });
 
-  var maxLoad = Math.max.apply(null, rows.map(function(r){ return r.specCount + r.audCount; }).concat([1]));
+  var maxLoad = Math.max.apply(null, rows.map(function(r){ return r.specCount; }).concat([1]));
 
   grid.innerHTML = rows.map(function(r) {
-    var pct = Math.max(3, Math.round(((r.specCount + r.audCount) / maxLoad) * 100));
-    var fillClass = r.specCount >= r.audCount ? 'fill-o' : 'fill-b';
+    var pct = Math.max(3, Math.round((r.specCount / maxLoad) * 100));
     return '<div class="team-card">'
       + '<div class="tc-av" style="background:' + r.avBg + ';color:' + r.avTxt + ';">' + r.initials + '</div>'
-      + '<div class="tc-info"><div class="tc-name">' + r.name + '</div><div class="tc-clients">' + r.clientsLabel + (r.isAuditor ? '<span class="auditor-only"> (Auditor)</span>' : '') + '</div></div>'
-      + '<div class="tc-right"><div class="tc-specialist">' + r.specCount + ' client' + (r.specCount !== 1 ? 's' : '') + '</div><div class="tc-auditor auditor-only">' + r.audCount + ' auditor</div>'
-      + '<div class="tc-bar"><div class="tc-fill ' + fillClass + '" style="width:' + pct + '%"></div></div></div>'
+      + '<div class="tc-info"><div class="tc-name">' + r.name + '</div><div class="tc-clients">' + r.clientsLabel + '</div></div>'
+      + '<div class="tc-right"><div class="tc-specialist">' + r.specCount + ' client' + (r.specCount !== 1 ? 's' : '') + '</div>'
+      + '<div class="tc-bar"><div class="tc-fill fill-g" style="width:' + pct + '%"></div></div></div>'
       + '</div>';
   }).join('');
 }
@@ -5923,7 +6051,7 @@ function switchAdminTab(tab) {
   if (tab === 'calendar' && typeof renderAdminCalendar === 'function') renderAdminCalendar();
 }
 
-// ── Admin: Client Assignments (reassign specialist/auditor per client) ──────
+// ── Admin: Client Assignments (reassign specialist per client) ──────
 // ── Admin: Member performance metrics (computed from real data, not placeholders) ──────────
 function renderMemberMetrics() {
   var tbody = document.getElementById('member-metrics-tbody');
@@ -6000,14 +6128,11 @@ function renderClientAssignments() {
     var subs = clientGroups[gk].subs || [gk];
     return subs.some(function(sk){ return clients[sk] && !clients[sk]._churned; });
   });
-  var cols = AUDITOR_ROLE_ENABLED ? '1fr 1fr 1fr' : '1fr 1fr';
+  var cols = '1fr 1fr';
 
   function summaryFor(subKeys) {
     var specs = Object.keys(USERS).filter(function(uk){ return subKeys.some(function(sk){ return (USERS[uk].processClients||[]).includes(sk); }); }).map(function(uk){ return USERS[uk].name.split(' ')[0]; });
-    var specLine = specs.length ? 'Specialist: ' + specs.join(', ') : 'No specialist assigned';
-    if (!AUDITOR_ROLE_ENABLED) return specLine;
-    var auds  = Object.keys(USERS).filter(function(uk){ return subKeys.some(function(sk){ return (USERS[uk].auditClients||[]).includes(sk); }); }).map(function(uk){ return USERS[uk].name.split(' ')[0]; });
-    return specLine + '  \u00b7  ' + (auds.length ? 'Auditor: ' + auds.join(', ') : 'No auditor assigned');
+    return specs.length ? 'Specialist: ' + specs.join(', ') : 'No specialist assigned';
   }
 
   container.innerHTML = groupKeys.map(function(gk) {
@@ -6017,19 +6142,17 @@ function renderClientAssignments() {
     var userRows = Object.keys(USERS).map(function(uk) {
       var u = USERS[uk];
       var isSpec = subKeys.some(function(sk){ return (u.processClients||[]).includes(sk); });
-      var isAud  = subKeys.some(function(sk){ return (u.auditClients||[]).includes(sk); });
       // canAssign users (currently Zona/Arianne) are auto-granted access to every client the
-      // moment it's created (see _saveClientConfirmed/saveSubcompany), regardless of these
-      // Specialist/Auditor checkboxes -- there's no third "Access" column here to reflect
-      // that separate grant, so it showed as neither checkbox checked while their Team
-      // profile listed every client, looking like the two views had silently drifted apart.
-      // This badge makes that always-on access visible instead of invisible.
+      // moment it's created (see _saveClientConfirmed/saveSubcompany), regardless of this
+      // Specialist checkbox -- there's no separate "Access" column here to reflect that
+      // separate grant, so it showed as the checkbox unchecked while their Team profile
+      // listed every client, looking like the two views had silently drifted apart. This
+      // badge makes that always-on access visible instead of invisible.
       var adminBadge = u.canAssign ? '<span title="Admins with client-assignment permission always have access to every client, regardless of these checkboxes" style="font-size:10px;font-weight:600;background:#e8f0fe;color:#1679FA;padding:1px 7px;border-radius:20px;margin-left:6px;white-space:nowrap;"><i class="ti ti-shield-lock" style="font-size:9px;vertical-align:-1px;"></i> Always has access</span>' : '';
       return '<div class="assign-row" data-user-key="' + uk + '" style="display:grid;grid-template-columns:' + cols + ';padding:10px 14px;border-bottom:1px solid #EBEBEF;align-items:center;">'
         + '<div class="assign-member"><div class="cap-av" style="width:26px;height:26px;font-size:9px;background:#F4F4F8;color:#6b6b80;">' + u.initials + '</div>'
         + '<div style="font-size:12px;color:#1a1a2e;">' + u.name + '</div>' + adminBadge + '</div>'
         + '<div style="text-align:center;"><input type="checkbox" class="check-box" ' + (isSpec?'checked':'') + (canEditAssignments?'':' disabled style="cursor:not-allowed;opacity:0.5;"') + '></div>'
-        + (AUDITOR_ROLE_ENABLED ? '<div style="text-align:center;"><input type="checkbox" class="check-box" ' + (isAud?'checked':'') + (canEditAssignments?'':' disabled style="cursor:not-allowed;opacity:0.5;"') + '></div>' : '')
         + '</div>';
     }).join('');
 
@@ -6067,7 +6190,6 @@ function renderClientAssignments() {
       + '<div style="display:grid;grid-template-columns:' + cols + ';padding:8px 14px;background:#FAFAFA;border-bottom:1px solid #EBEBEF;">'
       + '<div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;">Team member</div>'
       + '<div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;text-align:center;">Specialist</div>'
-      + (AUDITOR_ROLE_ENABLED ? '<div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;text-align:center;">Auditor</div>' : '')
       + '</div>'
       + '<div data-assign-group="' + gk + '">' + userRows + '</div>'
       + '</div>'
@@ -6434,7 +6556,7 @@ function filterClientAssignments(q) {
   });
 }
 
-// Reassigns a client's Specialist/Auditor roles based on the checked boxes. Fully replaces
+// Reassigns a client's Specialist role based on the checked boxes. Fully replaces
 // the previous assignment (rather than only adding), so passing a client off entirely — e.g.
 // removing yourself and giving it to someone else — is a single Save, not a two-step process.
 async function saveClientAssignment(groupKey) {
@@ -6481,16 +6603,12 @@ async function saveClientAssignment(groupKey) {
 
   // Clear this client from every user's role arrays first, then rebuild from the checkboxes —
   // avoids leftover stale entries if someone was previously assigned and is now unchecked.
-  // auditClients is deliberately left untouched while the Auditor role is disabled, so existing
-  // assignments are preserved exactly as they were whenever it gets re-enabled.
   Object.keys(USERS).forEach(function(uk) {
     var u = USERS[uk];
     subKeys.forEach(function(sk) {
       u.processClients  = (u.processClients||[]).filter(function(x){ return x !== sk; });
-      if (AUDITOR_ROLE_ENABLED) u.auditClients = (u.auditClients||[]).filter(function(x){ return x !== sk; });
       u.assignedClients = (u.assignedClients||[]).filter(function(x){ return x !== sk; });
       syncCurrentUser(uk, 'processClients', sk, false);
-      if (AUDITOR_ROLE_ENABLED) syncCurrentUser(uk, 'auditClients', sk, false);
       syncCurrentUser(uk, 'assignedClients', sk, false);
     });
   });
@@ -6511,7 +6629,6 @@ async function saveClientAssignment(groupKey) {
     if (!mk || !USERS[mk]) return;
     var checks = row.querySelectorAll('.check-box');
     var isSpec = checks[0] && checks[0].checked;
-    var isAud  = AUDITOR_ROLE_ENABLED && checks[1] && checks[1].checked;
     subKeys.forEach(function(sk) {
       if (isSpec) {
         if (!USERS[mk].processClients.includes(sk)) USERS[mk].processClients.push(sk);
@@ -6519,19 +6636,12 @@ async function saveClientAssignment(groupKey) {
         syncCurrentUser(mk, 'processClients', sk, true);
         syncCurrentUser(mk, 'assignedClients', sk, true);
       }
-      if (isAud) {
-        if (!USERS[mk].auditClients.includes(sk)) USERS[mk].auditClients.push(sk);
-        if (!USERS[mk].assignedClients.includes(sk)) USERS[mk].assignedClients.push(sk);
-        syncCurrentUser(mk, 'auditClients', sk, true);
-        syncCurrentUser(mk, 'assignedClients', sk, true);
-      }
     });
     if (isSpec) { queueRelation(mk, 'assigned'); queueRelation(mk, 'processing'); }
-    if (isAud)  { queueRelation(mk, 'assigned'); queueRelation(mk, 'audit'); }
   });
 
   if (relationRows.length) {
-    // Dedup -- 'assigned' can be queued twice (once via canAssign, once via isSpec/isAud).
+    // Dedup -- 'assigned' can be queued twice (once via canAssign, once via isSpec).
     var seen = {};
     relationRows = relationRows.filter(function(r) {
       var k = r.user_id + '|' + r.company_id + '|' + r.relation_type;
@@ -6577,10 +6687,6 @@ async function saveClientAssignment(groupKey) {
   if (summaryEl) {
     var specs = Object.keys(USERS).filter(function(uk){ return subKeys.some(function(sk){ return (USERS[uk].processClients||[]).includes(sk); }); }).map(function(uk){ return USERS[uk].name.split(' ')[0]; });
     var specLine = specs.length ? 'Specialist: ' + specs.join(', ') : 'No specialist assigned';
-    if (AUDITOR_ROLE_ENABLED) {
-      var auds  = Object.keys(USERS).filter(function(uk){ return subKeys.some(function(sk){ return (USERS[uk].auditClients||[]).includes(sk); }); }).map(function(uk){ return USERS[uk].name.split(' ')[0]; });
-      specLine += '  \u00b7  ' + (auds.length ? 'Auditor: ' + auds.join(', ') : 'No auditor assigned');
-    }
     summaryEl.textContent = specLine;
   }
 }
@@ -7597,7 +7703,6 @@ function renderClientProfile(key) {
 }
 
 function initHub() {
-  document.body.classList.toggle('hide-auditor-role', !AUDITOR_ROLE_ENABLED);
   renderClientCards();
   try { renderSidebarClients(); } catch(e) {
     console.error('renderSidebarClients error:', e);
@@ -9772,6 +9877,7 @@ function markTaskOpened(clientKey, taskKey) {
 
 function openTaskRunner(taskKey, taskName) {
   if (!taskKey) return;
+  window._openTaskKey = taskKey;
   var modalBox = document.getElementById('task-modal-box');
   if (modalBox) modalBox.style.width = '1400px';
   document.getElementById('task-modal').style.display = 'flex';
@@ -9898,7 +10004,7 @@ function finalizeTask(taskKey) {
   }
   var batchNames = finalizeBatchTaskIfApplicable(taskKey, 'done', '');
   if (!batchNames) setTaskStatus(taskKey, 'done', '');
-  closeTaskRunner();
+  closeTaskRunner(true);
   if (typeof showToast === 'function') {
     showToast(batchNames ? (batchNames.join(', ') + ' marked as done \u2713') : 'Task marked as done ✓');
   }
@@ -9952,7 +10058,7 @@ function confirmSkipTask() {
   // Default to skipping just the sub actually open -- only spread to the rest of a
   // multi-sub group when the user explicitly opted into that via the checkbox above.
   if (!batchNamesSkip) setTaskStatus(taskKey, 'skipped', reason, applyToWholeGroup ? null : [ck]);
-  closeTaskRunner();
+  closeTaskRunner(true);
   if (typeof showToast === 'function') showToast('Task skipped: ' + reason + (applyToWholeGroup ? ' (all subcompanies)' : ''));
 }
 
@@ -10002,16 +10108,22 @@ function clearAllTaskCache() {
   if (window._taskBodyObserver) { window._taskBodyObserver.disconnect(); window._taskBodyObserver = null; }
 }
 
-function closeTaskRunner() {
-  // Save current body content to cache before closing
-  var body = document.getElementById('task-modal-body');
-  var footer = document.getElementById('task-action-footer');
-  if (body && window._taskKey) {
-    // Save everything except the footer (footer is rebuilt on reopen)
-    if (footer) footer.remove();
-    taskBodyCache[window._taskKey] = body.innerHTML;
-    window._taskKey = null;
+// force=true bypasses the confirm below -- used by the deliberate finish actions
+// (finalizeTask/confirmSkipTask), which have already set the task's status themselves.
+// The X icon and the backdrop-click listener below both call this with no argument, so an
+// unfinished task always asks first.
+function closeTaskRunner(force) {
+  if (!force && window._openTaskKey) {
+    var st = (typeof getTaskStatus === 'function') ? getTaskStatus(window._openTaskKey).st : 'pending';
+    if (st !== 'done' && st !== 'skipped') {
+      appConfirm('Close without finishing?',
+        'This task hasn’t been marked done or skipped yet. Uploaded files and progress from this session won’t be saved. Close anyway?',
+        function(){ closeTaskRunner(true); },
+        { okLabel: 'Close anyway', cancelLabel: 'Keep working' });
+      return;
+    }
   }
+  window._openTaskKey = null;
   document.getElementById('task-modal').style.display = 'none';
   // The Tasks tab list behind this modal (status pill, "N runs" badge) was never refreshed on
   // close -- marking done/skipped, or undoing and redoing a task, updated taskStatus/
@@ -10211,7 +10323,11 @@ async function varSaveCutoffSnapshot(clientKey, co) {
 // those as separate arrays, since they're cheap derived views of attData. Also (re)populates
 // window.varResults[payout], which the Payroll Instructions builder and the task-runner
 // header badge both read directly.
-function varRenderResultCard(co, cutoffIdx, attData) {
+// Pure, side-effect-free variance table markup shared by the live task view
+// (varRenderResultCard) and the read-only Processing History snapshot viewer -- takes only
+// attData, no live co/window state, so it's safe to call for a historical row that isn't the
+// currently open task.
+function varBuildSnapshotTableHtml(attData) {
   var VAR_KEEP = ['ID','Name','Days Absent','Undertime (min)',
     'Ord-OT','Ord-ND','Ord-ND-OT',
     'RD','RD-OT','RD-ND','RD-ND-OT',
@@ -10221,37 +10337,6 @@ function varRenderResultCard(co, cutoffIdx, attData) {
     'LH-RD','LH-RD-OT','LH-RD-ND','LH-RD-ND-OT',
     'DH','DH-OT','DH-ND','DH-ND-OT',
     'DH-RD','DH-RD-OT','DH-RD-ND','DH-RD-ND-OT'];
-
-  var withVar    = attData.filter(function(e){ return e.hasVar; });
-  var noChange   = attData.filter(function(e){ return !e.hasVar; });
-  var additions  = withVar.filter(function(e){ return e.row.slice(2,35).reduce(function(s,v){return s+v;},0)>=0; });
-  var deductions = withVar.filter(function(e){ return e.row.slice(2,35).reduce(function(s,v){return s+v;},0)<0; });
-
-  window.varResults[co._payout] = {additions:additions, deductions:deductions, noChange:noChange, attData:attData, finalized: !!co._finalized};
-  co._withVar = withVar;
-  co._adds    = additions.length;
-  co._deds    = deductions.length;
-  co._nc      = noChange.length;
-  co._total   = attData.length;
-
-  var resultDiv = document.getElementById('var-result');
-  if (!resultDiv) return;
-
-  var card = document.createElement('div');
-  card.id = 'var-card-' + co.id;
-  card.style.cssText = 'background:#fff;border:1.5px solid #EBEBEF;border-radius:16px;overflow:hidden;margin-bottom:12px;';
-
-  var flagged = attData.filter(function(e){ return e.missing; });
-
-  var cardHdr = '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#F4F4F8;border-bottom:1px solid #EBEBEF;">'
-    + '<div><div style="font-size:11px;color:#9898a6;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">Cut-off ' + (cutoffIdx+1) + '</div>'
-    + '<div style="font-size:14px;font-weight:600;color:#1a1a2e;">' + co._payout + '</div></div>'
-    + '<div style="display:flex;gap:8px;align-items:center;">'
-    + '<span style="font-size:11px;background:#edfae8;color:#32CE13;padding:2px 10px;border-radius:20px;font-weight:600;">' + additions.length + ' additions</span>'
-    + '<span style="font-size:11px;background:#fff0f0;color:#c0392b;padding:2px 10px;border-radius:20px;font-weight:600;">' + deductions.length + ' deductions</span>'
-    + '<span style="font-size:11px;background:#F4F4F8;color:#9898a6;padding:2px 10px;border-radius:20px;">' + noChange.length + ' no change</span>'
-    + (flagged.length ? '<span style="font-size:11px;background:#fffbeb;color:#92400e;padding:2px 10px;border-radius:20px;font-weight:600;border:1px solid #fcd34d;"><i class="ti ti-alert-triangle" style="font-size:10px;"></i> ' + flagged.length + ' flagged</span>' : '')
-    + '</div></div>';
 
   var varTableRows = '';
   var tableList = attData.filter(function(e){ return e.hasVar || e.missing; });
@@ -10283,7 +10368,7 @@ function varRenderResultCard(co, cutoffIdx, attData) {
     varTableRows = '<tr><td colspan="3" style="padding:16px;text-align:center;color:#9898a6;font-size:12px;">No variances detected</td></tr>';
   }
 
-  var varTable = '<div style="padding:14px 16px;border-bottom:1px solid #EBEBEF;">'
+  return '<div style="padding:14px 16px;border-bottom:1px solid #EBEBEF;">'
     + '<div style="font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;">Variance details</div>'
     + '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-radius:12px;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
     + '<thead><tr style="background:#F4F4F8;">'
@@ -10291,6 +10376,41 @@ function varRenderResultCard(co, cutoffIdx, attData) {
     + '<th style="padding:6px 10px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Name</th>'
     + '<th style="padding:6px 10px;text-align:left;font-weight:600;color:#9898a6;border-bottom:1px solid #EBEBEF;">Variances</th>'
     + '</tr></thead><tbody>' + varTableRows + '</tbody></table></div></div>';
+}
+
+function varRenderResultCard(co, cutoffIdx, attData) {
+  var withVar    = attData.filter(function(e){ return e.hasVar; });
+  var noChange   = attData.filter(function(e){ return !e.hasVar; });
+  var additions  = withVar.filter(function(e){ return e.row.slice(2,35).reduce(function(s,v){return s+v;},0)>=0; });
+  var deductions = withVar.filter(function(e){ return e.row.slice(2,35).reduce(function(s,v){return s+v;},0)<0; });
+
+  window.varResults[co._payout] = {additions:additions, deductions:deductions, noChange:noChange, attData:attData, finalized: !!co._finalized};
+  co._withVar = withVar;
+  co._adds    = additions.length;
+  co._deds    = deductions.length;
+  co._nc      = noChange.length;
+  co._total   = attData.length;
+
+  var resultDiv = document.getElementById('var-result');
+  if (!resultDiv) return;
+
+  var card = document.createElement('div');
+  card.id = 'var-card-' + co.id;
+  card.style.cssText = 'background:#fff;border:1.5px solid #EBEBEF;border-radius:16px;overflow:hidden;margin-bottom:12px;';
+
+  var flagged = attData.filter(function(e){ return e.missing; });
+
+  var cardHdr = '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#F4F4F8;border-bottom:1px solid #EBEBEF;">'
+    + '<div><div style="font-size:11px;color:#9898a6;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">Cut-off ' + (cutoffIdx+1) + '</div>'
+    + '<div style="font-size:14px;font-weight:600;color:#1a1a2e;">' + co._payout + '</div></div>'
+    + '<div style="display:flex;gap:8px;align-items:center;">'
+    + '<span style="font-size:11px;background:#edfae8;color:#32CE13;padding:2px 10px;border-radius:20px;font-weight:600;">' + additions.length + ' additions</span>'
+    + '<span style="font-size:11px;background:#fff0f0;color:#c0392b;padding:2px 10px;border-radius:20px;font-weight:600;">' + deductions.length + ' deductions</span>'
+    + '<span style="font-size:11px;background:#F4F4F8;color:#9898a6;padding:2px 10px;border-radius:20px;">' + noChange.length + ' no change</span>'
+    + (flagged.length ? '<span style="font-size:11px;background:#fffbeb;color:#92400e;padding:2px 10px;border-radius:20px;font-weight:600;border:1px solid #fcd34d;"><i class="ti ti-alert-triangle" style="font-size:10px;"></i> ' + flagged.length + ' flagged</span>' : '')
+    + '</div></div>';
+
+  var varTable = varBuildSnapshotTableHtml(attData);
 
   var actionsHtml = '<div style="padding:12px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
     + '<button id="dl-var-' + co.id + '" onclick="varDownload(' + co.id + ')" class="dl-btn" style="margin:0;width:auto;flex:1 1 220px;">'
@@ -10308,86 +10428,6 @@ function varRenderResultCard(co, cutoffIdx, attData) {
   card.innerHTML = cardHdr + varTable + actionsHtml;
   if (co._finalized) card.style.borderColor = '#A6EB93';
   resultDiv.appendChild(card);
-}
-
-// If Supabase has saved Variance session(s) for this subcompany (from before a reload wiped
-// varBatchGroups), restores them -- built workbooks included, so nothing needs reprocessing.
-// A company can have several cut-offs saved at once, so this restores the whole set into
-// g.cutoffs (replacing the single upload-form placeholder), not just one. Only restores into
-// a group that hasn't already been processed in THIS session (status still 'pending'), and
-// re-checks after each await in case the group moved on (different subcompany picked, or a
-// fresh upload started) while this was in flight -- same race-avoidance as Validation's
-// tkTryRestoreFromSupabase.
-// True once the user has actually dropped a real file into one of this group's placeholder
-// dropzones -- if so, a background restore must not silently swap g.cutoffs out from under
-// them (the dropzones would still show the file as "attached" while taskFiles/g.cutoffs
-// disagree, so "Process all" would fail to find anything to process).
-function _varGroupHasLocalFiles(g) {
-  return g.cutoffs.some(function(co){
-    return taskFiles['var-orig-'+co.id] || taskFiles['var-aco-'+co.id] || taskFiles['var-payreg-'+co.id];
-  });
-}
-
-async function varTryRestoreFromSupabase(gi) {
-  var g = varBatchGroups[gi];
-  if (!g || !g.clientKey || g.status !== 'pending' || _varGroupHasLocalFiles(g)) return;
-  var clientKeyAtStart = g.clientKey;
-  var companyId = clients[clientKeyAtStart] && clients[clientKeyAtStart].companyId;
-  if (!companyId) return;
-
-  var res = await supabaseClient.from('task_cutoff_review_state').select('*')
-    .eq('company_id', companyId).eq('task_key', 'variance').order('updated_at', { ascending: true });
-  if (res.error) { console.warn('Could not check for a saved Variance session for ' + clientKeyAtStart, res.error); return; }
-  if (!res.data || !res.data.length) return;
-
-  g = varBatchGroups[gi];
-  if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending' || _varGroupHasLocalFiles(g)) return;
-
-  var restored = [];
-  for (var i = 0; i < res.data.length; i++) {
-    var row = res.data[i];
-    var wbBuf = null;
-    try {
-      if (row.wb_storage_path) wbBuf = await varDownloadWorkbook(row.wb_storage_path);
-    } catch (e) {
-      console.warn('Could not download saved Variance workbook for ' + clientKeyAtStart + ' / ' + row.cutoff_label, e);
-    }
-    g = varBatchGroups[gi];
-    if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending' || _varGroupHasLocalFiles(g)) return;
-    var data = row.data || {};
-    // Rows saved before filenamePayout started getting persisted have no data.filenamePayout --
-    // recompute it from the calendar via the saved cutoff_label rather than leaving the
-    // download filename silently wrong for every already-saved session.
-    restored.push({
-      id: ++varCutoffCounter,
-      _payout: row.cutoff_label,
-      _safeN: row.cutoff_label.replace(/[^a-zA-Z0-9]/g, '_'),
-      _attData: data.attData || [],
-      _attColors: data.attColors || {},
-      _finalized: !!data.finalized,
-      _filenamePayout: data.filenamePayout || _varFilenamePayoutFromShown(row.cutoff_label),
-      _varWb: wbBuf ? XLSX.read(new Uint8Array(wbBuf), { type: 'array' }) : null
-    });
-  }
-  if (!restored.length) return;
-
-  g = varBatchGroups[gi];
-  if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending' || _varGroupHasLocalFiles(g)) return;
-
-  g.cutoffs = restored;
-  g.status = 'done';
-  // The upload dropzones already on screen were built against the old placeholder cutoff's
-  // id(s) -- g.cutoffs just moved on to the restored id(s), so those dropzones are now
-  // pointing at nothing. Re-render the group's card so any file the user drops in from here
-  // on lands on an id that actually matches g.cutoffs (previously, files silently piled up in
-  // taskFiles under an orphaned id and "Process all" could never find them).
-  var groupEl = document.getElementById('var-group-' + gi);
-  if (groupEl) groupEl.outerHTML = varGroupCardHtml(g, gi);
-  renderVarBatchList();
-  if (typeof showToast === 'function') showToast('Restored your previous Variance progress for ' + (g.name || g.clientKey));
-  if (gi === varActiveGroupIdx || (varActiveGroupIdx < 0 && gi === 0)) {
-    varSwitchGroup(gi);
-  }
 }
 
 function subOptionsForCurrentGroup() {
@@ -10411,7 +10451,6 @@ function buildVarianceRunner(body) {
     varBatchGroups = [{ name: _defaultKey ? (clients[_defaultKey].name||_defaultKey) : 'Subcompany 1', clientKey: _defaultKey, cutoffs: [{ id: 1 }], status: 'pending', errorMsg: '' }];
     varActiveGroupIdx = -1;
     window._varWsKey = wsKey;
-    if (_defaultKey) varTryRestoreFromSupabase(0);
   }
   // else: reopening the same workspace's already-processed results — keep varBatchGroups as-is
 
@@ -10472,7 +10511,6 @@ function varGroupCardHtml(g, gi) {
 function varSetGroupClient(gi, key) {
   varBatchGroups[gi].clientKey = key || null;
   varBatchGroups[gi].name = key ? (clients[key].name || key) : ('Subcompany ' + (gi + 1));
-  if (key) varTryRestoreFromSupabase(gi);
 }
 
 function varRenderGroups() {
@@ -11087,9 +11125,9 @@ function runPayrollInstructions() {
 // Given a Variance cutoff's shown/saved payout date (Date object or a parseable date string),
 // finds the calendar period immediately before it and returns its payout formatted as "Month
 // Day" -- the output file's naming convention (named after the PREVIOUS payout run's cycle,
-// not the cutoff Variance is actually reviewing). Shared by buildVarCard (fresh cards) and
-// varTryRestoreFromSupabase's legacy-row fallback (restored cards saved before filenamePayout
-// itself started getting persisted).
+// not the cutoff Variance is actually reviewing). Used by buildVarCard for fresh cards, and by
+// the Processing History snapshot viewer for rows saved before filenamePayout itself started
+// getting persisted.
 function _varFilenamePayoutFromShown(shownPayout) {
   var d = (shownPayout instanceof Date) ? shownPayout : new Date(shownPayout);
   if (!d || isNaN(d.getTime())) return null;
@@ -12079,11 +12117,10 @@ const tkReviewRows = [
 var tkBatchGroups = [];   // [{name, tkReviewRows:[], tkSummaryEmployees:[], _tkRaw:null, status:'pending'|'processing'|'done'|'error', errorMsg:''}]
 var tkActiveGroupIdx = -1;
 
-// ── Validation review-state persistence (task_review_state + validation-uploads bucket) ──
-// Without this, an accidental reload mid-review lost both the review progress (checked
-// rows, edited remarks) AND required re-uploading the 3 source files, since tkDownloadOutput()
-// patches the ORIGINAL files' own bytes to build the final output -- it can't be rebuilt from
-// tkReviewRows data alone.
+// ── Validation review-state persistence (task_cutoff_review_state + validation-uploads
+// bucket) -- one row per (company, cutoff), same table Variance uses. Saved on every process/
+// edit so the Processing History snapshot view has real data to show; deliberately never read
+// back into the live upload form -- an interrupted session is just re-uploaded from scratch.
 
 // Identifies which cutoff a client is currently in, from its own calendar -- the date of the
 // first scheduled event after the Attendance Cutoff/Payout column (whatever that event is
@@ -12143,13 +12180,14 @@ async function tkSaveFullSnapshot(clientKey) {
   } catch (e) {
     console.warn('Could not upload Validation source files for ' + clientKey, e);
   }
-  var res = await supabaseClient.from('task_review_state').upsert({
-    company_id: companyId, task_key: 'validation',
-    data: { tkReviewRows: reviewRowsSnapshot, tkSummaryEmployees: summaryEmployeesSnapshot },
-    att_storage_path: attPath, ac_storage_path: acPath, bio_storage_path: bioPath,
-    cutoff_key: tkCurrentCutoffKeyForClient(clientKey),
+  var res = await supabaseClient.from('task_cutoff_review_state').upsert({
+    company_id: companyId, task_key: 'validation', cutoff_label: getCurrentCutoffLabel(clientKey),
+    data: {
+      tkReviewRows: reviewRowsSnapshot, tkSummaryEmployees: summaryEmployeesSnapshot,
+      attStoragePath: attPath, acStoragePath: acPath, bioStoragePath: bioPath
+    },
     updated_at: new Date().toISOString()
-  }, { onConflict: 'company_id,task_key' });
+  }, { onConflict: 'company_id,task_key,cutoff_label' });
   if (res.error) console.warn('Could not save Validation review state for ' + clientKey, res.error);
 }
 
@@ -12171,13 +12209,26 @@ function tkScheduleReviewSave() {
   if (_tkReviewSaveTimers[companyId]) clearTimeout(_tkReviewSaveTimers[companyId]);
   _tkReviewSaveTimers[companyId] = setTimeout(function() {
     delete _tkReviewSaveTimers[companyId];
-    supabaseClient.from('task_review_state').upsert({
-      company_id: companyId, task_key: 'validation',
-      data: { tkReviewRows: reviewRowsSnapshot, tkSummaryEmployees: summaryEmployeesSnapshot },
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'company_id,task_key' }).then(function(res) {
-      if (res.error) console.warn('Could not save Validation review progress for ' + clientKey, res.error);
-    });
+    // A debounced edit-save never touches the storage paths (files don't change during
+    // review) -- merge onto whatever was last saved for this cutoff rather than clobbering
+    // them with nulls, since this upsert doesn't have attPath/acPath/bioPath in scope.
+    supabaseClient.from('task_cutoff_review_state').select('data').eq('company_id', companyId)
+      .eq('task_key', 'validation').eq('cutoff_label', getCurrentCutoffLabel(clientKey)).maybeSingle()
+      .then(function(existingRes) {
+        var prevData = (existingRes.data && existingRes.data.data) || {};
+        return supabaseClient.from('task_cutoff_review_state').upsert({
+          company_id: companyId, task_key: 'validation', cutoff_label: getCurrentCutoffLabel(clientKey),
+          data: {
+            tkReviewRows: reviewRowsSnapshot, tkSummaryEmployees: summaryEmployeesSnapshot,
+            attStoragePath: prevData.attStoragePath || null,
+            acStoragePath: prevData.acStoragePath || null,
+            bioStoragePath: prevData.bioStoragePath || null
+          },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'company_id,task_key,cutoff_label' });
+      }).then(function(res) {
+        if (res.error) console.warn('Could not save Validation review progress for ' + clientKey, res.error);
+      });
   }, 1000);
 }
 
@@ -12202,69 +12253,6 @@ function tkReviveReviewState(data) {
   return { tkReviewRows: rows, tkSummaryEmployees: data.tkSummaryEmployees || [] };
 }
 
-// If Supabase has a saved Validation session for this subcompany (from before a reload wiped
-// tkBatchGroups), restores it -- files included, so nothing needs re-uploading. Only restores
-// into a group that hasn't already been processed in THIS session (status still 'pending'),
-// so it never clobbers active work, and re-checks after each await in case the group moved on
-// (different subcompany picked, or a fresh upload started) while this was in flight.
-async function tkTryRestoreFromSupabase(gi) {
-  var g = tkBatchGroups[gi];
-  if (!g || !g.clientKey || g.status !== 'pending') return;
-  var clientKeyAtStart = g.clientKey;
-  var companyId = clients[clientKeyAtStart] && clients[clientKeyAtStart].companyId;
-  if (!companyId) return;
-
-  var res = await supabaseClient.from('task_review_state').select('*')
-    .eq('company_id', companyId).eq('task_key', 'validation').maybeSingle();
-  if (res.error) { console.warn('Could not check for a saved Validation session for ' + clientKeyAtStart, res.error); return; }
-  if (!res.data) return;
-
-  g = tkBatchGroups[gi];
-  if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending') return;
-
-  var row = res.data;
-
-  // A snapshot from an already-closed cutoff should never auto-restore into a new one --
-  // only enforced when BOTH keys are known (calendar-derived), so clients with no calendar
-  // yet, or rows saved before this field existed (cutoff_key null), keep the old always-
-  // restore behavior rather than being silently blocked with no way to tell why.
-  var liveCutoffKey = tkCurrentCutoffKeyForClient(clientKeyAtStart);
-  if (liveCutoffKey && row.cutoff_key && liveCutoffKey !== row.cutoff_key) {
-    supabaseClient.from('task_review_state').delete().eq('company_id', companyId).eq('task_key', 'validation').then(function(delRes) {
-      if (delRes.error) console.warn('Could not clear stale-cutoff Validation state for ' + clientKeyAtStart, delRes.error);
-    });
-    if (typeof showToast === 'function') showToast('A new cutoff has started for ' + (g.name || clientKeyAtStart) + ' -- starting fresh');
-    return;
-  }
-  var attBuf = null, acBuf = null, bioBuf = null;
-  try {
-    if (row.att_storage_path) attBuf = await tkDownloadValidationFile(row.att_storage_path);
-    if (row.ac_storage_path)  acBuf  = await tkDownloadValidationFile(row.ac_storage_path);
-    if (row.bio_storage_path) bioBuf = await tkDownloadValidationFile(row.bio_storage_path);
-  } catch (e) {
-    console.warn('Could not download saved Validation source files for ' + clientKeyAtStart, e);
-  }
-
-  g = tkBatchGroups[gi];
-  if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending') return;
-
-  var revived = tkReviveReviewState(row.data || {});
-  g.tkReviewRows = revived.tkReviewRows;
-  g.tkSummaryEmployees = revived.tkSummaryEmployees;
-  g._tkRaw = {
-    attWb: attBuf ? XLSX.read(new Uint8Array(attBuf), {type:'array'}) : null,
-    acWb:  acBuf  ? XLSX.read(new Uint8Array(acBuf),  {type:'array'}) : null,
-    bioWb: bioBuf ? XLSX.read(new Uint8Array(bioBuf), {type:'array'}) : null,
-    attBuf: attBuf, acBuf: acBuf, bioBuf: bioBuf
-  };
-  g.status = 'done';
-  if (typeof renderTKBatchList === 'function') renderTKBatchList();
-  if (gi === tkActiveGroupIdx || (tkActiveGroupIdx < 0 && gi === 0)) {
-    tkSwitchGroup(gi);
-  }
-  if (typeof showToast === 'function') showToast('Restored your previous Validation progress for ' + (g.name || g.clientKey));
-}
-
 function buildValidationRunner(body) {
   document.getElementById('task-modal-sub').textContent = 'Upload files per subcompany, then process all at once';
   var wsKeyTk = (window.currentWsGroup || window.currentWsClient || '');
@@ -12279,12 +12267,6 @@ function buildValidationRunner(body) {
     tkBatchGroups = [{ name: _defaultKeyTk ? (clients[_defaultKeyTk].name||_defaultKeyTk) : 'Subcompany 1', clientKey: _defaultKeyTk, tkReviewRows: [], tkSummaryEmployees: [], _tkRaw: null, status: 'pending', errorMsg: '' }];
     tkActiveGroupIdx = -1;
     window._tkWsKey = wsKeyTk;
-    // Reload wiped tkBatchGroups (that's what got us into this branch) -- check Supabase for
-    // a saved session for this subcompany so the review picks up where it left off, with no
-    // re-upload needed. Only fires when there's exactly one subcompany in scope (the common
-    // single-client-workspace case); the multi-subcompany case is covered by tkSetGroupClient
-    // below once a subcompany is actually picked.
-    if (_defaultKeyTk) tkTryRestoreFromSupabase(0);
   }
   // else: reopening the same workspace's already-processed results — keep tkBatchGroups as-is
 
@@ -12299,18 +12281,7 @@ function buildValidationRunner(body) {
 
 // Explicit reset — clears cached files/results for this task and starts a blank run
 function tkResetAll() {
-    appConfirm('Reset Current Attendance Validation', 'This clears all uploaded files and processed results for this workspace, including anything saved to the cloud -- selecting a subcompany afterward will not restore what you just cleared.', function() {
-  // Without this, resetting only cleared local state -- the snapshot saved in Supabase for
-  // each subcompany (tkSaveFullSnapshot) was untouched, so simply re-selecting the same
-  // subcompany from the dropdown immediately pulled it right back via
-  // tkTryRestoreFromSupabase, silently undoing the reset the moment it was touched.
-  tkBatchGroups.map(function(g){ return g.clientKey; }).filter(Boolean).forEach(function(ck) {
-    var companyId = clients[ck] && clients[ck].companyId;
-    if (!companyId) return;
-    supabaseClient.from('task_review_state').delete().eq('company_id', companyId).eq('task_key', 'validation').then(function(res) {
-      if (res.error) console.warn('Could not clear saved Validation state for ' + ck, res.error);
-    });
-  });
+    appConfirm('Reset Current Attendance Validation', 'This clears all uploaded files for this workspace and starts a blank run. Anything already processed and saved is kept, and can still be reviewed later from Processing History.', function() {
   Object.keys(taskFiles).forEach(function(k) { if (k.indexOf('tk-') === 0) delete taskFiles[k]; });
   window.tkLegacyFormat = false;
   tkReviewRows.length = 0;
@@ -12355,7 +12326,6 @@ function tkGroupCardHtml(g, gi) {
 function tkSetGroupClient(gi, key) {
   tkBatchGroups[gi].clientKey = key || null;
   tkBatchGroups[gi].name = key ? (clients[key].name || key) : ('Subcompany ' + (gi + 1));
-  if (key) tkTryRestoreFromSupabase(gi);
 }
 
 function tkRenderUploadGroups() {
@@ -15837,10 +15807,10 @@ async function loadLeaveMonitoringFromSupabase() {
   });
 }
 
-// Lazy on-demand load for a single client's archived (past) years -- mirrors
-// varTryRestoreFromSupabase's per-company filtered fetch. Called only when "Archived" is
-// expanded for a client that hasn't had its archived years loaded yet this session; cached in
-// window._lmArchivedLoaded so re-expanding doesn't refetch.
+// Lazy on-demand load for a single client's archived (past) years -- a simple per-company
+// filtered fetch. Called only when "Archived" is expanded for a client that hasn't had its
+// archived years loaded yet this session; cached in window._lmArchivedLoaded so re-expanding
+// doesn't refetch.
 async function lmLoadArchivedYearsForClient(ck) {
   var companyId = clients[ck] && clients[ck].companyId;
   if (!companyId) return;
@@ -18587,166 +18557,6 @@ function searchInDoc() {
   if (first) first.scrollIntoView({ behavior:'smooth', block:'center' });
 }
 
-// ── Audit review ────────────────────────────────────────────────────────────
-const sampleAuditRows = [
-  {id:'7039433',name:'Acosta, Stephanie',date:'2-Mar',absent:'1',remark:'No Logs; No Pending Application'},
-  {id:'7039433',name:'Acosta, Stephanie',date:'13-Mar',absent:'1',remark:'No Logs; has approved leave application'},
-  {id:'7003871',name:'Balazo, Jeric',date:'4-Mar',absent:'1',remark:'Missing OUT Log; No Pending COA Application'},
-  {id:'439883',name:'Buaga, Annalyn Rose',date:'11-Mar',absent:'1',remark:'No Logs; has pending EL application'},
-  {id:'544659',name:'Ibay, Robert Jr.',date:'12-Mar',absent:'1',remark:'Missing OUT Log; No Pending COA Application'},
-  {id:'445238',name:'Jimenez, Raizza Eve',date:'1-Mar',absent:'1',remark:'Early OUT Log; No Pending Application'},
-  {id:'767975',name:'Ramirez, Matthew',date:'4-Mar',absent:'1',remark:'Missing OUT Log; No Pending COA Application'},
-  {id:'476842',name:'Reyes, Alvin Cesar Jr.',date:'12-Mar',absent:'1',remark:'Missing OUT Log; No Pending COA Application'},
-  {id:'1222908',name:'Samonte, Angelica',date:'2-Mar',absent:'1',remark:'Missing OUT Log; No Pending COA Application'},
-  {id:'299405',name:'Sancebuche, Elaine',date:'11-Mar',absent:'1',remark:'No Logs; has pending sick leave application'},
-  {id:'593428',name:'Torres, Maricar',date:'9-Mar',absent:'1',remark:'No Logs; has pending sick leave application'},
-];
-let auditRowStates = {}; // rowIdx -> {status:'ok'|'flagged'|'pending', comment:''}
-let auditOrigin = 'ws-tasks'; // where to go back
-
-function openAuditReview(title, subtitle) {
-  auditRowStates = {};
-  sampleAuditRows.forEach((_,i) => auditRowStates[i] = {status:'pending',comment:''});
-  document.getElementById('audit-title').textContent = title || 'Current Attendance Validation — KNI Mar 1st';
-  document.getElementById('audit-subtitle').textContent = subtitle || 'Submitted by Zona · ' + (sampleAuditRows.length) + ' rows to review';
-  renderAuditRows();
-  document.querySelectorAll('.tab-content[id^="page-"]').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.tab-content[id^="ws-"]').forEach(el => el.classList.remove('active'));
-  document.getElementById('page-audit-review').classList.add('active');
-  document.getElementById('tab-bar').style.display = 'none';
-}
-
-function closeAuditReview() {
-  document.getElementById('page-audit-review').classList.remove('active');
-  document.getElementById('page-workspace').classList.add('active');
-  document.getElementById('tab-bar').style.display = 'flex';
-  switchTab('ws-tasks');
-}
-
-function renderAuditRows() {
-  const list = document.getElementById('audit-rows-list');
-  list.innerHTML = sampleAuditRows.map((r,i) => {
-    const state = auditRowStates[i];
-    let rowCls = state.status === 'flagged' ? 'audit-row flagged' : state.status === 'ok' ? 'audit-row approved' : 'audit-row';
-    return '<div class="' + (rowCls) + '" id="audit-row-' + (i) + '">\n      <div style="color:var(--text-muted);font-size:11px;">' + (r.id) + '</div>\n      <div style="color:var(--text-primary);font-size:12px;font-weight:500;">' + (r.name.split(',')[0]) + '</div>\n      <div style="color:var(--text-muted);">' + (r.date) + '</div>\n      <div style="color:var(--text-muted);">' + (r.absent) + '</div>\n      <div>\n        <div style="color:var(--text-primary);font-size:12px;">' + (r.remark) + '</div>\n        ' + (state.comment ? '<div style="font-size:11px;color:#e67e00;margin-top:3px;"><i class="ti ti-flag" style="font-size:11px;"></i> ' + (state.comment) + '</div>' : '') + '\n        <div class="audit-flag-form" id="flag-form-' + (i) + '">\n          <input class="audit-flag-input" type="text" id="flag-input-' + (i) + '" placeholder="Describe the issue..." style="margin-top:5px;">\n          <button onclick="submitFlag(' + (i) + ')" style="margin-top:4px;padding:4px 10px;border:none;border-radius:6px;background:#32CE13;color:#fff;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;">Submit flag</button>\n          <button onclick="cancelFlag(' + (i) + ')" style="margin-top:4px;margin-left:4px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-card);color:var(--text-secondary);font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;">Cancel</button>\n        </div>\n      </div>\n      <div style="display:flex;gap:4px;flex-wrap:wrap;">\n        ' + (state.status === 'ok'
-          ? '<span style="font-size:11px;color:#32CE13;font-weight:500;"><i class="ti ti-circle-check"></i> Approved</span>'
-          : state.status === 'flagged'
-          ? '<span style="font-size:11px;color:#e67e00;font-weight:500;"><i class="ti ti-flag"></i> Flagged</span>\n             <button class="audit-ok-btn" onclick="approveRow(' + (i) + ')" style="font-size:10px;padding:2px 7px;">Approve</button>'
-          : '<button class="audit-flag-btn" onclick="showFlagForm(' + (i) + ')"><i class="ti ti-flag" style="font-size:11px;"></i></button>\n             <button class="audit-ok-btn" onclick="approveRow(' + (i) + ')"><i class="ti ti-check" style="font-size:11px;"></i></button>'
-        ) + '\n      </div>\n    </div>';
-  }).join('');
-}
-
-function approveRow(i) {
-  auditRowStates[i].status = 'ok';
-  renderAuditRows();
-  checkAuditProgress();
-}
-
-function showFlagForm(i) {
-  document.getElementById('flag-form-' + i).style.display = 'block';
-  document.getElementById('flag-input-' + i).focus();
-}
-
-function cancelFlag(i) {
-  document.getElementById('flag-form-' + i).style.display = 'none';
-}
-
-function submitFlag(i) {
-  const comment = document.getElementById('flag-input-' + i).value.trim();
-  if (!comment) { alert('Please describe the issue'); return; }
-  auditRowStates[i] = {status:'flagged', comment};
-  renderAuditRows();
-  checkAuditProgress();
-}
-
-function checkAuditProgress() {
-  const total = sampleAuditRows.length;
-  const reviewed = Object.values(auditRowStates).filter(s => s.status !== 'pending').length;
-  const flagged = Object.values(auditRowStates).filter(s => s.status === 'flagged').length;
-  document.getElementById('audit-subtitle').textContent = (reviewed) + '/' + (total) + ' rows reviewed' + (flagged ? ' · ' + (flagged) + ' flagged' : '');
-}
-
-function markAuditDone() {
-  const flagged = Object.values(auditRowStates).filter(s => s.status === 'flagged').length;
-  const pending = Object.values(auditRowStates).filter(s => s.status === 'pending').length;
-  if (pending > 0) { showToast('Please review all ' + pending + ' remaining rows first', '#e67e00'); return; }
-  if (flagged > 0) { showToast(flagged + ' rows are still flagged — use "Send back for revision" instead', '#e67e00'); return; }
-  // Notify Zona — show post-audit options
-  showPostAuditOptions(false);
-}
-
-function markAuditNeedsRevision() {
-  const flagged = Object.values(auditRowStates).filter(s => s.status === 'flagged').length;
-  if (flagged === 0) { showToast('No rows are flagged — please flag the rows that need fixing first', '#e67e00'); return; }
-  showPostAuditOptions(true, flagged);
-}
-
-function showPostAuditOptions(hasFlags, flagCount) {
-  closeAuditReview();
-  // Show Zona a toast with action options
-  const toast = document.createElement('div');
-  toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:var(--bg-card);border:1px solid var(--border);color:var(--text-primary);padding:16px 20px;border-radius:16px;font-size:13px;font-family:Rubik,sans-serif;z-index:9999;box-shadow:0 8px 30px rgba(0,0,0,0.15);max-width:380px;';
-  if (hasFlags) {
-    toast.innerHTML = '<div style="font-weight:600;color:#e67e00;margin-bottom:8px;"><i class="ti ti-flag"></i> ' + (flagCount) + ' row' + (flagCount>1?'s':'') + ' flagged by auditor</div>\n      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">Review the flagged remarks and decide how to proceed.</div>\n      <div style="display:flex;gap:8px;">\n        <button onclick="this.closest(\'div[style*=fixed]\').remove();openAuditReview(\'Edit & Finalize\',\'Review flagged rows, edit and generate Excel\');" style="flex:1;padding:7px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Edit & generate Excel</button>\n        <button onclick="this.closest(\'div[style*=fixed]\').remove();resubmitForAudit();" style="flex:1;padding:7px;background:#e8f0fe;color:#1679FA;border:1px solid #BADCFF;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Resubmit for re-audit</button>\n        <button onclick="this.closest(\'div[style*=fixed]\').remove();" style="padding:7px 10px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card);color:var(--text-secondary);font-size:12px;cursor:pointer;font-family:Rubik,sans-serif;">Later</button>\n      </div>';
-  } else {
-    toast.innerHTML = '<div style="font-weight:600;color:#32CE13;margin-bottom:8px;"><i class="ti ti-circle-check"></i> Audit approved!</div>\n      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">All rows approved by your auditor. Ready to generate the final Excel file.</div>\n      <div style="display:flex;gap:8px;">\n        <button onclick="this.closest(\'div[style*=fixed]\').remove();generateFinalExcel();" style="flex:1;padding:7px;background:linear-gradient(135deg,#32CE15,#1fa80e);color:#fff;border:none;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-download"></i> Generate Excel</button>\n        <button onclick="this.closest(\'div[style*=fixed]\').remove();" style="padding:7px 10px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card);color:var(--text-secondary);font-size:12px;cursor:pointer;font-family:Rubik,sans-serif;">Later</button>\n      </div>';
-  }
-  document.body.appendChild(toast);
-}
-
-function generateFinalExcel() {
-  showToast('TK_Validation_KNI_Mar1st_FINAL.xlsx downloaded!');
-}
-
-function resubmitForAudit() {
-  showToast('Resubmitted to Arianne for re-audit!');
-  const badge = document.getElementById('notif-badge');
-  if (badge) badge.style.display = 'block';
-}
-
-// Wire audit review to task items — add "Submit for audit" to Current Attendance Validation
-const _origOpenTaskRunner = openTaskRunner;
-openTaskRunner = function(taskKey, taskName) {
-  if (!taskKey) return;
-  if (taskKey === 'validation' || taskKey === 'variance') {
-    // Add audit workflow — show submit for audit button after processing
-    window._currentAuditTask = { key: taskKey, name: taskName };
-  }
-  _origOpenTaskRunner(taskKey, taskName);
-};
-
-// Override runVariance + runValidation to show audit button after done
-const _origRunVariance = typeof runVariance !== 'undefined' ? runVariance : null;
-const _origRunValidation = typeof runValidation !== 'undefined' ? runValidation : null;
-
-// Override generateOutput for Current Attendance Validation to show audit workflow
-const _origGenerateOutput = typeof generateOutput !== 'undefined' ? generateOutput : null;
-if (typeof generateOutput !== 'undefined') {
-  generateOutput = function() {
-    // Instead of downloading, show "Submit for audit" flow
-    const modal = document.getElementById('task-modal');
-    const resultDiv = document.getElementById('tk-result');
-    if (resultDiv) {
-      resultDiv.innerHTML += '<div style="margin-top:14px;padding:14px;background:#edfae8;border:1px solid #A6EB93;border-radius:14px;">\n        <div style="font-size:13px;font-weight:600;color:#32CE13;margin-bottom:8px;"><i class="ti ti-shield-check"></i> Ready for audit</div>\n        <div style="font-size:12px;color:#5a8a60;margin-bottom:10px;">All rows confirmed. Submit to your auditor for review before generating the final Excel file.</div>\n        <button onclick="submitForAudit()" style="width:100%;padding:10px;background:linear-gradient(135deg,#32CE15,#1fa80e);color:#fff;border:none;border-radius:12px;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-send"></i> Submit for audit</button>\n      </div>';
-    }
-  };
-}
-
-function submitForAudit() {
-  closeTaskRunner();
-  showToast('Sent to Arianne for audit — you will be notified when done!');
-  // Show notification in Ariannes dashboard
-  setTimeout(() => {
-    const badge = document.getElementById('notif-badge');
-    if (badge) badge.style.display = 'block';
-  }, 500);
-}
-
-// Allow auditor to open audit review from their view
-function openAuditFromDashboard() {
-  openAuditReview('Current Attendance Validation — KNI Mar 1st', 'Submitted by Zona · 11 rows to review');
-}
 </script>
 
 
@@ -19752,20 +19562,6 @@ var _seedDisputesUnused = [
 // exactly the same shape as the old seed literal above.
 var allDisputes = [];
 
-const auditRows = [
-  {id:'7039433',name:'Acosta, Stephanie',date:'2-Mar',remark:'No Logs; No Pending Application',status:'pending',comment:''},
-  {id:'7003871',name:'Balazo, Jeric',    date:'4-Mar',remark:'Missing OUT Log; No Pending COA Application',status:'pending',comment:''},
-  {id:'439883', name:'Buaga, Annalyn',   date:'11-Mar',remark:'No Logs; has pending EL application',status:'pending',comment:''},
-  {id:'544659', name:'Ibay, Robert Jr.', date:'12-Mar',remark:'Missing OUT Log; No Pending COA Application',status:'pending',comment:''},
-  {id:'445238', name:'Jimenez, Raizza',  date:'1-Mar', remark:'Early OUT Log; No Pending Application',status:'pending',comment:''},
-  {id:'767975', name:'Ramirez, Matthew', date:'4-Mar', remark:'Missing OUT Log; No Pending COA Application',status:'pending',comment:''},
-  {id:'1222908',name:'Samonte, Angelica',date:'2-Mar', remark:'Missing OUT Log; No Pending COA Application',status:'pending',comment:''},
-  {id:'299405', name:'Sancebuche, Elaine',date:'11-Mar',remark:'No Logs; has pending sick leave application',status:'pending',comment:''},
-  {id:'593428', name:'Torres, Maricar',  date:'9-Mar', remark:'No Logs; has pending sick leave application',status:'pending',comment:''},
-  {id:'476842', name:'Reyes, Alvin Jr.', date:'12-Mar',remark:'Missing OUT Log; No Pending COA Application',status:'pending',comment:''},
-  {id:'7054813',name:'Manjares, Jasper', date:'5-Mar', remark:'No Logs; No Pending Application',status:'pending',comment:''}
-];
-
 // renderDisputes
 function renderDisputes(filter) {
   const container = document.getElementById('disputes-list');
@@ -20398,7 +20194,7 @@ async function saveNewMember() {
     reportsTo: reportsToKey || null,
     canServiceView: perms.canServiceView, canSeeAllDisputes: perms.canSeeAllDisputes,
     canManageAccess: perms.canManageAccess, canAssign: perms.canAssign, canArchive: perms.canArchive,
-    assignedClients: [], processClients: [], auditClients: []
+    assignedClients: [], processClients: []
   };
 
   // Reports to whatever was picked, falling back to whoever is marked lead, and gets ordered
