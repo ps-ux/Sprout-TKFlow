@@ -2678,7 +2678,23 @@ function renderGroupOverview(grpKey) {
   subs.forEach(function(k) {
     var c = clients[k];
     var hist = (window.groupProcessingHistory && window.groupProcessingHistory[k]) || [];
+    // Defensive de-dup: markTaskStarted/logTaskProgress used to be able to create a second
+    // in-memory entry for the same cutoffLabel once the first was already marked finished
+    // (fixed above) -- collapse any leftover duplicates from before that fix so this doesn't
+    // show two rows for what's really the same cutoff. Keeps whichever looks more complete
+    // (has a finishedAt, then more tasksDone, then most recently started).
+    var bestByLabel = {};
     hist.forEach(function(e) {
+      var existing = bestByLabel[e.cutoffLabel];
+      if (!existing) { bestByLabel[e.cutoffLabel] = e; return; }
+      var existingScore = (existing.finishedAt ? 1000 : 0) + (existing.tasksDone || 0);
+      var eScore = (e.finishedAt ? 1000 : 0) + (e.tasksDone || 0);
+      if (eScore > existingScore || (eScore === existingScore && new Date(e.startedAt) > new Date(existing.startedAt))) {
+        bestByLabel[e.cutoffLabel] = e;
+      }
+    });
+    Object.keys(bestByLabel).forEach(function(label) {
+      var e = bestByLabel[label];
       mergedHist.push({ sub: c.name, subKey: k, cutoffLabel: e.cutoffLabel, startedAt: e.startedAt, finishedAt: e.finishedAt, tasksDone: e.tasksDone, totalTasks: e.totalTasks, processedBy: e.processedBy });
     });
   });
@@ -9753,13 +9769,17 @@ function getCurrentCutoffLabel(ck) {
   return (c && c.cutoff) || 'Not yet set';
 }
 
+// One entry per (client, cutoffLabel), matching saveCutoffProcessing's own upsert key exactly
+// -- must NOT also require !e.finishedAt here (that used to mean reopening any task for a
+// cutoff already marked fully done could never find its own entry again, creating a brand-new
+// duplicate "0/0 in progress" one with the same label every time instead of reusing/updating it).
 function markTaskStarted(clientKey) {
   if (!clientKey || !clients[clientKey]) return;
   var c = clients[clientKey];
   var label = getCurrentCutoffLabel(clientKey);
   if (!window.groupProcessingHistory[clientKey]) window.groupProcessingHistory[clientKey] = [];
   var hist = window.groupProcessingHistory[clientKey];
-  var entry = hist.find(function(e){ return e.cutoffLabel === label && !e.finishedAt; });
+  var entry = hist.find(function(e){ return e.cutoffLabel === label; });
   if (!entry) {
     entry = { cutoffLabel: label, startedAt: new Date().toISOString(), finishedAt: null, tasksDone: 0, totalTasks: 0, processedBy: null };
     hist.unshift(entry); // most recent first
@@ -9781,7 +9801,7 @@ function logTaskProgress(clientKey) {
   var label = getCurrentCutoffLabel(clientKey);
   if (!window.groupProcessingHistory[clientKey]) window.groupProcessingHistory[clientKey] = [];
   var hist = window.groupProcessingHistory[clientKey];
-  var entry = hist.find(function(e){ return e.cutoffLabel === label && !e.finishedAt; });
+  var entry = hist.find(function(e){ return e.cutoffLabel === label; });
   if (!entry) {
     // Fallback only — normally markTaskStarted() already created this entry when the task
     // was first opened. This just guards against a task somehow being marked done without
