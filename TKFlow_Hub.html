@@ -2780,7 +2780,7 @@ async function _renderHistorySnapshotBody(e, idx) {
   try {
     var varRes = await supabaseClient.from('task_cutoff_review_state').select('*')
       .eq('company_id', companyId).eq('task_key', 'variance').order('updated_at', { ascending: false });
-    sectionsHtml += _histVarianceSectionHtml(varRes.error ? [] : (varRes.data || []));
+    sectionsHtml += _histVarianceSectionHtml(varRes.error ? [] : (varRes.data || []), _histWindowForRow(e));
   } catch (err) {
     sectionsHtml += _histSectionWrap('Variance', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
   }
@@ -2791,6 +2791,23 @@ async function _renderHistorySnapshotBody(e, idx) {
   // been collapsed (and the DOM rebuilt by another render) while the awaits above were in flight.
   body = document.getElementById('hist-expand-body-' + idx);
   if (body) body.innerHTML = sectionsHtml;
+}
+
+// Variance's own cutoff label never matches a Processing History row's label (see notes on
+// _histVarianceSectionHtml), so instead of an exact match, bucket each saved Variance snapshot
+// into whichever row's real-world time window it was actually saved in -- from that row's own
+// startedAt up to the NEXT row's startedAt for the same subcompany (or open-ended for the most
+// recent row). This is what actually answers "what did I run during this cutoff's work,"
+// without claiming a fake exact label match.
+function _histWindowForRow(e) {
+  var sameSub = (window._histMergedRows || []).filter(function(r){ return r.subKey === e.subKey && r.startedAt; })
+    .sort(function(a,b){ return new Date(a.startedAt) - new Date(b.startedAt); });
+  var pos = sameSub.findIndex(function(r){ return r.cutoffLabel === e.cutoffLabel && r.startedAt === e.startedAt; });
+  if (pos === -1 || !e.startedAt) return { start: null, end: null };
+  return {
+    start: new Date(e.startedAt),
+    end: (pos < sameSub.length - 1) ? new Date(sameSub[pos + 1].startedAt) : null
+  };
 }
 
 function _histSectionWrap(title, innerHtml) {
@@ -2852,10 +2869,19 @@ function _histDownloadVarianceWorkbook(path, safeLabel) {
 }
 
 // Variance deliberately keeps its OWN cutoff label (it reviews one period behind the one
-// Processing History calls "current"), so unlike Validation there's no reliable exact match --
-// list every saved cutoff for this subcompany instead of claiming one specific row is "the" one.
-function _histVarianceSectionHtml(rows) {
-  if (!rows.length) return _histSectionWrap('Variance', '<div style="font-size:12px;color:#9898a6;">No saved Variance cutoffs for this subcompany.</div>');
+// Processing History calls "current"), so unlike Validation there's no reliable exact label
+// match -- instead, keep only the rows actually saved within this row's real-world time window
+// (see _histWindowForRow), so a subcompany with several historical Variance runs doesn't show
+// all of them under every single Processing History row.
+function _histVarianceSectionHtml(allRows, win) {
+  var rows = allRows;
+  if (win && win.start) {
+    rows = allRows.filter(function(row) {
+      var t = new Date(row.updated_at);
+      return t >= win.start && (!win.end || t < win.end);
+    });
+  }
+  if (!rows.length) return _histSectionWrap('Variance', '<div style="font-size:12px;color:#9898a6;">Not run for this cutoff.</div>');
   var body = rows.map(function(row) {
     var data = row.data || {};
     var safeLabel = String(row.cutoff_label||'').replace(/[^a-zA-Z0-9]/g, '_');
