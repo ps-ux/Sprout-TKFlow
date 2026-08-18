@@ -10318,9 +10318,19 @@ function varRenderResultCard(co, cutoffIdx, attData) {
 // re-checks after each await in case the group moved on (different subcompany picked, or a
 // fresh upload started) while this was in flight -- same race-avoidance as Validation's
 // tkTryRestoreFromSupabase.
+// True once the user has actually dropped a real file into one of this group's placeholder
+// dropzones -- if so, a background restore must not silently swap g.cutoffs out from under
+// them (the dropzones would still show the file as "attached" while taskFiles/g.cutoffs
+// disagree, so "Process all" would fail to find anything to process).
+function _varGroupHasLocalFiles(g) {
+  return g.cutoffs.some(function(co){
+    return taskFiles['var-orig-'+co.id] || taskFiles['var-aco-'+co.id] || taskFiles['var-payreg-'+co.id];
+  });
+}
+
 async function varTryRestoreFromSupabase(gi) {
   var g = varBatchGroups[gi];
-  if (!g || !g.clientKey || g.status !== 'pending') return;
+  if (!g || !g.clientKey || g.status !== 'pending' || _varGroupHasLocalFiles(g)) return;
   var clientKeyAtStart = g.clientKey;
   var companyId = clients[clientKeyAtStart] && clients[clientKeyAtStart].companyId;
   if (!companyId) return;
@@ -10331,7 +10341,7 @@ async function varTryRestoreFromSupabase(gi) {
   if (!res.data || !res.data.length) return;
 
   g = varBatchGroups[gi];
-  if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending') return;
+  if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending' || _varGroupHasLocalFiles(g)) return;
 
   var restored = [];
   for (var i = 0; i < res.data.length; i++) {
@@ -10343,7 +10353,7 @@ async function varTryRestoreFromSupabase(gi) {
       console.warn('Could not download saved Variance workbook for ' + clientKeyAtStart + ' / ' + row.cutoff_label, e);
     }
     g = varBatchGroups[gi];
-    if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending') return;
+    if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending' || _varGroupHasLocalFiles(g)) return;
     var data = row.data || {};
     // Rows saved before filenamePayout started getting persisted have no data.filenamePayout --
     // recompute it from the calendar via the saved cutoff_label rather than leaving the
@@ -10362,10 +10372,17 @@ async function varTryRestoreFromSupabase(gi) {
   if (!restored.length) return;
 
   g = varBatchGroups[gi];
-  if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending') return;
+  if (!g || g.clientKey !== clientKeyAtStart || g.status !== 'pending' || _varGroupHasLocalFiles(g)) return;
 
   g.cutoffs = restored;
   g.status = 'done';
+  // The upload dropzones already on screen were built against the old placeholder cutoff's
+  // id(s) -- g.cutoffs just moved on to the restored id(s), so those dropzones are now
+  // pointing at nothing. Re-render the group's card so any file the user drops in from here
+  // on lands on an id that actually matches g.cutoffs (previously, files silently piled up in
+  // taskFiles under an orphaned id and "Process all" could never find them).
+  var groupEl = document.getElementById('var-group-' + gi);
+  if (groupEl) groupEl.outerHTML = varGroupCardHtml(g, gi);
   renderVarBatchList();
   if (typeof showToast === 'function') showToast('Restored your previous Variance progress for ' + (g.name || g.clientKey));
   if (gi === varActiveGroupIdx || (varActiveGroupIdx < 0 && gi === 0)) {
@@ -11380,6 +11397,10 @@ function runVariance(opts) {
 
     results.forEach(function(res, cutoffIdx) {
       var co     = res.co;
+      // Already-processed (restored, or run earlier this session) and not re-uploaded this
+      // round -- leave its existing results/workbook alone instead of complaining about files
+      // it was never supposed to have in the first place.
+      if (co._attData !== undefined && !res.origWb && !res.acoWb && !res.payregWb) return;
       var payout = (document.getElementById('var-payout-' + co.id) || {}).value || ('Cut-off '+(cutoffIdx+1));
       var safeN  = payout.replace(/[^a-zA-Z0-9]/g, '_');
 
@@ -11607,6 +11628,10 @@ function runVarianceBatch() {
       return;
     }
     var ready = g.cutoffs.every(function(co){
+      // A cutoff that already has computed results (restored from Supabase, or processed
+      // earlier this session) never gets fresh taskFiles for its id -- it doesn't need any,
+      // it's already done. Only a still-blank placeholder cutoff needs real uploads.
+      if (co._attData !== undefined) return true;
       return taskFiles['var-orig-'+co.id] && taskFiles['var-aco-'+co.id] && taskFiles['var-payreg-'+co.id]
         && (document.getElementById('var-payout-'+co.id)||{}).value;
     });
