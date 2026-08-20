@@ -1303,6 +1303,16 @@ function signInWithGoogle() {
           <div class="ws-pills" id="ws-pills"></div>
         </div>
 
+        <!-- Scratchpad: lives outside any .tab-content panel so switchTab's per-tab show/hide
+             never touches it -- visible regardless of which tab is active, per-client (or
+             per-group), auto-saves on input with no save button. -->
+        <details id="ws-scratchpad-wrap" style="margin:0 0 16px;border:1px solid #EBEBEF;border-radius:12px;background:#FFFBEA;">
+          <summary style="padding:9px 14px;cursor:pointer;font-size:12px;font-weight:600;color:#9A7B0A;list-style:none;display:flex;align-items:center;gap:6px;user-select:none;"><i class="ti ti-note" style="font-size:14px;"></i> Scratchpad</summary>
+          <div style="padding:0 14px 12px;">
+            <textarea id="ws-scratchpad" oninput="saveClientScratchpad(this.value)" placeholder="Jot anything down for this client as you go -- nothing formal, just for you." style="width:100%;min-height:70px;border:1px solid #EBEBEF;border-radius:10px;padding:8px 10px;font-size:12px;font-family:Rubik,sans-serif;color:#1a1a2e;background:#fff;resize:vertical;box-sizing:border-box;outline:none;"></textarea>
+          </div>
+        </details>
+
         <!-- WS Overview -->
         <div class="tab-content active" id="ws-overview">
           <!-- Metrics -->
@@ -3415,6 +3425,7 @@ function openWorkspace(key, keepSwitcher) {
   var wsMeta = document.getElementById('ws-meta'); if (wsMeta) wsMeta.textContent = c.meta;
   var wsPills = document.getElementById('ws-pills'); if (wsPills) wsPills.innerHTML =
     '<span class="ws-pill wsp-b">' + (c.cutoff) + '</span><span class="ws-pill ' + (c.statusClass === 'wsp-g' ? 'wsp-g' : 'wsp-o') + '">' + (c.status) + '</span>';
+  if (typeof renderClientScratchpad === 'function') renderClientScratchpad();
   var _el_ws_hc = document.getElementById('ws-hc'); if (_el_ws_hc) _el_ws_hc.textContent = c.hc;
   var _el_ws_absent = document.getElementById('ws-absent'); if (_el_ws_absent) _el_ws_absent.textContent = c.absent;
   // Dispute badges (ws-disp, ws-disp-sub, tab-disputes-badge) are already set group-wide by
@@ -19525,6 +19536,41 @@ function saveProfile() {
   }
   if (typeof renderSidebarClients === 'function') renderSidebarClients();
   showToast('Client profile updated');
+}
+
+// Free-form scratchpad, one per client/group -- deliberately NOT the structured Notes/Handoff
+// log in the Edit Profile modal (no date-stamping, no save button). Stored as its own
+// profileMeta.scratchpad field alongside notes/handoffLog so it doesn't clobber either, and
+// persists through the exact same scope resolution saveProfile() uses.
+function renderClientScratchpad() {
+  var el = document.getElementById('ws-scratchpad');
+  if (!el) return;
+  var target = epMetaTargetKey();
+  var meta = (target && target.obj.profileMeta) || {};
+  el.value = meta.scratchpad || '';
+  var wrap = document.getElementById('ws-scratchpad-wrap');
+  if (wrap) wrap.open = !!meta.scratchpad;
+}
+
+window._scratchpadSaveTimers = window._scratchpadSaveTimers || {};
+function saveClientScratchpad(value) {
+  var target = epMetaTargetKey();
+  if (!target) return;
+  if (!target.obj.profileMeta) target.obj.profileMeta = {};
+  target.obj.profileMeta.scratchpad = value;
+  var scope = typeof _calScope === 'function' ? _calScope() : null;
+  if (!scope) return;
+  var timerKey = scope.type + ':' + scope.id;
+  if (window._scratchpadSaveTimers[timerKey]) clearTimeout(window._scratchpadSaveTimers[timerKey]);
+  window._scratchpadSaveTimers[timerKey] = setTimeout(function() {
+    delete window._scratchpadSaveTimers[timerKey];
+    supabaseClient.from(scope.type === 'group' ? 'company_groups' : 'companies')
+      .update({ profile_meta: target.obj.profileMeta })
+      .eq('id', scope.id)
+      .then(function(res) {
+        if (res.error) { console.warn('Could not save scratchpad', res.error); if (typeof showToast === 'function') showToast('Could not save note: ' + res.error.message, '#c0392b'); }
+      });
+  }, 800);
 }
 
 // renderClientCards — filters out churned clients. (This used to be an "override" of an
