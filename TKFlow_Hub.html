@@ -7789,7 +7789,7 @@ function updateDashboardTATAlerts() {
   sourceDisputes.forEach(d => {
     if (myClientKeys.indexOf(d.client) === -1) return;
     if (d.status === 'dst-closed' || d.status === 'Closed' || d.status === 'Done') return;
-    const cls = d.tat === 'tat-red' ? 'red' : d.tat === 'tat-yellow' ? 'yellow' : (d.emailTime ? getTATClass(d.emailTime, d.status) : null);
+    const cls = d.tat === 'tat-red' ? 'red' : d.tat === 'tat-yellow' ? 'yellow' : (d.emailTime ? getTATClass(d.emailTime, d.status, d.repliedAt) : null);
     if (cls === 'red')    breached++;
     if (cls === 'yellow') dueSoon++;
   });
@@ -7913,23 +7913,33 @@ function getTATDeadline(emailTimeStr) {
   return deadline;
 }
 
-function getTATClass(emailTimeStr, status) {
+// repliedAtStr (optional) is when a reply was actually logged (see dtmSaveRepliedAt) -- once
+// set, TAT stops ticking against the live clock and freezes at whether THAT moment beat the
+// deadline. Without this, a ticket answered well within TAT kept drifting toward/into "red"
+// forever just because nobody had formally closed it out yet, which measured how long a ticket
+// had been sitting open, not whether the actual reply was on time -- the real question TAT is
+// supposed to answer.
+function getTATClass(emailTimeStr, status, repliedAtStr) {
   if (!emailTimeStr || status === 'Closed' || status === 'Done' || status === 'Resolved') return 'grey';
   const deadline = getTATDeadline(emailTimeStr);
   if (!deadline) return 'grey';
-  const now = new Date();
+  const repliedAt = repliedAtStr ? parseTATEmailTime(repliedAtStr) : null;
+  const now = repliedAt || new Date();
   const msLeft = deadline - now;
   if (msLeft < 0) return 'red';
-  if (msLeft < 2 * 60 * 60 * 1000) return 'yellow';
+  // "Due soon" only means something while still awaiting a reply -- once replied, it's a
+  // binary on-time/late, never "soon".
+  if (!repliedAt && msLeft < 2 * 60 * 60 * 1000) return 'yellow';
   return 'green';
 }
 
-function getTATLabel(emailTimeStr, status) {
+function getTATLabel(emailTimeStr, status, repliedAtStr) {
   if (!emailTimeStr) return 'No TAT';
   if (status === 'Closed' || status === 'Done' || status === 'Resolved') return 'Resolved';
   const deadline = getTATDeadline(emailTimeStr);
   if (!deadline) return 'No TAT';
-  const now = new Date();
+  const repliedAt = repliedAtStr ? parseTATEmailTime(repliedAtStr) : null;
+  const now = repliedAt || new Date();
   const msLeft = deadline - now;
   if (msLeft < 0) {
     const over = Math.abs(msLeft);
@@ -7938,9 +7948,11 @@ function getTATLabel(emailTimeStr, status) {
     const m = Math.floor((over % 3600000) / 60000);
     // Past a day, minutes stop being useful precision -- show days + hours instead of
     // hours climbing past 24 (e.g. "168h 0m ago" for a week-old ticket).
+    if (repliedAt) return d > 0 ? ('Replied ' + d + 'd ' + h + 'h late') : ('Replied ' + h + 'h ' + m + 'm late');
     if (d > 0) return 'Overdue by ' + d + 'd ' + h + 'h ago';
     return 'Overdue by ' + (h) + 'h ' + (m) + 'm ago';
   }
+  if (repliedAt) return 'Replied on time';
   const d = Math.floor(msLeft / 86400000);
   const h = Math.floor((msLeft % 86400000) / 3600000);
   const m = Math.floor((msLeft % 3600000) / 60000);
@@ -7978,8 +7990,8 @@ function recomputeAllDisputeTAT() {
       || (typeof tatTimeFromISO === 'function' && tatTimeFromISO(d.submittedAt))
       || (typeof tatTimeFromDateSubmitted === 'function' && tatTimeFromDateSubmitted(d.dateSubmitted));
     if (!basisTime) return;
-    var newTat = 'tat-' + getTATClass(basisTime, d.statusLabel);
-    var newTatLabel = getTATLabel(basisTime, d.statusLabel);
+    var newTat = 'tat-' + getTATClass(basisTime, d.statusLabel, d.repliedAt);
+    var newTatLabel = getTATLabel(basisTime, d.statusLabel, d.repliedAt);
     if (d.tat !== newTat || d.tatLabel !== newTatLabel) {
       d.tat = newTat;
       d.tatLabel = newTatLabel;
@@ -22423,6 +22435,41 @@ function dtmSaveEmailTime(inputValue) {
   if (typeof recomputeAllDisputeTAT === 'function') recomputeAllDisputeTAT();
 }
 
+// "Replied at" is the actual moment a reply was sent -- unlike Email Received, it has no
+// fallback source (nothing to derive it from if it was never logged), so this is just a plain
+// read of d.repliedAt.
+function dtmRepliedAtToInputValue(d) {
+  var dt = (typeof parseTATEmailTime === 'function') ? parseTATEmailTime(d.repliedAt) : null;
+  if (!dt) return '';
+  return dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0')
+    + 'T' + String(dt.getHours()).padStart(2,'0') + ':' + String(dt.getMinutes()).padStart(2,'0');
+}
+
+// Once this is set, TAT stops counting against the live clock and freezes at whether THIS
+// moment beat the deadline (see getTATClass/getTATLabel's repliedAt param) -- clearing the
+// input (blank inputValue) un-freezes it back to a live countdown. Also refreshes this ticket's
+// own badge immediately, since recomputeAllDisputeTAT only re-renders the OTHER surfaces
+// (notif card, dashboard, ws disputes list) and never the currently-open ticket detail itself.
+function dtmSaveRepliedAt(inputValue) {
+  var m = (inputValue || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  var str = '';
+  if (m) {
+    var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var hour = parseInt(m[4], 10), min = m[5];
+    var ap = hour >= 12 ? 'PM' : 'AM';
+    var hour12 = hour % 12; if (hour12 === 0) hour12 = 12;
+    str = MONTHS[parseInt(m[2], 10) - 1] + ' ' + parseInt(m[3], 10) + ', ' + hour12 + ':' + min + ap;
+  }
+  dtmSaveField('repliedAt', str);
+  if (typeof recomputeAllDisputeTAT === 'function') recomputeAllDisputeTAT();
+  var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
+  var tb = document.getElementById('dtm-tat-badge');
+  if (d && tb) {
+    tb.textContent = d.tatLabel;
+    tb.style.cssText = 'font-size:11px;font-weight:500;padding:3px 10px;border-radius:20px;background:' + dtmTatBgs[d.tat] + ';color:' + dtmTatColors[d.tat] + ';border:1px solid ' + dtmTatColors[d.tat] + '40;';
+  }
+}
+
 // Date/s of Dispute supports multiple dates — stored as a comma-separated list of
 // "YYYY-MM-DD" values in d.disputeDates, same shape the ticketing tool's own
 // datesOfDispute array gets joined into on the way in.
@@ -22547,6 +22594,9 @@ function openDisputeTicket(id, clientContext) {
     // under the hood for exports/table columns and as the TAT fallback for pushed tickets that
     // only ever send a date, never a time.
     ['Email Received',     'emailTime',     d, 'datetime'],
+    // When the actual reply went out -- freezes the TAT badge above at on-time/late instead of
+    // it continuing to tick against the live clock (see getTATClass/getTATLabel, dtmSaveRepliedAt).
+    ['Replied At',          'repliedAt',     d, 'datetime'],
     ['Date of Action',     'dateAction',    d.dateAction, 'date'],
     ['Payout Cut-off',     'payoutCutoff',  d.payoutCutoff || d.cutoff],
   ];
@@ -22555,9 +22605,12 @@ function openDisputeTicket(id, clientContext) {
       return dtmSelectWithOtherHtml(f[0], f[1], f[2], f[4], 'dtm-other-' + f[1]);
     }
     if (f[3] === 'datetime') {
+      var isReplied = f[1] === 'repliedAt';
+      var dtVal = isReplied ? dtmRepliedAtToInputValue(f[2]) : dtmEmailTimeToInputValue(f[2]);
+      var dtSaveFn = isReplied ? 'dtmSaveRepliedAt' : 'dtmSaveEmailTime';
       return '<div style="background:var(--bg-secondary,#F4F4F8);border-radius:12px;padding:8px 12px;">'
         + '<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">' + f[0] + '</div>'
-        + '<input type="datetime-local" value="' + dtmEmailTimeToInputValue(f[2]) + '" onchange="dtmSaveEmailTime(this.value)" '
+        + '<input type="datetime-local" value="' + dtVal + '" onchange="' + dtSaveFn + '(this.value)" '
         + 'style="width:100%;border:none;background:transparent;padding:0;font-size:13px;font-weight:500;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;">'
         + '</div>';
     }
@@ -23129,7 +23182,7 @@ function dtmMapRowToDispute(row, companyIdToKey) {
     recommendedResolution: row.recommended_resolution || '', payoutCutoff: row.payout_cutoff || '',
     amount: row.amount || '', updateOpen: row.update_open || '', otherRemarks: row.other_remarks || '',
     cutoff: row.cutoff || '', tat: row.tat || 'tat-grey', tatLabel: row.tat_label || '',
-    emailTime: row.email_time || '',
+    emailTime: row.email_time || '', repliedAt: row.replied_at || '',
     status: row.status, statusLabel: TICKET_STATUS_LABELS[row.status] || row.status,
     attendancePeriod: row.attendance_period || '', piPayout: row.pi_payout || '',
     piLines: piLines,
@@ -23157,7 +23210,7 @@ function dtmBuildDisputeRow(d) {
     payout_cutoff: d.payoutCutoff || null, amount: d.amount || null,
     update_open: d.updateOpen || null, other_remarks: d.otherRemarks || null,
     cutoff: d.cutoff || null, tat: d.tat || null, tat_label: d.tatLabel || null,
-    email_time: d.emailTime || null,
+    email_time: d.emailTime || null, replied_at: d.repliedAt || null,
     status: d.status || 'dst-open',
     is_unrecognized_client: !!d._unrecognizedClient,
     attendance_period: d.attendancePeriod || null, pi_payout: d.piPayout || null
