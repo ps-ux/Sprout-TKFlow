@@ -10016,7 +10016,16 @@ function openTaskRunner(taskKey, taskName) {
     // tkBatchGroups), not just in the cached HTML — restoring stale HTML while leaving
     // those arrays untouched shows old results and miscounts new subcompanies. Always
     // rebuild these two fresh instead of restoring from cache.
-    var alwaysFreshTasks = ['variance', 'validation'];
+    //
+    // Payroll Instructions is the same class of bug, confirmed via a real report: its whole
+    // "DISPUTE (Previous/Current Attendance)" preview is computed fresh from allDisputes only
+    // when runPayrollInstructions() actually runs -- but reopening the task restored the
+    // CACHED body HTML (including the previously-rendered #pi-result table) unless the cache
+    // happened to be empty. Editing a ticket's Cut-off/Attendance Period/PI lines afterward had
+    // no way to invalidate that cache, so reopening the task kept showing whichever ticket
+    // classification was true the last time "Preview" was actually clicked -- looking exactly
+    // like the correction never took effect, when the underlying data was already correct.
+    var alwaysFreshTasks = ['variance', 'validation', 'payroll_instructions'];
     if (window._taskBodyCache[cacheKey] && alwaysFreshTasks.indexOf(taskKey) === -1) {
       // Restore cached HTML — preserves results, file upload state labels, etc.
       body.innerHTML = window._taskBodyCache[cacheKey];
