@@ -16223,7 +16223,22 @@ function lmToggleShowDoneUpcoming() {
 }
 function lmSetUpcomingFilter(value) {
   window._lmUpcomingFilter = (value || '').toLowerCase();
+  // renderLeaveMonitoringLive rebuilds this whole tab's innerHTML on every keystroke, which
+  // destroys and recreates the search input itself -- losing focus and cursor position every
+  // time, forcing a re-click before each character typed. Capture where the caret was and
+  // restore it on the freshly-rebuilt input (same id, new DOM node) right after.
+  var el = document.getElementById('lm-upcoming-search');
+  var hadFocus = el && document.activeElement === el;
+  var selStart = hadFocus ? el.selectionStart : null;
+  var selEnd = hadFocus ? el.selectionEnd : null;
   renderLeaveMonitoringLive();
+  if (hadFocus) {
+    var newEl = document.getElementById('lm-upcoming-search');
+    if (newEl) {
+      newEl.focus();
+      if (selStart !== null) newEl.setSelectionRange(selStart, selEnd);
+    }
+  }
 }
 
 // A past (archived) year is a frozen historical record -- once window._lmActiveYear falls
@@ -16307,7 +16322,7 @@ function lmRenderUpcomingSection(ck) {
   }, 0);
 
   var toolbar = '<div style="padding:10px;border-bottom:1px solid #EBEBEF;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-    + '<input type="text" placeholder="Search by name or Employee ID..." value="' + (window._lmUpcomingFilter||'') + '" oninput="lmSetUpcomingFilter(this.value)" style="flex:1;min-width:200px;max-width:280px;padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;">'
+    + '<input type="text" id="lm-upcoming-search" placeholder="Search by name or Employee ID..." value="' + (window._lmUpcomingFilter||'') + '" oninput="lmSetUpcomingFilter(this.value)" style="flex:1;min-width:200px;max-width:280px;padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;">'
     + (doneCount ? '<button onclick="lmToggleShowDoneUpcoming()" style="font-size:11px;color:#6b6b80;background:#F4F4F8;border:1px solid #EBEBEF;border-radius:12px;padding:6px 10px;cursor:pointer;font-family:Rubik,sans-serif;">' + (window._lmShowDoneUpcoming ? 'Hide completed' : 'Show completed (' + doneCount + ')') + '</button>' : '')
     + '</div>';
 
