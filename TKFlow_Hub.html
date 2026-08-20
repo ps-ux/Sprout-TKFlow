@@ -11286,17 +11286,26 @@ function buildVarCard(co, index, showRemove, gi) {
     + '</div>';
 }
 
+// Renders from taskFiles' own current state (not just a static empty placeholder) so a
+// dropzone that already has a file stays looking uploaded across a full re-render -- e.g.
+// varRemoveGroup rebuilds every group's card HTML from scratch when ANY one subcompany is
+// removed, which used to silently visually reset every OTHER subcompany's already-uploaded
+// files back to "no file chosen" even though taskFiles itself still had them, making it look
+// exactly like the upload had been lost (confirmed real repro: upload sub A's files, add sub
+// B, remove sub B -- sub A's dropzones reset to empty).
 function varFileDZ(id, type, label) {
   var dzId   = 'dz-var-' + type + '-' + id;
   var fnId   = 'fn-var-' + type + '-' + id;
   var fileId = 'f-var-'  + type + '-' + id;
+  var existing = taskFiles['var-' + type + '-' + id];
+  var fileName = existing ? String(existing.name).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : '';
   var html   = '<div class="var-dz" id="' + dzId + '" '
     + 'onclick="document.getElementById(' + "'" + fileId + "'" + ').click()" '
     + 'ondragover="return dzDragOver(event)" ondragleave="dzDragLeave(event)" ondrop="dzDrop(event,' + "'" + fileId + "'" + ')" '
-    + 'style="border:1.5px dashed #EBEBEF;border-radius:12px;padding:10px 12px;display:flex;align-items:center;gap:10px;cursor:pointer;background:#fff;margin-bottom:6px;">'
-    + '<div style="width:28px;height:28px;border-radius:7px;background:#DCFCE7;color:#32CE13;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><i class="ti ti-file-spreadsheet" style="font-size:15px;"></i></div>'
-    + '<div><strong id="' + fnId + '" style="font-size:12px;font-weight:500;color:#1a1a2e;display:block;">' + label + '</strong>'
-    + '<span style="font-size:11px;color:#9898a6;">.xls or .xlsx</span></div>'
+    + 'style="border:1.5px dashed ' + (existing ? '#32CE13' : '#EBEBEF') + ';border-radius:12px;padding:10px 12px;display:flex;align-items:center;gap:10px;cursor:pointer;background:' + (existing ? '#edfae8' : '#fff') + ';margin-bottom:6px;">'
+    + '<div style="width:28px;height:28px;border-radius:7px;background:#DCFCE7;color:#32CE13;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><i class="ti ' + (existing ? 'ti-circle-check' : 'ti-file-spreadsheet') + '" style="font-size:15px;color:#32CE13;"></i></div>'
+    + '<div><strong id="' + fnId + '" style="font-size:12px;font-weight:500;color:' + (existing ? '#1F7A0A' : '#1a1a2e') + ';display:block;">' + (existing ? fileName : label) + '</strong>'
+    + '<span style="font-size:11px;color:' + (existing ? '#3D8A5F' : '#9898a6') + ';">.xls or .xlsx</span></div>'
     + '<input type="file" id="' + fileId + '" accept=".xlsx,.xls" style="display:none;" '
     + 'onchange="handleVarFile(' + id + ',' + "'" + type + "'" + ',this)">'
     + '</div>';
