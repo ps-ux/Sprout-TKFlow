@@ -11176,6 +11176,18 @@ function _varFilenamePayoutFromShown(shownPayout) {
   return (earlier && earlier.payout) ? earlier.payout.toLocaleDateString('en-US', {month:'long', day:'numeric'}) : null;
 }
 
+// Turns a calendar period's raw attCov ("8/1-8/15") into "Aug 1-15" -- same month-name
+// conversion generateCutoffOptions uses, minus the year (short enough for a sheet name/tab
+// label, where whichever payout date sits alongside it already pins down the year).
+function formatAttCovShort(attCov) {
+  var m = (attCov || '').match(/(\d{1,2})\/(\d{1,2})\s*[-–—]\s*(\d{1,2})\/(\d{1,2})/);
+  if (!m) return attCov || '';
+  var startMon = parseInt(m[1],10) - 1, startDay = parseInt(m[2],10);
+  var endMon = parseInt(m[3],10) - 1, endDay = parseInt(m[4],10);
+  if (startMon === endMon) return CUTOFF_MONTH_NAMES[startMon] + ' ' + startDay + '-' + endDay;
+  return CUTOFF_MONTH_NAMES[startMon] + ' ' + startDay + '-' + CUTOFF_MONTH_NAMES[endMon] + ' ' + endDay;
+}
+
 function buildVarCard(co, index, showRemove, gi) {
   var id = co.id;
   // Auto-fill from the uploaded TK Calendar: Cut-off 1 = the period containing today,
@@ -11190,6 +11202,10 @@ function buildVarCard(co, index, showRemove, gi) {
     // Variance reviews the most recently completed attendance cutoff, but by established
     // convention the output file is named after the PREVIOUS payout run's cycle.
     if (_p && _p.payout) co._filenamePayout = _varFilenamePayoutFromShown(_p.payout);
+    // The Orig upload is the "Previous Attendance Template" -- its own sheet tab should read as
+    // the attendance coverage IT actually contains (e.g. "Aug 1-15"), not a payout date at all.
+    var _origPeriod = _periods[_idx - 1];
+    co._origAttCov = _origPeriod ? formatAttCovShort(_origPeriod.attCov) : null;
   }
   return '<div class="var-cutoff-card" id="var-co-' + id + '" style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:14px;margin-bottom:10px;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
@@ -11557,10 +11573,11 @@ function runVariance(opts) {
         return widths.map(function(w) { return {wch: Math.max(8, Math.min(45, (w||0) + 2))}; });
       }
 
-      // The Orig tab is always the PREVIOUS attendance cut-off's file, so its sheet name must
-      // use the same previous-payout label as the overall output filename (co._filenamePayout),
-      // not the current cut-off's payout date shown in the (read-only) Payout date field.
-      var origSheetName = sanitizeSheetName('Orig ' + (co._filenamePayout || payout));
+      // The Orig tab is the PREVIOUS attendance cut-off's own data, so it's named after the
+      // attendance coverage range that cut-off actually spans (e.g. "Orig Aug 1-15"), not a
+      // payout date -- co._filenamePayout is the previous PAYOUT's date, a different thing,
+      // used only as a fallback here if no calendar was uploaded to compute the real range.
+      var origSheetName = sanitizeSheetName('Orig ' + (co._origAttCov || co._filenamePayout || payout));
       var acoSheetName   = 'ACO';
       var attSheetName   = 'Attendance';
       var amtSheetName   = 'Amt';
