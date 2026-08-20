@@ -17766,6 +17766,21 @@ function dsGenerateAll() {
   if (!finalizedGroups.length) { if (typeof showToast === 'function') showToast('Finalize at least one subcompany first', '#e67e00'); return; }
   if (typeof JSZip === 'undefined') { if (typeof showToast === 'function') showToast('JSZip not loaded \u2014 cannot build styled report', '#e67e00'); return; }
 
+  // Real bug found live: g.applicableCutoff/g.payroll/g.included were frozen at whatever
+  // "Pull tickets" last computed -- editing a ticket's Cut-off/Attendance Period/Payout
+  // Inclusion afterward had NO effect on what actually generates unless the batch was
+  // re-pulled and re-finalized first, since this function never re-read allDisputes at all.
+  // Refresh every finalized group fresh right before building the file, so Generate always
+  // reflects the current ticket data regardless of when it was last pulled.
+  finalizedGroups.forEach(function(x) {
+    var g = x.g;
+    var clientObj = clients[g.clientKey];
+    var freshCutoff = (typeof dsApplicableCutoffKey === 'function') ? dsApplicableCutoffKey(clientObj) : g.applicableCutoff;
+    var findings = (typeof computeDisputeFindings === 'function') ? computeDisputeFindings(g.clientKey, freshCutoff) : null;
+    g.applicableCutoff = freshCutoff;
+    if (findings) { g.included = findings.included; g.payroll = findings.payroll; }
+  });
+
   JSZip.loadAsync(dsB64ToUint8Array(DISPUTES_TEMPLATE_B64)).then(function(zip) {
     return Promise.all([
       zip.file('xl/worksheets/sheet1.xml').async('string'),
@@ -17854,8 +17869,16 @@ function dsGenerateAll() {
 // Single-subcompany quick download (currently active group only) — same styled template, single tab
 function dsExportXLSX() {
   var activeGroup = dsBatchGroups[dsActiveGroupIdx] || {};
-  activeGroup.included = window._dsIncluded || activeGroup.included || [];
-  activeGroup.payroll  = window._dsPayroll  || activeGroup.payroll  || [];
+  // Same staleness fix as dsGenerateAll -- window._dsIncluded/_dsPayroll and activeGroup's own
+  // fields are all frozen at whatever "Pull tickets" last computed. Refresh fresh from
+  // allDisputes right before building, so an edited ticket's Cut-off/Attendance Period/Payout
+  // Inclusion is always reflected regardless of when the batch was last pulled.
+  var clientObj = clients[activeGroup.clientKey];
+  var freshCutoff = (typeof dsApplicableCutoffKey === 'function') ? dsApplicableCutoffKey(clientObj) : activeGroup.applicableCutoff;
+  var findings = (typeof computeDisputeFindings === 'function') ? computeDisputeFindings(activeGroup.clientKey, freshCutoff) : null;
+  activeGroup.applicableCutoff = freshCutoff;
+  activeGroup.included = findings ? findings.included : (window._dsIncluded || activeGroup.included || []);
+  activeGroup.payroll  = findings ? findings.payroll  : (window._dsPayroll  || activeGroup.payroll  || []);
   if (typeof JSZip === 'undefined') { if (typeof showToast === 'function') showToast('JSZip not loaded \u2014 cannot build styled report', '#e67e00'); return; }
 
   var useEdited = window._dsUseEditedRemarks !== false;
