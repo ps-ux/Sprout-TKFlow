@@ -1166,7 +1166,7 @@ function signInWithGoogle() {
         <!-- Overall metrics -->
         <div class="metrics-row" style="margin-bottom:20px;position:relative;z-index:1;">
           <div class="mcard"><div class="mcard-top"><div class="mcard-label">Total clients</div><div class="mcard-icon mi-purple"><i class="ti ti-building-community"></i></div></div><div class="mcard-val" id="admin-total-clients">3</div><div class="mcard-sub">active accounts</div></div>
-          <div class="mcard"><div class="mcard-top"><div class="mcard-label">Total headcount</div><div class="mcard-icon mi-blue"><i class="ti ti-id-badge"></i></div></div><div class="mcard-val" id="admin-total-headcount">284</div><div class="mcard-sub">across all clients</div></div>
+          <div class="mcard" onclick="openHeadcountBreakdown()" title="See every client's own headcount" style="cursor:pointer;"><div class="mcard-top"><div class="mcard-label">Total headcount</div><div class="mcard-icon mi-blue"><i class="ti ti-id-badge"></i></div></div><div class="mcard-val" id="admin-total-headcount">284</div><div class="mcard-sub">across all clients &middot; click for breakdown</div></div>
           <div class="mcard" onclick="openPreviewAllTickets()" title="View and download every company's disputes in one file" style="cursor:pointer;"><div class="mcard-top"><div class="mcard-label">Open disputes</div><div class="mcard-icon mi-orange"><i class="ti ti-ticket"></i></div></div><div class="mcard-val" id="admin-open-disputes">4</div><div class="mcard-sub">team-wide · click to view/download</div></div>
           <div class="mcard"><div class="mcard-top"><div class="mcard-label">Team members</div><div class="mcard-icon mi-green"><i class="ti ti-users"></i></div></div><div class="mcard-val" id="admin-team-members">4</div><div class="mcard-sub">active</div></div>
         </div>
@@ -2490,8 +2490,16 @@ function renderGroupOverview(grpKey) {
     ovEl.appendChild(periodBanner);
   }
   // ── Row 1: Metrics cards ──────────────────────────────────────────────────
+  // A client with neither Dispute Summary nor Employee Email Support on doesn't track
+  // disputes at all -- same flag that already hides the Disputes tab and the ws-overview
+  // disputes card (see openWorkspace/renderWsDisputes), so its dispute count shouldn't be
+  // shown here either, whether on its own card or folded into the group total.
+  function dispTrackedFor(k) {
+    return isTaskEnabled(k, 'disputes_summary') || !(clients[k].taskConfig && clients[k].taskConfig.email_support === false);
+  }
+  var dispSubs  = subs.filter(dispTrackedFor);
   var totalHC   = subs.reduce(function(a,k){ return a+(clients[k].hc||0); },0);
-  var totalDisp = subs.reduce(function(a,k){ return a+(clients[k].disp||0); },0);
+  var totalDisp = dispSubs.reduce(function(a,k){ return a+(clients[k].disp||0); },0);
 
   var metricsRow = document.createElement('div');
   metricsRow.style.cssText = 'display:grid;grid-template-columns:repeat(' + (subs.length+1) + ',1fr);gap:12px;margin-bottom:20px;';
@@ -2501,7 +2509,7 @@ function renderGroupOverview(grpKey) {
   totalCard.innerHTML = '<div class="mcard-top"><div class="mcard-label" style="color:#32CE13;">Group total</div>'
     + '<div class="mcard-icon mi-purple"><i class="ti ti-building-community"></i></div></div>'
     + '<div class="mcard-val vc-purple">' + totalHC + '</div>'
-    + '<div class="mcard-sub">' + totalDisp + ' open dispute' + (totalDisp!==1?'s':'') + '</div>';
+    + (dispSubs.length ? '<div class="mcard-sub">' + totalDisp + ' open dispute' + (totalDisp!==1?'s':'') + '</div>' : '');
   metricsRow.appendChild(totalCard);
 
   subs.forEach(function(k) {
@@ -2513,13 +2521,14 @@ function renderGroupOverview(grpKey) {
     var done = allT.filter(function(t){
       var st=getTaskSt(k,t.taskKey); return st==='tst-done'||st==='tst-skip';
     }).length;
+    var subText = done + '/' + allT.length + ' tasks done' + (dispTrackedFor(k) ? (' &middot; ' + (c.disp||0) + ' disputes') : '');
     var card = document.createElement('div');
     card.className = 'mcard';
     card.style.cursor = 'pointer';
     card.innerHTML = '<div class="mcard-top"><div class="mcard-label">' + c.name + '</div>'
       + '<div style="width:28px;height:28px;border-radius:7px;background:' + bg + ';color:' + txt + ';display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;">' + c.av.slice(0,3) + '</div></div>'
       + '<div class="mcard-val" style="color:' + txt + ';">' + c.hc + '</div>'
-      + '<div class="mcard-sub">' + done + '/' + allT.length + ' tasks done &middot; ' + (c.disp||0) + ' disputes</div>';
+      + '<div class="mcard-sub">' + subText + '</div>';
     var ck = k;
     card.addEventListener('click', function(){ switchTab('ws-disputes'); });
     metricsRow.appendChild(card);
@@ -18783,6 +18792,20 @@ function searchInDoc() {
   </div>
 </div>
 
+<!-- ── HEADCOUNT BREAKDOWN MODAL (Admin > Total headcount card) ─────────────── -->
+<div id="hc-breakdown-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:3000;align-items:center;justify-content:center;backdrop-filter:blur(2px);pointer-events:none;">
+  <div style="background:#ffffff;border-radius:16px;width:460px;max-height:80vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,0.3);border:1px solid #EBEBEF;">
+    <div style="padding:18px 22px 14px;border-bottom:1px solid #EBEBEF;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:#ffffff;border-radius:16px 16px 0 0;z-index:1;">
+      <div>
+        <div style="font-size:15px;font-weight:600;color:#1a1a2e;">Headcount breakdown</div>
+        <div style="font-size:11px;color:#9898a6;margin-top:2px;" id="hc-breakdown-sub">across all clients</div>
+      </div>
+      <div onclick="(function(){ const el=document.getElementById('hc-breakdown-modal'); el.style.display='none'; el.style.pointerEvents='none'; })()" style="width:30px;height:30px;border-radius:12px;border:1px solid #EBEBEF;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9898a6;font-size:16px;"><i class="ti ti-x"></i></div>
+    </div>
+    <div id="hc-breakdown-list" style="padding:8px 0;"></div>
+  </div>
+</div>
+
 <!-- ── EDIT PROFILE MODAL ─────────────────────────────────────────────────── -->
 <div id="edit-profile-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:3000;align-items:center;justify-content:center;backdrop-filter:blur(2px);pointer-events:none;">
   <div style="background:#ffffff;border-radius:16px;width:520px;max-height:85vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,0.3);border:1px solid #EBEBEF;">
@@ -20493,6 +20516,35 @@ function updateAdminOverviewMetrics(){
   if (elHC) elHC.textContent = totalHC;
   if (elDisp) elDisp.textContent = totalDisputes;
   if (elTeam) elTeam.textContent = teamMemberCount;
+}
+
+// Admin > Total headcount card -- lists every live client's own headcount (same clients[]
+// source updateAdminOverviewMetrics sums), so a team-wide total that looks wrong can actually
+// be traced to which client is off instead of just staring at one aggregate number. Sorted
+// highest-first since an inflated/duplicate entry is usually the biggest one, not buried in
+// the middle; a client showing 0 is flagged in red since that likely means it's never been
+// synced from an actual Attendance Report run (see _persistCompanyHeadcount).
+function openHeadcountBreakdown() {
+  var rows = Object.keys(clients)
+    .filter(function(k){ return clients[k] && !clients[k]._churned; })
+    .map(function(k){ return { key: k, name: clients[k].name || k, hc: clients[k].hc || 0 }; })
+    .sort(function(a,b){ return b.hc - a.hc; });
+  var total = rows.reduce(function(s,r){ return s + r.hc; }, 0);
+
+  var sub = document.getElementById('hc-breakdown-sub');
+  if (sub) sub.textContent = rows.length + ' client' + (rows.length!==1?'s':'') + ' · ' + total + ' total';
+
+  var list = document.getElementById('hc-breakdown-list');
+  if (list) {
+    list.innerHTML = rows.length ? rows.map(function(r) {
+      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 22px;border-bottom:1px solid #F4F4F8;font-size:13px;">'
+        + '<span style="color:#1a1a2e;">' + r.name + '</span>'
+        + '<span style="font-weight:600;font-variant-numeric:tabular-nums;color:' + (r.hc ? '#1a1a2e' : '#c0392b') + ';">' + r.hc + '</span>'
+        + '</div>';
+    }).join('') : '<div style="padding:20px 22px;text-align:center;color:#9898a6;font-size:12px;">No live clients found</div>';
+  }
+  var m = document.getElementById('hc-breakdown-modal');
+  if (m) { m.style.display = 'flex'; m.style.pointerEvents = 'auto'; }
 }
 
 document.addEventListener('DOMContentLoaded',function(){if(typeof recomputeAllDisputeTAT==='function')recomputeAllDisputeTAT();updateDashboardMetrics();updateAdminOverviewMetrics();if(typeof renderTeamCapacity==='function')renderTeamCapacity();filterClientGrid();if(typeof renderNotifCard==='function')renderNotifCard();['nav-settings','nav-archives'].forEach(function(id){var el=document.getElementById(id);if(el)el.style.display='none';});});
