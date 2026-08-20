@@ -2542,10 +2542,14 @@ function renderGroupOverview(grpKey) {
     card.style.cursor = 'pointer';
     card.innerHTML = '<div class="mcard-top"><div class="mcard-label">' + c.name + '</div>'
       + '<div style="width:28px;height:28px;border-radius:7px;background:' + bg + ';color:' + txt + ';display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;">' + c.av.slice(0,3) + '</div></div>'
-      + '<div class="mcard-val" style="color:' + txt + ';">' + c.hc + '</div>'
+      + '<div class="mcard-val gov-hc-val" style="color:' + txt + ';" title="Click for headcount history">' + c.hc + '</div>'
       + '<div class="mcard-sub">' + subText + '</div>';
     var ck = k;
     card.addEventListener('click', function(){ switchTab('ws-disputes'); });
+    // Headcount specifically opens its own history instead of following the rest of the card
+    // to Disputes -- stopPropagation so this doesn't also fire the card-level listener above.
+    var hcEl = card.querySelector('.gov-hc-val');
+    if (hcEl) hcEl.addEventListener('click', function(ev){ ev.stopPropagation(); openHeadcountHistory(ck); });
     metricsRow.appendChild(card);
   });
   ovEl.appendChild(metricsRow);
@@ -6792,6 +6796,20 @@ function setPayrollType(subKeysCsv, type) {
 function _persistCompanyHeadcount(clientKey, hc) {
   supabaseClient.from('companies').update({ headcount: hc }).eq('short_key', clientKey).then(function(res) {
     if (res.error) console.warn('Could not save headcount for ' + clientKey, res.error);
+  });
+}
+
+// Snapshots headcount per cut-off, separate from the always-current companies.headcount above
+// -- so the Overview headcount card can show a real history (see openHeadcountHistory) instead
+// of only ever knowing today's number. Upserts on (company_id, cutoff_label): reprocessing the
+// same cut-off again updates that cut-off's own row rather than piling up a duplicate per re-run.
+function _persistHeadcountHistory(clientKey, cutoffLabel, hc) {
+  var companyId = clients[clientKey] && clients[clientKey].companyId;
+  if (!companyId || !cutoffLabel) return;
+  supabaseClient.from('company_headcount_history').upsert({
+    company_id: companyId, cutoff_label: cutoffLabel, headcount: hc, recorded_at: new Date().toISOString()
+  }, { onConflict: 'company_id,cutoff_label' }).then(function(res) {
+    if (res.error) console.warn('Could not save headcount history for ' + clientKey, res.error);
   });
 }
 
@@ -13957,6 +13975,10 @@ function runValidationBatch() {
         if (typeof window._tkFullHeadcount === 'number' && clients[g.clientKey]) {
           clients[g.clientKey].hc = window._tkFullHeadcount;
           if (typeof _persistCompanyHeadcount === 'function') _persistCompanyHeadcount(g.clientKey, window._tkFullHeadcount);
+          if (typeof _persistHeadcountHistory === 'function') {
+            var _hcCutoffLabel = (typeof getCurrentCutoffLabel === 'function') ? getCurrentCutoffLabel(g.clientKey) : clients[g.clientKey].cutoff;
+            _persistHeadcountHistory(g.clientKey, _hcCutoffLabel, window._tkFullHeadcount);
+          }
           if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
           if (typeof updateAdminOverviewMetrics === 'function') updateAdminOverviewMetrics();
           if (typeof renderClientCards === 'function') renderClientCards();
@@ -18833,6 +18855,17 @@ function searchInDoc() {
   </div>
 </div>
 
+<!-- ── HEADCOUNT HISTORY MODAL (Group Overview's per-sub Headcount value) ───── -->
+<div id="hc-history-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:3000;align-items:center;justify-content:center;backdrop-filter:blur(2px);pointer-events:none;">
+  <div style="background:#ffffff;border-radius:16px;width:420px;max-height:80vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,0.3);border:1px solid #EBEBEF;">
+    <div style="padding:18px 22px 14px;border-bottom:1px solid #EBEBEF;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:#ffffff;border-radius:16px 16px 0 0;z-index:1;">
+      <div style="font-size:15px;font-weight:600;color:#1a1a2e;" id="hc-history-title">Headcount history</div>
+      <div onclick="(function(){ const el=document.getElementById('hc-history-modal'); el.style.display='none'; el.style.pointerEvents='none'; })()" style="width:30px;height:30px;border-radius:12px;border:1px solid #EBEBEF;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9898a6;font-size:16px;"><i class="ti ti-x"></i></div>
+    </div>
+    <div id="hc-history-list" style="padding:8px 0;"></div>
+  </div>
+</div>
+
 <!-- ── EDIT PROFILE MODAL ─────────────────────────────────────────────────── -->
 <div id="edit-profile-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:3000;align-items:center;justify-content:center;backdrop-filter:blur(2px);pointer-events:none;">
   <div style="background:#ffffff;border-radius:16px;width:520px;max-height:85vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,0.3);border:1px solid #EBEBEF;">
@@ -20572,6 +20605,41 @@ function openHeadcountBreakdown() {
   }
   var m = document.getElementById('hc-breakdown-modal');
   if (m) { m.style.display = 'flex'; m.style.pointerEvents = 'auto'; }
+}
+
+// Group Overview's per-sub headcount value -- shows every recorded cut-off for this one
+// company (see _persistHeadcountHistory), newest first. Only ever has data from the point this
+// shipped forward, since headcount was never snapshotted per cut-off before.
+async function openHeadcountHistory(clientKey) {
+  var c = clients[clientKey];
+  if (!c) return;
+  var modal = document.getElementById('hc-history-modal');
+  var list = document.getElementById('hc-history-list');
+  var title = document.getElementById('hc-history-title');
+  if (title) title.textContent = c.name + ' — headcount history';
+  if (list) list.innerHTML = '<div style="padding:20px 22px;text-align:center;color:#9898a6;font-size:12px;">Loading…</div>';
+  if (modal) { modal.style.display = 'flex'; modal.style.pointerEvents = 'auto'; }
+  if (!list) return;
+  if (!c.companyId) { list.innerHTML = '<div style="padding:20px 22px;text-align:center;color:#9898a6;font-size:12px;">No history available for this client.</div>'; return; }
+
+  var res = await supabaseClient.from('company_headcount_history')
+    .select('cutoff_label, headcount, recorded_at')
+    .eq('company_id', c.companyId)
+    .order('recorded_at', { ascending: false });
+  if (res.error) { list.innerHTML = '<div style="padding:20px 22px;text-align:center;color:#c0392b;font-size:12px;">Could not load history.</div>'; return; }
+  var rows = res.data || [];
+  if (!rows.length) {
+    list.innerHTML = '<div style="padding:20px 22px;text-align:center;color:#9898a6;font-size:12px;">No history recorded yet — this builds up starting from the next Current Attendance Validation run.</div>';
+    return;
+  }
+  list.innerHTML = rows.map(function(r) {
+    var d = new Date(r.recorded_at);
+    var dateStr = d.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 22px;border-bottom:1px solid #F4F4F8;font-size:13px;">'
+      + '<div><div style="color:#1a1a2e;">' + (r.cutoff_label || 'Unlabeled period') + '</div><div style="font-size:11px;color:#9898a6;margin-top:1px;">' + dateStr + '</div></div>'
+      + '<span style="font-weight:600;font-variant-numeric:tabular-nums;color:#1a1a2e;">' + r.headcount + '</span>'
+      + '</div>';
+  }).join('');
 }
 
 document.addEventListener('DOMContentLoaded',function(){if(typeof recomputeAllDisputeTAT==='function')recomputeAllDisputeTAT();updateDashboardMetrics();updateAdminOverviewMetrics();if(typeof renderTeamCapacity==='function')renderTeamCapacity();filterClientGrid();if(typeof renderNotifCard==='function')renderNotifCard();['nav-settings','nav-archives'].forEach(function(id){var el=document.getElementById(id);if(el)el.style.display='none';});});
