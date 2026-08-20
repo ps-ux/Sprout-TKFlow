@@ -17693,18 +17693,33 @@ function dsBuildPlainSheetXml(rows) {
     + '<dimension ref="' + dim + '"/><sheetData>' + rowsXml + '</sheetData></worksheet>';
 }
 
+// Column order per the user's exact requested sequence. "Cut-off When Received" and
+// "Amount" are new -- the first via dtmReceivedCutoffLabel (computed fresh from Email
+// Received against the real calendar, see its own doc comment for why it can't reuse
+// ticketApplicableCutoffKey), the second joining every payroll-instruction line into a
+// readable "1 Day Absent; 7 Hrs LH" style string. "Date Ticket Closed" reuses the existing
+// derivation (Date of Action, only once status is actually Closed) rather than a real
+// dedicated closed-at timestamp, which doesn't exist in the data model.
 function dsOverviewRows(finalizedGroups) {
-  var rows = [['Subcompany','Ticket #','Employee ID','Employee Name','Date of Submission','Entity',
-    'Nature of Dispute/Request','Date/s of Dispute','Full Details of Dispute/Inquiry',
-    'Date of Action','Action/s Made / Findings','Recommended Resolution',
-    'Ticket Status','Date Ticket Closed','Additional Comment (Internal)','Additional Comment (2)']];
+  var rows = [['Ticket #','Entity','Employee ID','Employee Name','Date Received',
+    'Cut-off When Received','Nature of Dispute','Full Details','Date of Concern',
+    'Date of Action (OTK Team)','Findings','Recommended Resolution','Ticket Status',
+    'Date Ticket Closed','Cut-off for Payroll Instructions','Amount',
+    'Notes (Open Tickets)','Other Remarks']];
   finalizedGroups.forEach(function(x) {
     var g = x.g;
     (g.included || []).forEach(function(d) {
-      rows.push([g.name || g.clientKey || '', d.id||'', d.empNo||'', d.name||'', d.dateSubmitted||'',
-        d.entity||d.client||'', d.nature||'', d.disputeDates||'', d.fullDetails||'',
+      var piLines = (typeof getPiLines === 'function') ? getPiLines(d) : [];
+      var amountStr = piLines.map(function(l) {
+        var codeLabel = l.code ? (' ' + l.code) : '';
+        return (l.number||'') + ' ' + codeUnit(l.code, l.number) + codeLabel;
+      }).join('; ');
+      rows.push([d.id||'', d.entity||d.client||'', d.empNo||'', d.name||'', d.dateSubmitted||'',
+        (typeof dtmReceivedCutoffLabel === 'function') ? dtmReceivedCutoffLabel(d) : '',
+        d.nature||'', d.fullDetails||'', d.disputeDates||'',
         d.dateAction||'', d.findings||'', d.recommendedResolution||'',
         d.statusLabel||'', d.status==='dst-closed'?(d.dateAction||''):'',
+        d.cutoff||'', amountStr,
         d.updateOpen||'', d.otherRemarks||'']);
     });
   });
