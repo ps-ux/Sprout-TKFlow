@@ -22665,6 +22665,19 @@ function dtmSaveCutoff(value) {
   dtmSaveField('payoutCutoff', value);
 }
 
+// What cut-off was actually current/applicable at the moment this ticket's email came in --
+// a separate fact from the editable Cut-off field above (which cut-off it's INCLUDED in for
+// Payroll Instructions, and can be transferred). Always recomputed fresh from Email Received
+// rather than stored anywhere, so it can never drift from what Email Received actually says
+// and never gets overwritten by transferring the ticket to a different cut-off below.
+function dtmReceivedCutoffLabel(d) {
+  var clientObj = clients[d.client];
+  if (!clientObj) return '';
+  var receivedDt = (typeof parseTATEmailTime === 'function') ? parseTATEmailTime(d.emailTime) : null;
+  if (!receivedDt) return '';
+  return (typeof ticketApplicableCutoffKey === 'function') ? (ticketApplicableCutoffKey(clientObj, receivedDt) || '') : '';
+}
+
 function dtmSelectWithOtherHtml(label, fieldKey, currentValue, presetOptions, otherInputId) {
   var isPreset = presetOptions.indexOf(currentValue) >= 0;
   var selectValue = currentValue && !isPreset ? 'Others' : (currentValue || '');
@@ -22729,20 +22742,24 @@ function openDisputeTicket(id, clientContext) {
     // it continuing to tick against the live clock (see getTATClass/getTATLabel, dtmSaveRepliedAt).
     ['Replied At',          'repliedAt',     d, 'datetime'],
     ['Date of Action',     'dateAction',    d.dateAction, 'date'],
-    // Single field now covering what used to be two confusingly-similar ones: this both
-    // decides which Dispute Summary batch run the ticket counts toward (d.cutoff -- see
-    // ticketApplicableCutoffKey/dsApplicableCutoffKey and the "Prior" badge) AND keeps
-    // d.payoutCutoff (the export/report display value) in sync automatically, mirroring the
-    // Email Received/Date of Submission sync pattern above. Transferring a ticket here for one
-    // that came in near a cut-off boundary and got filed under the wrong one actually moves it.
-    ['Cut-off', 'cutoff', d, 'cutoffselect'],
+    // Two distinct facts live in this one field now: a read-only "Received during" line (which
+    // cut-off was actually current when the email came in -- see dtmReceivedCutoffLabel,
+    // computed fresh from Email Received, never stored/editable) and the actual dropdown below
+    // it (which cut-off this is INCLUDED in for Payroll Instructions/Dispute Summary -- d.cutoff,
+    // see ticketApplicableCutoffKey/dsApplicableCutoffKey and the "Prior" badge, also keeps
+    // d.payoutCutoff in sync for exports). Transferring the dropdown for a ticket that came in
+    // near a cut-off boundary and got filed under the wrong one actually moves it, without
+    // touching the separate "received during" fact above it.
+    ['Included In Cut-off', 'cutoff', d, 'cutoffselect'],
   ];
   document.getElementById('dtm-fields-grid').innerHTML = fieldSpecs.map(function(f) {
     if (f[3] === 'cutoffselect') {
       var copts = (typeof dtmCutoffOptions === 'function') ? dtmCutoffOptions() : [];
       var cval = f[2].cutoff || '';
       var hasMatch = copts.some(function(o){ return o.value === cval; });
+      var receivedLabel = (typeof dtmReceivedCutoffLabel === 'function') ? dtmReceivedCutoffLabel(f[2]) : '';
       return '<div style="background:var(--bg-secondary,#F4F4F8);border-radius:12px;padding:8px 12px;">'
+        + (receivedLabel ? '<div style="font-size:10px;color:var(--text-muted);margin-bottom:4px;">Received during <b style="color:var(--text-primary);">' + receivedLabel + '</b></div>' : '')
         + '<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">' + f[0] + '</div>'
         + '<select onchange="dtmSaveCutoff(this.value)" style="width:100%;border:none;background:transparent;padding:0;font-size:13px;font-weight:500;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;">'
         + (!hasMatch && cval ? '<option value="' + cval.replace(/"/g,'&quot;') + '" selected>' + cval + ' (not in current calendar)</option>' : '')
