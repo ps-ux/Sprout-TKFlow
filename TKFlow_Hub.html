@@ -22638,6 +22638,21 @@ function dtmSelectOtherToggle(selectEl, otherId) {
 // Subcompany and Type of Request so typos/inconsistent phrasing can't creep in, while still
 // preserving whatever a pre-existing ticket already had if it doesn't match any preset (an
 // older free-typed value, or the "unrecognized client" case) rather than silently blanking it.
+// Values kept in the exact "MonthName 1st/2nd" format d.cutoff/ticketApplicableCutoffKey
+// already use everywhere else, so transferring a ticket to one of these actually changes which
+// Dispute Summary run picks it up, instead of creating a value nothing else recognizes.
+// NOTE: getRealCalendarPeriods() reads whichever workspace is CURRENTLY open, not necessarily
+// this ticket's own client -- correct for the normal case (editing a ticket from within its own
+// client's Disputes tab), but the org-wide "all tickets" view could show the wrong calendar's
+// periods if it's ever used to edit a ticket for a different client than the one presently open.
+function dtmCutoffOptions() {
+  var periods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
+  return periods.map(function(p) {
+    var value = p.monthName + ' ' + (p.period === 1 ? '1st' : '2nd');
+    return { value: value, label: value + (p.attCov ? ' (att ' + p.attCov + ')' : '') };
+  });
+}
+
 function dtmSelectWithOtherHtml(label, fieldKey, currentValue, presetOptions, otherInputId) {
   var isPreset = presetOptions.indexOf(currentValue) >= 0;
   var selectValue = currentValue && !isPreset ? 'Others' : (currentValue || '');
@@ -22703,8 +22718,27 @@ function openDisputeTicket(id, clientContext) {
     ['Replied At',          'repliedAt',     d, 'datetime'],
     ['Date of Action',     'dateAction',    d.dateAction, 'date'],
     ['Payout Cut-off',     'payoutCutoff',  d.payoutCutoff || d.cutoff],
+    // d.cutoff (distinct from Payout Cut-off above, which is export/display-only) is what
+    // actually decides which Dispute Summary batch run this ticket counts toward -- see
+    // ticketApplicableCutoffKey/dsApplicableCutoffKey and the "Prior" badge shown when they
+    // don't match. Transferring here for a ticket that came in near a cut-off boundary and got
+    // filed under the wrong one actually moves it, rather than just relabeling a display field.
+    ['Cut-off (Dispute Summary)', 'cutoff', d, 'cutoffselect'],
   ];
   document.getElementById('dtm-fields-grid').innerHTML = fieldSpecs.map(function(f) {
+    if (f[3] === 'cutoffselect') {
+      var copts = (typeof dtmCutoffOptions === 'function') ? dtmCutoffOptions() : [];
+      var cval = f[2].cutoff || '';
+      var hasMatch = copts.some(function(o){ return o.value === cval; });
+      return '<div style="background:var(--bg-secondary,#F4F4F8);border-radius:12px;padding:8px 12px;">'
+        + '<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">' + f[0] + '</div>'
+        + '<select onchange="dtmSaveField(\'cutoff\', this.value)" style="width:100%;border:none;background:transparent;padding:0;font-size:13px;font-weight:500;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;">'
+        + (!hasMatch && cval ? '<option value="' + cval.replace(/"/g,'&quot;') + '" selected>' + cval + ' (not in current calendar)</option>' : '')
+        + (!cval ? '<option value="" selected disabled hidden></option>' : '')
+        + copts.map(function(o) { return '<option value="' + o.value.replace(/"/g,'&quot;') + '"' + (o.value === cval ? ' selected' : '') + '>' + o.label + '</option>'; }).join('')
+        + '</select>'
+        + '</div>';
+    }
     if (f[3] === 'select') {
       return dtmSelectWithOtherHtml(f[0], f[1], f[2], f[4], 'dtm-other-' + f[1]);
     }
