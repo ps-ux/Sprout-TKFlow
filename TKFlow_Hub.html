@@ -17675,22 +17675,35 @@ function dsPiRowsForTicket(d, useEdited) {
   });
 }
 
-// Builds a minimal, unstyled worksheet XML (used only for the "All Disputes" overview tab)
-function dsBuildPlainSheetXml(rows) {
+// Per-column widths for the "All Disputes" overview tab, matching dsOverviewRows' own column
+// order exactly -- wide enough that wrapped long-text columns (Full Details, Findings,
+// Recommended Resolution, Amount, the two Notes/Remarks columns) actually read as a few wrapped
+// lines instead of Excel's ~8-character default forcing every word onto its own line.
+var DS_OVERVIEW_COL_WIDTHS = [12,20,12,22,12,16,20,40,14,16,30,30,12,14,18,20,24,24];
+
+// Builds a minimal worksheet XML (used only for the "All Disputes" overview tab). wrapStyleId,
+// when given, is applied to every cell so long text wraps within its column instead of
+// overflowing into the next one -- see dsGenerateAll, which adds that style to styles.xml
+// since the embedded template ships with none.
+function dsBuildPlainSheetXml(rows, wrapStyleId) {
   function colLetter(n) { var s=''; while(n>0){ var m=(n-1)%26; s=String.fromCharCode(65+m)+s; n=Math.floor((n-1)/26); } return s; }
   var lastCol = rows.reduce(function(mx,r){ return Math.max(mx, r.length); }, 1);
+  var sAttr = (wrapStyleId != null) ? (' s="' + wrapStyleId + '"') : '';
   var rowsXml = rows.map(function(r, ri) {
     var cells = r.map(function(val, ci) {
       var ref = colLetter(ci+1) + (ri+1);
-      if (val === '' || val == null) return '<c r="' + ref + '"></c>';
-      if (typeof val === 'number') return '<c r="' + ref + '"><v>' + val + '</v></c>';
-      return '<c r="' + ref + '" t="inlineStr"><is><t>' + dsEscXml(val) + '</t></is></c>';
+      if (val === '' || val == null) return '<c r="' + ref + '"' + sAttr + '></c>';
+      if (typeof val === 'number') return '<c r="' + ref + '"' + sAttr + '><v>' + val + '</v></c>';
+      return '<c r="' + ref + '"' + sAttr + ' t="inlineStr"><is><t>' + dsEscXml(val) + '</t></is></c>';
     }).join('');
     return '<row r="' + (ri+1) + '">' + cells + '</row>';
   }).join('');
   var dim = 'A1:' + colLetter(lastCol) + Math.max(rows.length,1);
+  var colsXml = '<cols>' + DS_OVERVIEW_COL_WIDTHS.slice(0, lastCol).map(function(w, i) {
+    return '<col min="' + (i+1) + '" max="' + (i+1) + '" width="' + w + '" customWidth="1"/>';
+  }).join('') + '</cols>';
   return '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-    + '<dimension ref="' + dim + '"/><sheetData>' + rowsXml + '</sheetData></worksheet>';
+    + '<dimension ref="' + dim + '"/>' + colsXml + '<sheetData>' + rowsXml + '</sheetData></worksheet>';
 }
 
 // Column order per the user's exact requested sequence. "Cut-off When Received" and
@@ -17710,6 +17723,10 @@ function dsOverviewRows(finalizedGroups) {
     var g = x.g;
     (g.included || []).forEach(function(d) {
       var piLines = (typeof getPiLines === 'function') ? getPiLines(d) : [];
+      // Not every ticket is meant to touch payroll -- some are just simple queries with no
+      // payroll-instruction line at all, so this column should stay blank for those instead of
+      // showing d.cutoff regardless (which would wrongly imply payroll impact for every ticket).
+      var hasPI = (typeof hasPiLines === 'function') ? hasPiLines(d) : !!piLines.length;
       var amountStr = piLines.map(function(l) {
         var codeLabel = l.code ? (' ' + l.code) : '';
         return (l.number||'') + ' ' + codeUnit(l.code, l.number) + codeLabel;
@@ -17719,7 +17736,7 @@ function dsOverviewRows(finalizedGroups) {
         d.nature||'', d.fullDetails||'', d.disputeDates||'',
         d.dateAction||'', d.findings||'', d.recommendedResolution||'',
         d.statusLabel||'', d.status==='dst-closed'?(d.dateAction||''):'',
-        d.cutoff||'', amountStr,
+        hasPI ? (d.cutoff||'') : '', amountStr,
         d.updateOpen||'', d.otherRemarks||'']);
     });
   });
@@ -17745,20 +17762,30 @@ function dsGenerateAll() {
       zip.file('xl/worksheets/sheet1.xml').async('string'),
       zip.file('xl/workbook.xml').async('string'),
       zip.file('xl/_rels/workbook.xml.rels').async('string'),
-      zip.file('[Content_Types].xml').async('string')
+      zip.file('[Content_Types].xml').async('string'),
+      zip.file('xl/styles.xml').async('string')
     ]).then(function(files) {
       var baseSheetXml = files[0];
       var wbXml = files[1];
       var relsXml = files[2];
       var ctXml = files[3];
+      var stylesXml = files[4];
       var useEdited = window._dsUseEditedRemarks !== false;
 
       var sheetEntries = []; // {name, rId}
       var nextRId = 4; // rId1/2/3 already used by sheet1/styles/theme
 
-      // Overview tab (plain, unstyled) — goes first
+      // Add a wrap-text cell format for the overview tab's cells -- the embedded template
+      // ships 7 cellXfs (index 0-6), none with wrapText, so append one and use its new index.
+      var xfCountMatch = stylesXml.match(/<cellXfs count="(\d+)">/);
+      var wrapStyleId = xfCountMatch ? parseInt(xfCountMatch[1], 10) : 7;
+      stylesXml = stylesXml.replace(/<cellXfs count="\d+">/, '<cellXfs count="' + (wrapStyleId + 1) + '">');
+      stylesXml = stylesXml.replace('</cellXfs>', '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" applyAlignment="1" xfId="0"><alignment wrapText="1" vertical="top"/></xf></cellXfs>');
+      zip.file('xl/styles.xml', stylesXml);
+
+      // Overview tab (plain) — goes first
       var overviewRows = dsOverviewRows(finalizedGroups);
-      var overviewXml = dsBuildPlainSheetXml(overviewRows);
+      var overviewXml = dsBuildPlainSheetXml(overviewRows, wrapStyleId);
       var overviewRId = 'rId' + (nextRId++);
       zip.file('xl/worksheets/sheet_overview.xml', overviewXml);
       relsXml = relsXml.replace('</Relationships>', '<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="/xl/worksheets/sheet_overview.xml" Id="' + overviewRId + '"/></Relationships>');
@@ -22701,9 +22728,26 @@ function dtmCutoffOptions() {
 // feature can still independently set d.payoutCutoff from source-ticket text (see the
 // ext.payoutCutoff handling elsewhere) -- that's unaffected, this only runs when someone
 // actually picks a cut-off from this dropdown.
+// Found via a real reported bug: a ticket transferred here to a previous cut-off still showed
+// under "Current Attendance" in Payroll Instructions, because that table is driven by a THIRD,
+// completely separate field -- d.attendancePeriod (the "Attendance Period" dropdown in the
+// Payroll Instructions section below, defaults to 'previous', manually set otherwise) -- which
+// this dropdown never touched. Now keeps it in sync: transferring to whatever cut-off is
+// genuinely current right now flips it to 'current', anything else flips it to 'previous',
+// matching the same "is this THE real current cut-off" definition d.cutoff itself is stamped
+// from at ticket creation (ticketApplicableCutoffKey with no receivedDate = right now).
 function dtmSaveCutoff(value) {
   dtmSaveField('cutoff', value);
   dtmSaveField('payoutCutoff', value);
+  var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
+  var clientObj = d && clients[d.client];
+  if (clientObj && typeof ticketApplicableCutoffKey === 'function') {
+    var realCurrentCutoff = ticketApplicableCutoffKey(clientObj);
+    var newPeriod = (value && value === realCurrentCutoff) ? 'current' : 'previous';
+    dtmSaveField('attendancePeriod', newPeriod);
+    var attSelect = document.getElementById('dtm-attendance-period');
+    if (attSelect) attSelect.value = newPeriod;
+  }
 }
 
 // What cut-off was actually current/applicable at the moment this ticket's email came in --
