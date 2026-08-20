@@ -7953,7 +7953,11 @@ function getTATClass(emailTimeStr, status, repliedAtStr) {
 
 function getTATLabel(emailTimeStr, status, repliedAtStr) {
   if (!emailTimeStr) return 'No TAT';
-  if (status === 'Closed' || status === 'Done' || status === 'Resolved') return 'Resolved';
+  // Was the literal string 'Resolved' -- since this TAT badge renders right next to the
+  // ticket's own status pill, a Closed ticket showed two tags that looked like conflicting
+  // statuses ("Resolved" + "Closed") when really the TAT badge was just reusing a status word
+  // as a generic "doesn't apply anymore" placeholder. Doesn't overlap with any real status label.
+  if (status === 'Closed' || status === 'Done' || status === 'Resolved') return 'TAT n/a';
   const deadline = getTATDeadline(emailTimeStr);
   if (!deadline) return 'No TAT';
   const repliedAt = repliedAtStr ? parseTATEmailTime(repliedAtStr) : null;
