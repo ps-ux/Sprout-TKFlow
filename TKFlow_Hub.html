@@ -5601,14 +5601,22 @@ function renderDashSchedule() {
   // Leave Monitoring anniversary transfers due today
   var seenLMClientsSched = {};
   (currentUser.processClients || []).forEach(function(ck) {
-    if (seenLMClientsSched[ck]) return;
-    seenLMClientsSched[ck] = true;
-    var lmStore = window.leaveMonitoringStore && window.leaveMonitoringStore[ck] && window.leaveMonitoringStore[ck][new Date().getFullYear()];
+    // Resolve to the shared roster key -- a real multi-entity group's subs all resolve to the
+    // same one, so dedupe (seenLMClientsSched) must happen on THAT, not the raw sub key, or a
+    // group's own reminder would surface once per sub instead of once for the whole roster.
+    var lmKey = (typeof lmStorageKeyFor === 'function') ? lmStorageKeyFor(ck) : ck;
+    if (seenLMClientsSched[lmKey]) return;
+    seenLMClientsSched[lmKey] = true;
+    var lmStore = window.leaveMonitoringStore && window.leaveMonitoringStore[lmKey] && window.leaveMonitoringStore[lmKey][new Date().getFullYear()];
     if (!lmStore) return;
-    var clientName = (clients[ck] && clients[ck].name) || ck;
+    var lmGrp = typeof clientGroups !== 'undefined' ? clientGroups[lmKey] : null;
+    var clientName = lmGrp ? lmGrp.name : ((clients[lmKey] && clients[lmKey].name) || lmKey);
     var todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     (lmStore.oneYear || []).concat(lmStore.fiveYear || []).forEach(function(r) {
       if (r.done || !r.anniversary) return;
+      // Deliberately the raw sub key (ck), not lmKey -- lastWorkingDayOnOrBefore already
+      // resolves a sub to its own group's calendar/holidays internally, and clients[lmKey]
+      // wouldn't exist once lmKey is a group code.
       var reminderDate = lastWorkingDayOnOrBefore(r.anniversary, ck);
       if (reminderDate.getTime() !== todayMid.getTime()) return;
       var isEarly = reminderDate.getTime() !== new Date(r.anniversary.getFullYear(), r.anniversary.getMonth(), r.anniversary.getDate()).getTime();
@@ -5619,7 +5627,7 @@ function renderDashSchedule() {
         timeStr: 'Today',
         label: r.lastName + ', ' + r.firstName + ' \u2014 ' + transferLabel + (isEarly ? ' (actual: ' + fmtLMDate(r.anniversary) + ')' : ''),
         sub: clientName + ' \u00b7 Leave Monitoring',
-        color: avClassAccentColor(clients[ck] && clients[ck].avClass),
+        color: avClassAccentColor(lmGrp ? lmGrp.avClass : (clients[lmKey] && clients[lmKey].avClass)),
         icon: 'ti-calendar-heart'
       });
     });
@@ -5769,20 +5777,23 @@ function renderMiniCal() {
   // Leave Monitoring anniversary transfers landing within this work week
   var seenLMClientsWk = {};
   (currentUser.processClients || currentUser.assignedClients || []).forEach(function(ck) {
-    if (seenLMClientsWk[ck]) return;
-    seenLMClientsWk[ck] = true;
-    var lmStore = window.leaveMonitoringStore && window.leaveMonitoringStore[ck] && window.leaveMonitoringStore[ck][new Date().getFullYear()];
+    var lmKey = (typeof lmStorageKeyFor === 'function') ? lmStorageKeyFor(ck) : ck;
+    if (seenLMClientsWk[lmKey]) return;
+    seenLMClientsWk[lmKey] = true;
+    var lmStore = window.leaveMonitoringStore && window.leaveMonitoringStore[lmKey] && window.leaveMonitoringStore[lmKey][new Date().getFullYear()];
     if (!lmStore) return;
-    var clientName = (clients[ck] && clients[ck].name) || ck;
+    var lmGrp = typeof clientGroups !== 'undefined' ? clientGroups[lmKey] : null;
+    var clientName = lmGrp ? lmGrp.name : ((clients[lmKey] && clients[lmKey].name) || lmKey);
     (lmStore.oneYear || []).concat(lmStore.fiveYear || []).forEach(function(r) {
       if (r.done || !r.anniversary) return;
+      // Raw sub key (ck), not lmKey -- see the "due today" block above for why.
       var reminderDate = lastWorkingDayOnOrBefore(r.anniversary, ck);
       if (reminderDate >= mon && reminderDate <= fri) {
         var isEarly = reminderDate.getTime() !== new Date(r.anniversary.getFullYear(), r.anniversary.getMonth(), r.anniversary.getDate()).getTime();
         weekEvents.push({
           client: clientName,
           activity: r.lastName + ', ' + r.firstName + ' \u2014 ' + (r.yearsOfService ? r.yearsOfService + 'yr' : '1yr') + ' transfer' + (isEarly ? ' (actual ' + fmtLMDate(r.anniversary) + ')' : ''),
-          day: reminderDate, color: avClassAccentColor(clients[ck] && clients[ck].avClass), icon: 'ti-calendar-heart', timeStr: null
+          day: reminderDate, color: avClassAccentColor(lmGrp ? lmGrp.avClass : (clients[lmKey] && clients[lmKey].avClass)), icon: 'ti-calendar-heart', timeStr: null
         });
       }
     });
@@ -5948,16 +5959,19 @@ function renderNotifCard() {
   var todayISOForLM = todayForLM.getFullYear() + '-' + String(todayForLM.getMonth()+1).padStart(2,'0') + '-' + String(todayForLM.getDate()).padStart(2,'0');
   var seenLMClients = {};
   (currentUser.processClients || []).forEach(function(ck) {
-    if (seenLMClients[ck]) return;
-    seenLMClients[ck] = true;
-    var lmStore = window.leaveMonitoringStore && window.leaveMonitoringStore[ck] && window.leaveMonitoringStore[ck][new Date().getFullYear()];
+    var lmKey = (typeof lmStorageKeyFor === 'function') ? lmStorageKeyFor(ck) : ck;
+    if (seenLMClients[lmKey]) return;
+    seenLMClients[lmKey] = true;
+    var lmStore = window.leaveMonitoringStore && window.leaveMonitoringStore[lmKey] && window.leaveMonitoringStore[lmKey][new Date().getFullYear()];
     if (!lmStore) return;
-    var clientName = (clients[ck] && clients[ck].name) || ck;
+    var lmGrp = typeof clientGroups !== 'undefined' ? clientGroups[lmKey] : null;
+    var clientName = lmGrp ? lmGrp.name : ((clients[lmKey] && clients[lmKey].name) || lmKey);
     var lmYearForNotif = new Date().getFullYear();
     ['oneYear','fiveYear'].forEach(function(category) {
       (lmStore[category] || []).forEach(function(r) {
       if (!r.anniversary) return;
       if (r.done) { if (r.doneAt !== todayISOForLM) return; }
+      // Raw sub key (ck), not lmKey -- see the "due today" block above for why.
       var reminderDate = lastWorkingDayOnOrBefore(r.anniversary, ck);
       if (!r.done && reminderDate.getTime() > todayForLM.getTime()) return;
       var isEarly = reminderDate.getTime() !== new Date(r.anniversary.getFullYear(), r.anniversary.getMonth(), r.anniversary.getDate()).getTime();
@@ -5966,17 +5980,22 @@ function renderNotifCard() {
       var statusText = r.done
         ? ' \u2014 marked done'
         : (overdueDays > 0 ? (' \u2014 ' + overdueDays + ' day' + (overdueDays > 1 ? 's' : '') + ' overdue') : (isEarly ? ' \u2014 actual date is ' + fmtLMDate(r.anniversary) : ' today'));
-      var notifId = 'lm-anniv-' + ck + '-' + r.empId;
+      var notifId = 'lm-anniv-' + lmKey + '-' + r.empId;
       // Only offer "Mark done" while it isn't already done -- once done, this notif only
       // keeps showing (as a completed recap) through the rest of today via the doneAt check
       // above, and un-checking it back to pending is Leave Monitoring's own job, not this card's.
-      if (!r.done) window._notifDoneActions[notifId] = { ck: ck, year: lmYearForNotif, category: category, empId: r.empId };
+      // ck stored here must be the resolved lmKey -- markNotifDone/_lmApplyDoneToggle look the
+      // row up in that exact bucket, and lmKey is where it actually lives.
+      if (!r.done) window._notifDoneActions[notifId] = { ck: lmKey, year: lmYearForNotif, category: category, empId: r.empId };
       notifs.push({
         id: notifId,
         timeSensitive: !r.done, icon: 'ti-calendar-heart', color: '#7c3aed', bg: '#f3e8ff',
         text: r.lastName + ', ' + r.firstName + ' \u2014 ' + transferLabel + statusText,
         sub: clientName + ' \u00b7 ' + fmtLMDate(r.anniversary),
-        action: function(){ openWorkspace(ck); setTimeout(function(){ switchTab('ws-leave'); }, 80); }
+        action: function(){
+          if (lmGrp && typeof openGroupWorkspace === 'function') openGroupWorkspace(lmKey); else openWorkspace(ck);
+          setTimeout(function(){ switchTab('ws-leave'); }, 80);
+        }
       });
       });
     });
@@ -6489,7 +6508,8 @@ function renderAdminCalendar() {
   Object.keys(window.leaveMonitoringStore || {}).forEach(function(lk) {
     var yearBuckets = window.leaveMonitoringStore[lk];
     if (!yearBuckets) return;
-    var lmClientName = (typeof clients !== 'undefined' && clients[lk]) ? clients[lk].name : lk;
+    var lmClientName = (typeof clientGroups !== 'undefined' && clientGroups[lk]) ? clientGroups[lk].name
+      : ((typeof clients !== 'undefined' && clients[lk]) ? clients[lk].name : lk);
     var lmColor = avClassAccentColor(avClassForStoreKey(lk));
     Object.keys(yearBuckets).forEach(function(yr) {
       var lmStore = yearBuckets[yr];
@@ -15612,7 +15632,10 @@ function nhFinalize() {
     // Hires task, unrelated to whatever year tab an admin happens to have open on the separate
     // Leave Monitoring tab (which may not even be initialized yet this session).
     var nhYear = new Date().getFullYear();
-    var lmStore = lmGetStore(ck, nhYear);
+    // ck itself (this sub's own taskConfig) is what gates whether the feature is even on above,
+    // but a new hire's roster row belongs in the group's shared bucket, not one arbitrary sub's.
+    var lmKey = (typeof lmStorageKeyFor === 'function') ? lmStorageKeyFor(ck) : ck;
+    var lmStore = lmGetStore(lmKey, nhYear);
     (window.nhRows || []).forEach(function(nh) {
       if (!nh.empNo || !nh.hireDate) return;
       var hireDateObj = (typeof lmParseDate === 'function') ? lmParseDate(nh.hireDate) : new Date(nh.hireDate);
@@ -15620,11 +15643,11 @@ function nhFinalize() {
       var nameParts = String(nh.name || '').split(',').map(function(s){ return s.trim(); });
       var lastName = nameParts[0] || '';
       var firstName = nameParts[1] || (String(nh.name||'').split(' ').slice(0,-1).join(' ')) || '';
-      lmPushManualRow(ck, String(nh.empNo), lastName, firstName, hireDateObj, nhYear);
+      lmPushManualRow(lmKey, String(nh.empNo), lastName, firstName, hireDateObj, nhYear);
     });
     lmStore.oneYear.sort(function(a,b){ return a.anniversary - b.anniversary; });
     lmStore.sickOneYear.sort(function(a,b){ return a.anniversary - b.anniversary; });
-    if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, nhYear);
+    if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(lmKey, nhYear);
   }
 
   if (typeof showToast === 'function') showToast('New hires finalized — included in Payroll Instructions');
@@ -15868,6 +15891,42 @@ function lmGetStore(ck, year) {
   return bucket;
 }
 
+// Real bug found live: Leave Monitoring had no per-sub picker (removed everywhere else once
+// Tasks/Disputes/Client Profile were redesigned to aggregate/group inline instead), yet its own
+// storage was still keyed by whichever single subcompany happened to be currentWsClient --
+// opening a multi-sub group's workspace always defaults to its FIRST sub, so uploads/edits
+// silently landed under one arbitrary sub with zero indication that's what was happening, and
+// switching which sub is "active" elsewhere in the app made the whole roster look like it had
+// vanished. Leave Monitoring is now genuinely group-scoped, matching Policy Bank/Calendars'
+// established pattern -- one shared roster for a real multi-entity group, not one per sub.
+//
+// Use this at the tab's own entry points (renders/edits/uploads while that tab is open) --
+// mirrors lcvCurrentClientKey's identical group-first convention.
+function lmCurrentClientKey() {
+  return window.currentWsGroup || window.currentWsClient || window._wsClient || '';
+}
+
+// Use this instead, at any lookup that starts from an INDIVIDUAL subcompany key rather than
+// the currently open workspace (dashboard/notifications scan every assigned sub one at a time) --
+// resolves that sub to the same shared key lmCurrentClientKey() would give while its group's
+// workspace is open, so every sub in the same group always resolves to one identical bucket.
+function lmStorageKeyFor(subKey) {
+  var grpKey = clients[subKey] && clients[subKey].group;
+  if (grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey] && clientGroups[grpKey].groupId) return grpKey;
+  return subKey;
+}
+
+// Resolves either helper's result to where it actually persists in Supabase -- a real
+// company_groups.id for a shared group roster, or the single company's own companies.id
+// otherwise. Mirrors _calScope's identical company-vs-group split.
+function lmScope(ck) {
+  var grp = typeof clientGroups !== 'undefined' ? clientGroups[ck] : null;
+  if (grp && grp.groupId) return { type: 'group', id: grp.groupId };
+  var cli = typeof clients !== 'undefined' ? clients[ck] : null;
+  if (cli && cli.companyId) return { type: 'company', id: cli.companyId };
+  return null;
+}
+
 // Which year's roster the Leave Monitoring tab is currently viewing. Reset to the real
 // current year every time the tab is (re-)opened (see switchTab's 'ws-leave' hook) -- a
 // switch to next year's prep view or an archived year is a per-visit choice, not sticky.
@@ -15929,15 +15988,15 @@ function lmYearSwitcherHtml(ck) {
 // the established idiom here, not a new one.
 var _lmSaveTimers = {};
 function _persistLeaveMonitoringYear(ck, year) {
-  var companyId = clients[ck] && clients[ck].companyId;
-  if (!companyId) return;
-  var timerKey = companyId + ':' + year;
+  var scope = (typeof lmScope === 'function') ? lmScope(ck) : null;
+  if (!scope) return;
+  var timerKey = scope.type + ':' + scope.id + ':' + year;
   if (_lmSaveTimers[timerKey]) clearTimeout(_lmSaveTimers[timerKey]);
   _lmSaveTimers[timerKey] = setTimeout(function() {
     delete _lmSaveTimers[timerKey];
     supabaseClient.from('leave_monitoring_state').upsert({
-      company_id: companyId, year: year, data: lmGetStore(ck, year), updated_at: new Date().toISOString()
-    }, { onConflict: 'company_id,year' }).then(function(res) {
+      scope_type: scope.type, scope_id: scope.id, year: year, data: lmGetStore(ck, year), updated_at: new Date().toISOString()
+    }, { onConflict: 'scope_type,scope_id,year' }).then(function(res) {
       if (res.error) { console.warn('Could not save Leave Monitoring for ' + ck + ' / ' + year, res.error); if (typeof showToast === 'function') showToast('Could not save leave monitoring: ' + res.error.message, '#c0392b'); }
     });
   }, 800);
@@ -15970,25 +16029,30 @@ async function loadLeaveMonitoringFromSupabase() {
   var thisYear = new Date().getFullYear();
   var res = await supabaseClient.from('leave_monitoring_state').select('*').in('year', [thisYear, thisYear + 1]);
   if (res.error) { console.warn('Failed to load Leave Monitoring from Supabase', res.error); return; }
+  // Reverse-map BOTH scope types: a real multi-entity group's own id back to its clientGroups
+  // code (a shared roster), and a standalone company's id back to its short_key -- matching
+  // whichever key lmCurrentClientKey()/lmStorageKeyFor() would resolve to for that same client.
+  var groupIdToKey = {};
+  Object.keys(clientGroups || {}).forEach(function(gk) { if (clientGroups[gk].groupId) groupIdToKey[clientGroups[gk].groupId] = gk; });
   var companyIdToShortKey = {};
   Object.keys(clients || {}).forEach(function(ck) { if (clients[ck].companyId) companyIdToShortKey[clients[ck].companyId] = ck; });
   (res.data || []).forEach(function(row) {
-    var ck = companyIdToShortKey[row.company_id];
-    if (!ck) return;
-    if (!window.leaveMonitoringStore[ck]) window.leaveMonitoringStore[ck] = {};
-    window.leaveMonitoringStore[ck][row.year] = lmReviveDates(row.data || { oneYear: [], fiveYear: [], sickOneYear: [], sickFiveYear: [] });
+    var key = row.scope_type === 'group' ? groupIdToKey[row.scope_id] : companyIdToShortKey[row.scope_id];
+    if (!key) return;
+    if (!window.leaveMonitoringStore[key]) window.leaveMonitoringStore[key] = {};
+    window.leaveMonitoringStore[key][row.year] = lmReviveDates(row.data || { oneYear: [], fiveYear: [], sickOneYear: [], sickFiveYear: [] });
   });
 }
 
-// Lazy on-demand load for a single client's archived (past) years -- a simple per-company
+// Lazy on-demand load for a single client's archived (past) years -- a simple per-scope
 // filtered fetch. Called only when "Archived" is expanded for a client that hasn't had its
 // archived years loaded yet this session; cached in window._lmArchivedLoaded so re-expanding
 // doesn't refetch.
 async function lmLoadArchivedYearsForClient(ck) {
-  var companyId = clients[ck] && clients[ck].companyId;
-  if (!companyId) return;
+  var scope = (typeof lmScope === 'function') ? lmScope(ck) : null;
+  if (!scope) return;
   var res = await supabaseClient.from('leave_monitoring_state').select('*')
-    .eq('company_id', companyId).lt('year', new Date().getFullYear());
+    .eq('scope_type', scope.type).eq('scope_id', scope.id).lt('year', new Date().getFullYear());
   if (res.error) { console.warn('Could not load archived Leave Monitoring years for ' + ck, res.error); return; }
   if (!window.leaveMonitoringStore[ck]) window.leaveMonitoringStore[ck] = {};
   (res.data || []).forEach(function(row) {
@@ -16207,7 +16271,7 @@ function runLeaveMonitoring() {
     });
   }
 
-  var ck = window.currentWsClient || window._wsClient || '';
+  var ck = lmCurrentClientKey();
   var targetYear = window._lmActiveYear || new Date().getFullYear();
 
   Promise.all([readRows(window._lmFiles.emp), readRows(window._lmFiles.leave)]).then(function(results) {
@@ -16428,7 +16492,7 @@ function lmRenderUpcomingSection(ck) {
 }
 
 function renderLeaveMonitoringLive() {
-  var ck = window.currentWsClient || window._wsClient || '';
+  var ck = lmCurrentClientKey();
   var yearSwitcherEl = document.getElementById('lm-year-switcher');
   if (yearSwitcherEl) yearSwitcherEl.innerHTML = lmYearSwitcherHtml(ck);
   var mutateActionsEl = document.getElementById('lm-mutate-actions');
@@ -16438,7 +16502,7 @@ function renderLeaveMonitoringLive() {
 }
 
 function lmEditRow(category, idx, field, value) {
-  var ck = window.currentWsClient || window._wsClient || '';
+  var ck = lmCurrentClientKey();
   var store = lmGetStore(ck, window._lmActiveYear);
   var row = store[category][idx];
   if (!row) return;
@@ -16456,7 +16520,7 @@ function lmEditRow(category, idx, field, value) {
 // re-render on every keystroke would replace the input element itself, resetting focus/cursor
 // position and making it impossible to type more than one digit at a time.
 function lmEditRowLive(category, idx, field, value) {
-  var ck = window.currentWsClient || window._wsClient || '';
+  var ck = lmCurrentClientKey();
   var store = lmGetStore(ck, window._lmActiveYear);
   var row = store[category][idx];
   if (!row) return;
@@ -16490,12 +16554,14 @@ function _lmApplyDoneToggle(ck, year, category, row) {
   if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, year);
   // Only repaint the Leave Monitoring tab if it's actually showing this exact client+year right
   // now -- toggling from a notification can target a client whose workspace isn't open at all.
-  if (window.currentWsClient === ck && window._lmActiveYear === year && typeof renderLeaveMonitoringLive === 'function') renderLeaveMonitoringLive();
+  // lmCurrentClientKey() (not currentWsClient directly), since ck here is the resolved shared
+  // key and a group's currentWsClient is whichever sub happens to be active within it.
+  if ((typeof lmCurrentClientKey === 'function' ? lmCurrentClientKey() : window.currentWsClient) === ck && window._lmActiveYear === year && typeof renderLeaveMonitoringLive === 'function') renderLeaveMonitoringLive();
   if (typeof renderNotifCard === 'function') renderNotifCard();
 }
 
 function lmToggleDone(category, idx) {
-  var ck = window.currentWsClient || window._wsClient || '';
+  var ck = lmCurrentClientKey();
   var store = lmGetStore(ck, window._lmActiveYear);
   _lmApplyDoneToggle(ck, window._lmActiveYear, category, store[category] && store[category][idx]);
 }
@@ -16512,7 +16578,7 @@ function markNotifDone(notifId) {
 }
 // Confirms before actually removing a row, since this can't be undone.
 function lmConfirmRemoveRow(category, idx) {
-  var ck = window.currentWsClient || window._wsClient || '';
+  var ck = lmCurrentClientKey();
   var store = lmGetStore(ck, window._lmActiveYear);
   var row = store[category][idx];
   var who = row ? (row.lastName + ', ' + row.firstName) : 'this row';
@@ -16610,7 +16676,7 @@ function lmAddManualRowField() {
   container.appendChild(row);
 }
 function lmSubmitManualRows() {
-  var ck = window.currentWsClient || window._wsClient || '';
+  var ck = lmCurrentClientKey();
   var rowEls = document.querySelectorAll('#lm-manual-rows .lm-manual-row');
   var added = 0, skipped = 0, duplicate = 0;
   rowEls.forEach(function(rowEl) {
@@ -16634,7 +16700,7 @@ function lmSubmitManualRows() {
 }
 
 function downloadLeaveMonitoringXLSX() {
-  var ck = window.currentWsClient || window._wsClient || '';
+  var ck = lmCurrentClientKey();
   var year = window._lmActiveYear || new Date().getFullYear();
   var store = lmGetStore(ck, year);
   var clientName = currentWsReportScopeName();
@@ -16660,7 +16726,7 @@ function downloadLeaveMonitoringXLSX() {
 // import into a separate "other" Google Calendar (not your personal/work one), matching how
 // you'd already been doing this manually.
 function downloadLeaveMonitoringICS() {
-  var ck = window.currentWsClient || window._wsClient || '';
+  var ck = lmCurrentClientKey();
   var store = lmGetStore(ck, window._lmActiveYear || new Date().getFullYear());
   var clientName = currentWsReportScopeName();
 
@@ -24531,12 +24597,10 @@ function renderTKCalendar() {
   // Work anniversary transfers from Leave Credits Monitoring — shown alongside payroll
   // deadlines so nothing needs a separate calendar to track.
   if (typeof window.leaveMonitoringStore === 'object' && window.leaveMonitoringStore) {
-    var lmKeysForCal = [];
-    if (window.currentWsGroup && typeof clientGroups !== 'undefined' && clientGroups[window.currentWsGroup]) {
-      lmKeysForCal = clientGroups[window.currentWsGroup].subs || [];
-    } else if (window.currentWsClient) {
-      lmKeysForCal = [window.currentWsClient];
-    }
+    // One resolved key now that Leave Monitoring is group-scoped -- every sub in a real
+    // multi-entity group shares the same roster, so there's no need to loop each one
+    // individually (nor to dedupe) the way this used to when each sub had its own bucket.
+    var lmKeysForCal = (typeof lmCurrentClientKey === 'function' && lmCurrentClientKey()) ? [lmCurrentClientKey()] : [];
     lmKeysForCal.forEach(function(lk) {
       // Direct year-bucket lookup now that the store is year-scoped -- calYear IS the bucket
       // key, so the old getFullYear()===calYear filter on r.anniversary is redundant (kept as
