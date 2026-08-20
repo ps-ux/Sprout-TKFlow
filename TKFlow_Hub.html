@@ -23033,6 +23033,12 @@ function refreshWsDisputesBadgesAndList(key) {
   var stBgs     = {'dst-open':'#fff0f0','dst-rev':'#e8f0fe','dst-resolved':'#F3E8FF','dst-closed':'#edfae8'};
 
   var rowHtml = function(d) {
+    // Especially useful once a ticket is closed -- easy to forget a closed ticket still has a
+    // payroll-instruction line waiting to be picked up by Dispute Summary/Payroll Instructions,
+    // since closing it doesn't remove that line or need any further action visible elsewhere.
+    var piBadge = (typeof hasPiLines === 'function' && hasPiLines(d))
+      ? '<span title="Has a payroll-instruction line" style="font-size:10px;font-weight:600;background:#F3E8FF;color:#7C3AED;padding:2px 9px;border-radius:20px;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;"><i class="ti ti-cash" style="font-size:11px;"></i> Payroll</span>'
+      : '';
     return '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border,#EBEBEF);cursor:pointer;transition:background 0.12s;"'
     + ' onclick="openDisputeTicket(\'' + d.id + '\')"'
     + ' onmouseover="this.style.background=\'var(--bg-secondary,#F4F4F8)\'" onmouseout="this.style.background=\'\'">'
@@ -23044,6 +23050,7 @@ function refreshWsDisputesBadgesAndList(key) {
     + '</div></div>'
     + '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">'
     + '<span style="font-size:10px;background:var(--bg-secondary,#F4F4F8);color:var(--text-muted);padding:1px 8px;border-radius:20px;white-space:nowrap;">' + (d.cutoff||'') + ' cut-off</span>'
+    + piBadge
     + '<span style="font-size:11px;font-weight:500;padding:2px 9px;border-radius:20px;background:' + tatBgs[d.tat] + ';color:' + tatColors[d.tat] + ';white-space:nowrap;">' + d.tatLabel + '</span>'
     + '<span style="font-size:11px;font-weight:500;padding:2px 9px;border-radius:20px;background:' + stBgs[d.status] + ';color:' + stColors[d.status] + ';white-space:nowrap;">' + d.statusLabel + '</span>'
     + '</div></div>';
