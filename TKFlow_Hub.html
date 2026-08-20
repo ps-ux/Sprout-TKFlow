@@ -10592,7 +10592,7 @@ function varGroupCardHtml(g, gi) {
   return '<div id="var-group-' + gi + '" style="border:1px solid var(--border);border-radius:14px;padding:12px 14px;margin-bottom:10px;">'
     + selectHtml
     + '<div id="var-cutoffs-list-' + gi + '">' + cutoffsHtml + '</div>'
-    + '<button onclick="addVarCutoff(' + gi + ')" style="width:100%;padding:7px;border:1.5px dashed #EBEBEF;border-radius:12px;background:transparent;color:#32CE13;font-size:11px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;margin-bottom:8px;"><i class="ti ti-plus"></i> Add another cut-off</button>'
+    + '<button onclick="addVarCutoffInGroup(' + gi + ')" style="width:100%;padding:7px;border:1.5px dashed #EBEBEF;border-radius:12px;background:transparent;color:#32CE13;font-size:11px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;margin-bottom:8px;"><i class="ti ti-plus"></i> Add another cut-off</button>'
     + (varBatchGroups.length > 1 ? '<button onclick="varRemoveGroup(' + gi + ')" style="font-size:11px;color:var(--tm-600);background:none;border:none;cursor:pointer;padding:2px 0;">Remove subcompany</button>' : '')
     + '</div>';
 }
@@ -10631,7 +10631,15 @@ function varRemoveGroup(gi) {
   if (list) list.innerHTML = varBatchGroups.map(varGroupCardHtml).join('');
 }
 
-function addVarCutoff(gi) {
+// NOTE: named distinctly from addVarCutoff()/removeVarCutoff(coId) below, which serve the
+// single-client Variance flow (window.varCutoffs). This pair used to share the exact same
+// names -- last declaration in the file silently wins in JS, so calling this batch version
+// (via its onclick, which passes gi) actually ran the single-client one instead, mutating the
+// wrong array/DOM ids entirely. That's confirmed to be the actual cause of a real reported bug:
+// removing one subcompany's cut-off in the batch/consolidated upload flow could delete a
+// DIFFERENT subcompany's already-uploaded files, or make its card vanish from the screen,
+// since the wrong function ran against whatever id/index happened to collide.
+function addVarCutoffInGroup(gi) {
   var g = varBatchGroups[gi];
   if (g.cutoffs.length >= 5) {
     if (typeof showToast === 'function') showToast('Maximum 5 cut-offs supported per subcompany', '#e67e00');
@@ -10647,13 +10655,13 @@ function addVarCutoff(gi) {
       var firstCard = document.getElementById('var-co-' + g.cutoffs[0].id);
       if (firstCard && !firstCard.querySelector('button')) {
         var header = firstCard.querySelector('div');
-        if (header) header.insertAdjacentHTML('beforeend', '<button onclick="removeVarCutoff(' + gi + ',' + g.cutoffs[0].id + ')" style="font-size:11px;color:#9898a6;background:none;border:1px solid #EBEBEF;border-radius:6px;padding:2px 8px;cursor:pointer;font-family:Rubik,sans-serif;">Remove</button>');
+        if (header) header.insertAdjacentHTML('beforeend', '<button onclick="removeVarCutoffInGroup(' + gi + ',' + g.cutoffs[0].id + ')" style="font-size:11px;color:#9898a6;background:none;border:1px solid #EBEBEF;border-radius:6px;padding:2px 8px;cursor:pointer;font-family:Rubik,sans-serif;">Remove</button>');
       }
     }
   }
 }
 
-function removeVarCutoff(gi, coId) {
+function removeVarCutoffInGroup(gi, coId) {
   var g = varBatchGroups[gi];
   g.cutoffs = g.cutoffs.filter(function(c) { return c.id !== coId; });
   ['orig','aco','payreg'].forEach(function(t) { delete taskFiles['var-' + t + '-' + coId]; });
@@ -11264,7 +11272,11 @@ function buildVarCard(co, index, showRemove, gi) {
   return '<div class="var-cutoff-card" id="var-co-' + id + '" style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:14px;margin-bottom:10px;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
     + '<div style="font-size:12px;font-weight:600;color:#32CE13;">Cut-off ' + index + '</div>'
-    + (showRemove ? '<button onclick="removeVarCutoff(' + gi + ',' + id + ')" style="font-size:11px;color:#9898a6;background:none;border:1px solid #EBEBEF;border-radius:6px;padding:2px 8px;cursor:pointer;font-family:Rubik,sans-serif;">Remove</button>' : '')
+    // Shared between the batch/consolidated flow (real gi passed in) and the single-client
+    // flow (gi omitted/undefined) -- must call the matching function for whichever one this
+    // card actually belongs to, since they operate on entirely different arrays/DOM ids (see
+    // addVarCutoffInGroup/removeVarCutoffInGroup's note on the bug this used to cause).
+    + (showRemove ? '<button onclick="' + (gi !== undefined ? 'removeVarCutoffInGroup(' + gi + ',' + id + ')' : 'removeVarCutoff(' + id + ')') + '" style="font-size:11px;color:#9898a6;background:none;border:1px solid #EBEBEF;border-radius:6px;padding:2px 8px;cursor:pointer;font-family:Rubik,sans-serif;">Remove</button>' : '')
     + '</div>'
     + '<div style="margin-bottom:8px;"><label class="task-field-label">Payout date</label>'
     + '<input class="task-input" type="text" id="var-payout-' + id + '" readonly placeholder="Upload the client\u2019s calendar in Client Profile to see this" value="' + _varPayoutVal + '" style="margin-bottom:8px;background:var(--bg-secondary,#F4F4F8);color:var(--text-primary);cursor:default;"></div>'
