@@ -9401,6 +9401,32 @@ function findCurrentCalendarPeriodIdx(periods) {
 // July 9-22's own variance (which isn't even fully closed out yet). So Variance's "current"
 // period genuinely means "most recently completed," while every other task means "containing
 // today" (see findCurrentCalendarPeriodIdx above).
+// Generalized version of findCurrentCalendarPeriodIdx's "attendance window contains this date"
+// logic, but for an arbitrary date instead of always today -- findCurrentCalendarPeriodIdx/
+// findCurrentCutoffStartedIdx/findMostRecentlyCompletedPeriodIdx all hardcode `new Date()`
+// internally with no way to ask about the past, which makes them wrong for genuinely historical
+// lookups (e.g. "what cut-off was active when this ticket's email actually came in" -- see
+// dtmReceivedCutoffLabel). Falls back the same way: most recently completed period as of that
+// date, never a future one, or period 0 if nothing qualifies.
+function findCalendarPeriodIdxAsOf(periods, asOfDate) {
+  function parseAttCov(attCov, yr) {
+    var m = (attCov || '').match(/(\d{1,2})\/(\d{1,2})\s*[-–—]\s*(\d{1,2})\/(\d{1,2})/);
+    if (!m) return null;
+    return { start: new Date(yr, +m[1]-1, +m[2]), end: new Date(yr, +m[3]-1, +m[4]) };
+  }
+  var idx = periods.findIndex(function(p) {
+    var r = parseAttCov(p.attCov, p.yr);
+    return r && asOfDate >= r.start && asOfDate <= r.end;
+  });
+  if (idx >= 0) return idx;
+  var fallbackIdx = -1;
+  for (var i = 0; i < periods.length; i++) {
+    var r = parseAttCov(periods[i].attCov, periods[i].yr);
+    if (r && r.end <= asOfDate) fallbackIdx = i;
+  }
+  return fallbackIdx >= 0 ? fallbackIdx : 0;
+}
+
 function findMostRecentlyCompletedPeriodIdx(periods) {
   var now = new Date();
   function parseAttCov(attCov, yr) {
@@ -22670,12 +22696,20 @@ function dtmSaveCutoff(value) {
 // Payroll Instructions, and can be transferred). Always recomputed fresh from Email Received
 // rather than stored anywhere, so it can never drift from what Email Received actually says
 // and never gets overwritten by transferring the ticket to a different cut-off below.
+//
+// Deliberately does NOT use ticketApplicableCutoffKey -- that function (and the
+// findCurrentCutoffStartedIdx it calls) resolves against today's real date internally, with no
+// way to ask "what was current back on this other date". Reusing it here would have silently
+// shown whichever period is current *now* for any ticket older than the current cut-off,
+// instead of the period that was genuinely active when the email came in. Uses the real
+// calendar's attendance-coverage windows directly instead (findCalendarPeriodIdxAsOf).
 function dtmReceivedCutoffLabel(d) {
-  var clientObj = clients[d.client];
-  if (!clientObj) return '';
   var receivedDt = (typeof parseTATEmailTime === 'function') ? parseTATEmailTime(d.emailTime) : null;
   if (!receivedDt) return '';
-  return (typeof ticketApplicableCutoffKey === 'function') ? (ticketApplicableCutoffKey(clientObj, receivedDt) || '') : '';
+  var realPeriods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
+  if (!realPeriods.length) return '';
+  var p = realPeriods[findCalendarPeriodIdxAsOf(realPeriods, receivedDt)];
+  return p ? (p.monthName + ' ' + (p.period === 1 ? '1st' : '2nd')) : '';
 }
 
 function dtmSelectWithOtherHtml(label, fieldKey, currentValue, presetOptions, otherInputId) {
