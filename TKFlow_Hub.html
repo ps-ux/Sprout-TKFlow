@@ -590,6 +590,21 @@ function assignAvClass(shortKey, siblingClasses) {
       ensureClientTaskScaffold(existing, c.short_key);
     });
 
+    // Prune stale hardcoded-seed entries left over from before this client's real data was
+    // migrated into Supabase under a DIFFERENT short_key (the HDI group's original demo subs
+    // -- HDI_CG, HDI_EL, HDI_ADV, HDI_STF, HDI_HC, HDI_WLD -- are exactly this). companies
+    // "select *" above (RLS: authenticated read, using(true)) is already the full, unfiltered
+    // table, so any clients[] key it didn't touch has no real company behind it at all. Left
+    // alone, these ghosts are invisible to normal navigation (clientGroups.subs below is always
+    // rebuilt from real short_keys only) but still get summed into every headcount/dispute/
+    // client-count total that iterates clients{} directly -- which is exactly how Admin's
+    // total headcount ended up inflated with duplicate-looking HDI entries.
+    var realShortKeys = {};
+    (companiesRes.data || []).forEach(function(c) { realShortKeys[c.short_key] = true; });
+    Object.keys(clients).forEach(function(k) {
+      if (!realShortKeys[k]) delete clients[k];
+    });
+
     (groupsRes.data || []).forEach(function(g) {
       if (!clientGroups[g.code]) clientGroups[g.code] = { name: g.name, av: g.code, avClass: assignAvClass(g.code), subs: [], subNames: {} };
       var existingGroup = clientGroups[g.code];
