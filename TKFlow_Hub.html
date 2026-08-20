@@ -22653,6 +22653,18 @@ function dtmCutoffOptions() {
   });
 }
 
+// The single Cut-off field covers what used to be two separate ones (Cut-off + Payout
+// Cut-off) -- sets both d.cutoff (the real batch-grouping key) and d.payoutCutoff (the
+// export/report display value) together, same "one visible field, two kept-in-sync
+// properties" pattern as dtmSaveEmailTime/dateSubmitted above. The AI ticket-extraction
+// feature can still independently set d.payoutCutoff from source-ticket text (see the
+// ext.payoutCutoff handling elsewhere) -- that's unaffected, this only runs when someone
+// actually picks a cut-off from this dropdown.
+function dtmSaveCutoff(value) {
+  dtmSaveField('cutoff', value);
+  dtmSaveField('payoutCutoff', value);
+}
+
 function dtmSelectWithOtherHtml(label, fieldKey, currentValue, presetOptions, otherInputId) {
   var isPreset = presetOptions.indexOf(currentValue) >= 0;
   var selectValue = currentValue && !isPreset ? 'Others' : (currentValue || '');
@@ -22717,13 +22729,13 @@ function openDisputeTicket(id, clientContext) {
     // it continuing to tick against the live clock (see getTATClass/getTATLabel, dtmSaveRepliedAt).
     ['Replied At',          'repliedAt',     d, 'datetime'],
     ['Date of Action',     'dateAction',    d.dateAction, 'date'],
-    ['Payout Cut-off',     'payoutCutoff',  d.payoutCutoff || d.cutoff],
-    // d.cutoff (distinct from Payout Cut-off above, which is export/display-only) is what
-    // actually decides which Dispute Summary batch run this ticket counts toward -- see
-    // ticketApplicableCutoffKey/dsApplicableCutoffKey and the "Prior" badge shown when they
-    // don't match. Transferring here for a ticket that came in near a cut-off boundary and got
-    // filed under the wrong one actually moves it, rather than just relabeling a display field.
-    ['Cut-off (Dispute Summary)', 'cutoff', d, 'cutoffselect'],
+    // Single field now covering what used to be two confusingly-similar ones: this both
+    // decides which Dispute Summary batch run the ticket counts toward (d.cutoff -- see
+    // ticketApplicableCutoffKey/dsApplicableCutoffKey and the "Prior" badge) AND keeps
+    // d.payoutCutoff (the export/report display value) in sync automatically, mirroring the
+    // Email Received/Date of Submission sync pattern above. Transferring a ticket here for one
+    // that came in near a cut-off boundary and got filed under the wrong one actually moves it.
+    ['Cut-off', 'cutoff', d, 'cutoffselect'],
   ];
   document.getElementById('dtm-fields-grid').innerHTML = fieldSpecs.map(function(f) {
     if (f[3] === 'cutoffselect') {
@@ -22732,7 +22744,7 @@ function openDisputeTicket(id, clientContext) {
       var hasMatch = copts.some(function(o){ return o.value === cval; });
       return '<div style="background:var(--bg-secondary,#F4F4F8);border-radius:12px;padding:8px 12px;">'
         + '<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">' + f[0] + '</div>'
-        + '<select onchange="dtmSaveField(\'cutoff\', this.value)" style="width:100%;border:none;background:transparent;padding:0;font-size:13px;font-weight:500;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;">'
+        + '<select onchange="dtmSaveCutoff(this.value)" style="width:100%;border:none;background:transparent;padding:0;font-size:13px;font-weight:500;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;">'
         + (!hasMatch && cval ? '<option value="' + cval.replace(/"/g,'&quot;') + '" selected>' + cval + ' (not in current calendar)</option>' : '')
         + (!cval ? '<option value="" selected disabled hidden></option>' : '')
         + copts.map(function(o) { return '<option value="' + o.value.replace(/"/g,'&quot;') + '"' + (o.value === cval ? ' selected' : '') + '>' + o.label + '</option>'; }).join('')
