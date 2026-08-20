@@ -1391,7 +1391,10 @@ function signInWithGoogle() {
 
         <!-- WS Tasks -->
         <div class="tab-content" id="ws-tasks">
-          <div id="ws-tasks-period-banner" class="dm-info-banner" style="display:none;background:#e8f0fe;border:1px solid #BADCFF;border-radius:16px;padding:12px 16px;margin-bottom:14px;align-items:flex-start;gap:10px;"></div>
+          <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:14px;">
+            <div id="ws-tasks-period-banner" class="dm-info-banner" style="display:none;background:#e8f0fe;border:1px solid #BADCFF;border-radius:16px;padding:12px 16px;flex:1;align-items:flex-start;gap:10px;"></div>
+            <button onclick="manualCatchUpEverything()" title="Check every subcompany's cut-off right now and advance any whose period has closed" style="flex-shrink:0;padding:10px 14px;background:#fff;border:1px solid #EBEBEF;color:#1a1a2e;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:flex;align-items:center;gap:6px;white-space:nowrap;"><i class="ti ti-refresh"></i> Catch up everything</button>
+          </div>
           <div class="ws-card" style="margin-bottom:14px" id="ws-tasks-card1">
             <div class="ws-card-hdr"><span class="ws-card-title">Section I — Timekeeping</span></div>
             <div id="ws-tasks-section1"></div>
@@ -5502,52 +5505,9 @@ function renderDashSchedule() {
   // Build schedule from deadlines of active clients
   var items = [];
 
-  // TAT-based items from open disputes
-  allDisputes.forEach(function(d) {
-    if ((currentUser.processClients||[]).indexOf(d.client) === -1) return;
-    var emailTime = d.emailTime;
-    if (!emailTime) return;
-    if (d.status === 'dst-closed') {
-      // A ticket closed the same day it came in still belongs on today's schedule -- shown
-      // grayed out like any other finished item, instead of disappearing outright, so the
-      // day's timeline reflects what actually happened rather than just what's still open.
-      // Keyed off when it was RECEIVED, not the TAT deadline -- closed tickets have no
-      // deadline left to track.
-      var receivedDt = parseTATEmailTime(emailTime);
-      if (!receivedDt) return;
-      var receivedToday = receivedDt.getFullYear() === now.getFullYear() &&
-                           receivedDt.getMonth() === now.getMonth() &&
-                           receivedDt.getDate() === now.getDate();
-      if (!receivedToday) return;
-      items.push({
-        time: receivedDt,
-        pastEligible: true, // always show closed tickets as done, regardless of clock time
-        timeStr: receivedDt.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true}),
-        label: d.id + ' — ' + d.name,
-        sub: d.client + ' dispute — closed',
-        color: '#9898a6',
-        icon: 'ti-ticket'
-      });
-      return;
-    }
-    var deadline = getTATDeadline(emailTime);
-    if (!deadline) return;
-    var isToday = deadline.getFullYear() === now.getFullYear() &&
-                  deadline.getMonth() === now.getMonth() &&
-                  deadline.getDate() === now.getDate();
-    if (!isToday) return;
-    var tatCls = getTATClass(emailTime, d.status||'Open');
-    var col = tatCls === 'red' ? '#c0392b' : tatCls === 'yellow' ? '#e67e00' : '#32CE13';
-    items.push({
-      time: deadline,
-      pastEligible: true, // real TAT deadline time, dimming once it's passed is meaningful
-      timeStr: deadline.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true}),
-      label: d.id + ' — ' + d.name,
-      sub: d.client + ' dispute reply due',
-      color: col,
-      icon: 'ti-ticket'
-    });
-  });
+  // Ticket TAT deadlines are surfaced in the Notifications card instead (see the
+  // 'tat-breach-'/'tat-duesoon-' notifs below) -- Schedule for Today only shows calendar-based
+  // deadlines/payouts now, so TAT isn't duplicated across both cards.
 
   // ── Pull today's deadlines from each assigned client's TK calendar ─────────
   if (typeof _calStore !== 'undefined' && typeof currentUser !== 'undefined') {
@@ -9678,7 +9638,6 @@ function checkCutoffRollover(key) {
     var targetIdx = findCurrentCutoffStartedIdx(realPeriods);
     if (targetIdx <= currentIdx) return; // nothing further to catch up to
     var targetPeriod = realPeriods[targetIdx];
-    var periodsBehind = targetIdx - currentIdx;
 
     var realLabel = targetPeriod.monthName + ' ' + (targetPeriod.period === 1 ? '1st' : '2nd');
     if (clientObj.cutoff === realLabel) return; // already on the correct period
@@ -9687,19 +9646,13 @@ function checkCutoffRollover(key) {
     if (_cutoffPromptDismissedGet()[dedupeKeyReal]) return;
     _cutoffPromptDismiss(dedupeKeyReal);
 
-    var oldLabelReal = clientObj.cutoff || 'not yet set';
-    var behindMsg = periodsBehind > 1
-      ? ('You\u2019re ' + periodsBehind + ' periods behind.\n\n')
-      : '';
+    // Auto-catch-up: this used to ask "Catch up to X?" and wait for a click, but in practice
+    // that's confirmed every single time, so just advance straight to the real current period.
+    // The queue still serializes this against other subs in the same group resetting on the
+    // same Tasks-tab switch, same as it did for the confirm dialogs before.
     _queueCutoffPrompt(function(done) {
-      appConfirm(
-        'Cut-off has ended',
-        clientObj.name + '\u2019s cutoff (' + oldLabelReal + ') has ended.\n\n' +
-        behindMsg +
-        'Catch up to ' + realLabel + ' (attendance: ' + targetPeriod.attCov + ')? This will reset all task statuses to pending for this client.',
-        function() { doReset(realLabel); done(); },
-        { okLabel: 'Catch up', onCancel: done }
-      );
+      doReset(realLabel);
+      done();
     });
     return;
   }
@@ -9718,17 +9671,28 @@ function checkCutoffRollover(key) {
   if (_cutoffPromptDismissedGet()[dedupeKey]) return; // already asked about this exact period, ever
   _cutoffPromptDismiss(dedupeKey);
 
-  var oldLabel = clientObj.cutoff;
   var newLabel = formatCutoffLabel(currentRange, clientObj.payrollType);
   _queueCutoffPrompt(function(done) {
-    appConfirm(
-      'Cut-off has ended',
-      clientObj.name + '\u2019s cutoff (' + oldLabel + ') has ended.\n\n' +
-      'Start fresh for ' + newLabel + '? This will reset all task statuses to pending for this client.',
-      function() { doReset(newLabel); done(); },
-      { okLabel: 'Start fresh', onCancel: done }
-    );
+    doReset(newLabel);
+    done();
   });
+}
+
+// Manual "Catch up everything" button in the Tasks tab -- runs the exact same rollover check
+// checkCutoffRollover already runs automatically on every Tasks-tab switch, so this is mostly
+// a way to force a check on demand (e.g. right after uploading a calendar) rather than a
+// different code path. If nothing was actually behind, says so instead of doing nothing silently.
+function manualCatchUpEverything() {
+  var grp = window.currentWsGroup && typeof clientGroups !== 'undefined' && clientGroups[window.currentWsGroup];
+  var subs = (grp && grp.subs)
+    ? grp.subs.filter(function(k){ return clients[k] && !clients[k]._churned; })
+    : (window.currentWsClient ? [window.currentWsClient] : []);
+  if (!subs.length) return;
+  var before = {};
+  subs.forEach(function(sk){ before[sk] = clients[sk] && clients[sk].cutoff; });
+  subs.forEach(function(sk){ if (typeof checkCutoffRollover === 'function') checkCutoffRollover(sk); });
+  var anyChanged = subs.some(function(sk){ return clients[sk] && clients[sk].cutoff !== before[sk]; });
+  if (!anyChanged && typeof showToast === 'function') showToast('Already caught up — nothing to advance');
 }
 
 function getTaskStatus(taskKey) {
@@ -11593,7 +11557,10 @@ function runVariance(opts) {
         return widths.map(function(w) { return {wch: Math.max(8, Math.min(45, (w||0) + 2))}; });
       }
 
-      var origSheetName = sanitizeSheetName('Orig ' + payout);
+      // The Orig tab is always the PREVIOUS attendance cut-off's file, so its sheet name must
+      // use the same previous-payout label as the overall output filename (co._filenamePayout),
+      // not the current cut-off's payout date shown in the (read-only) Payout date field.
+      var origSheetName = sanitizeSheetName('Orig ' + (co._filenamePayout || payout));
       var acoSheetName   = 'ACO';
       var attSheetName   = 'Attendance';
       var amtSheetName   = 'Amt';
