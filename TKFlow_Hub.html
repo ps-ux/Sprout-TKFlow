@@ -17826,7 +17826,12 @@ function dsGenerateAll() {
         var payroll = g.payroll || [];
         var prevRows = [], currRows = [];
         payroll.forEach(function(d) {
-          var isCurrent = d.cutoff === g.applicableCutoff;
+          // Was d.cutoff === g.applicableCutoff -- completely ignored the ticket's own
+          // "Attendance Period" field (the one actually labeled "...Payroll Instructions
+          // table" and shown to the user for exactly this purpose), so setting it had no
+          // effect on this report at all. Now the one real switch for both this export and
+          // runPayrollInstructions' own table, same default-to-previous convention.
+          var isCurrent = d.attendancePeriod === 'current';
           dsPiRowsForTicket(d, useEdited).forEach(function(r) {
             (isCurrent ? currRows : prevRows).push(r);
           });
@@ -17888,7 +17893,8 @@ function dsExportXLSX() {
   var useEdited = window._dsUseEditedRemarks !== false;
   var prevRows = [], currRows = [];
   (activeGroup.payroll || []).forEach(function(d) {
-    var isCurrent = d.cutoff === activeGroup.applicableCutoff;
+    // Same fix as dsGenerateAll -- attendancePeriod, not d.cutoff vs applicableCutoff.
+    var isCurrent = d.attendancePeriod === 'current';
     dsPiRowsForTicket(d, useEdited).forEach(function(r) { (isCurrent ? currRows : prevRows).push(r); });
   });
 
