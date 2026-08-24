@@ -869,6 +869,12 @@ function assignAvClass(shortKey, siblingClasses) {
       // (currentUser, _calStore) had real data -- re-render now so the workweek widget
       // picks up the actual assigned clients and their uploaded calendars.
       if (typeof renderMiniCal === 'function') renderMiniCal();
+      // Same gap as renderMiniCal above, just never caught until now: initHub() also ran
+      // renderNotifCard() once on DOMContentLoaded, before window.leaveMonitoringStore (loaded
+      // by loadLeaveMonitoringFromSupabase, awaited earlier in this very chain) had anything in
+      // it -- so a work-anniversary notification could sit permanently stale after a reload
+      // even though Dashboard's Schedule/mini-cal (fixed here already) picked up the same data.
+      if (typeof renderNotifCard === 'function') renderNotifCard();
       if (typeof filterClientGrid === 'function') filterClientGrid();
       if (typeof startIdleTimeoutMonitor === 'function') startIdleTimeoutMonitor();
       loginOverlay.style.display = 'none';
@@ -16328,6 +16334,7 @@ function runLeaveMonitoring() {
     if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, targetYear);
     lmCloseUploadModal();
     renderLeaveMonitoringLive();
+    if (typeof _lmRefreshDashboardWidgets === 'function') _lmRefreshDashboardWidgets();
     btn.disabled = false; btn.innerHTML = '<i class="ti ti-calculator"></i> Process & Add to Monitoring';
     if (typeof showToast === 'function') showToast('Added ' + (computed.oneYearTransfers.length + computed.fiveYearTransfers.length) + ' employee(s) to monitoring');
   }).catch(function(err) {
@@ -16585,6 +16592,18 @@ function lmEditRowLive(category, idx, field, value) {
   if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, window._lmActiveYear);
 }
 
+// Dashboard's "Schedule for today"/"This workweek" and Notifications all read work-anniversary
+// data straight off window.leaveMonitoringStore, but none of them auto-refresh when that store
+// changes -- every LM mutation path (manual add, file upload, done-toggle) only ever repainted
+// the Leave Monitoring tab itself, leaving the other three widgets showing whatever they last
+// rendered until something else happened to trigger them (e.g. a reload). Called after any
+// mutation that can add/remove/complete a work-anniversary row.
+function _lmRefreshDashboardWidgets() {
+  if (typeof renderDashSchedule === 'function') renderDashSchedule();
+  if (typeof renderMiniCal === 'function') renderMiniCal();
+  if (typeof renderNotifCard === 'function') renderNotifCard();
+}
+
 // Shared by lmToggleDone (Leave Monitoring tab's own row checkbox) and markNotifDone
 // (Notifications' "Mark done" button on a work-anniversary reminder) -- both need to flip the
 // exact same row.done/doneAt and persist/re-render identically, just reached via different
@@ -16605,7 +16624,7 @@ function _lmApplyDoneToggle(ck, year, category, row) {
   // lmCurrentClientKey() (not currentWsClient directly), since ck here is the resolved shared
   // key and a group's currentWsClient is whichever sub happens to be active within it.
   if ((typeof lmCurrentClientKey === 'function' ? lmCurrentClientKey() : window.currentWsClient) === ck && window._lmActiveYear === year && typeof renderLeaveMonitoringLive === 'function') renderLeaveMonitoringLive();
-  if (typeof renderNotifCard === 'function') renderNotifCard();
+  _lmRefreshDashboardWidgets();
 }
 
 function lmToggleDone(category, idx) {
@@ -16740,6 +16759,7 @@ function lmSubmitManualRows() {
   if (added === 0 && skipped === 0 && duplicate === 0) { if (typeof showToast === 'function') showToast('Enter at least an Employee ID and hire date', '#e67e00'); return; }
   if (added && typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, window._lmActiveYear);
   renderLeaveMonitoringLive();
+  if (added && typeof _lmRefreshDashboardWidgets === 'function') _lmRefreshDashboardWidgets();
   lmCloseManualAddModal();
   var msg = added + ' employee' + (added!==1?'s':'') + ' added to monitoring';
   if (duplicate) msg += ', ' + duplicate + ' already tracked (skipped)';
