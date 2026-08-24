@@ -1436,6 +1436,7 @@ function signInWithGoogle() {
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
             <div style="font-size:13px;font-weight:500;color:var(--text-secondary);">All disputes for this client</div>
             <div style="display:flex;gap:8px;">
+              <button id="ws-disp-import-btn" onclick="openImportLegacyDisputesModal()" style="display:none;align-items:center;gap:6px;padding:8px 14px;background:var(--bg-secondary,#F4F4F8);color:var(--text-primary);border:1px solid var(--border,#EBEBEF);border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-file-import" style="font-size:13px;"></i> Import legacy tickets</button>
               <button id="ws-disp-preview-btn" onclick="openAllTicketsForClient(currentWsClient)" style="display:flex;align-items:center;gap:6px;padding:8px 14px;background:var(--bg-secondary,#F4F4F8);color:var(--text-primary);border:1px solid var(--border,#EBEBEF);border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-table" style="font-size:13px;"></i> Preview all tickets</button>
               <button id="ws-disp-log-btn" onclick="openNewDisputeTicket(currentWsClient)" style="display:flex;align-items:center;gap:6px;padding:8px 14px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-plus"></i> Log ticket</button>
             </div>
@@ -20515,6 +20516,263 @@ function toggleWsClosedDisputes(suffix) {
 </script>
 
 
+<!-- ── IMPORT LEGACY DISPUTES MODAL (one-time backfill of an old dispute tracker) ─────── -->
+<div class="log-modal" id="import-legacy-disputes-modal" style="display:none;pointer-events:none;">
+  <div class="log-modal-box" style="width:640px;max-width:92vw;">
+    <div class="log-modal-hdr">
+      <div style="font-size:15px;font-weight:600;color:var(--text-primary);">Import legacy dispute tickets</div>
+      <div onclick="closeImportLegacyDisputesModal()" style="cursor:pointer;color:var(--text-muted);font-size:20px;line-height:1;">&times;</div>
+    </div>
+    <div class="log-modal-body" style="display:flex;flex-direction:column;gap:12px;">
+      <div style="font-size:11px;color:#9898a6;">Upload an old tracker's Excel/CSV export. Every imported ticket is saved as <b>Closed</b> (historical reference only, no active TAT) — its original status, if any, is kept in the Remarks field instead of being dropped.</div>
+      <div>
+        <label class="settings-label">Import into</label>
+        <select class="task-input" id="ild-client-select" style="width:100%;margin-top:4px;"></select>
+      </div>
+      <div>
+        <label class="settings-label">Old tracker file (.xlsx, .xls, or .csv)</label>
+        <input class="task-input" type="file" id="ild-file-input" accept=".xlsx,.xls,.csv" style="width:100%;margin-top:4px;">
+      </div>
+      <button id="ild-parse-btn" onclick="ildParseFile()" style="align-self:flex-start;padding:8px 16px;border:1px solid #EBEBEF;border-radius:10px;background:#fff;color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;">Parse & preview</button>
+      <div id="ild-preview" style="display:none;"></div>
+      <div id="ild-results" style="display:none;"></div>
+    </div>
+    <div class="log-modal-ftr">
+      <button onclick="closeImportLegacyDisputesModal()" style="padding:9px 18px;border:1px solid #EBEBEF;border-radius:12px;background:#fff;color:#6b6b80;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Close</button>
+      <button id="ild-confirm-btn" onclick="ildConfirmImport()" disabled style="padding:9px 18px;border:none;border-radius:12px;background:var(--ub-500);color:#fff;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;opacity:0.5;">Import tickets</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Import legacy dispute tickets (one-time backfill of an old, pre-TKFlow tracker) ──────────
+// Every imported row is forced to status 'dst-closed' -- these are historical reference
+// records, not tickets anyone should be actively working through a live TAT countdown for.
+// getTATClass/getTATLabel already special-case a 'Closed' status to 'grey'/'TAT n/a'
+// regardless of basis time, so recomputeAllDisputeTAT() (run once via loadDisputesFromSupabase
+// after the import) normalizes this on its own -- no separate TAT math needed here.
+var ILD_FIELD_MAP = [
+  { header: 'Ticket #', key: 'ticketNo' },
+  { header: 'Employee Number', key: 'empNo' },
+  { header: 'Employee Name', key: 'empName' },
+  { header: 'Payroll Schedule', key: 'payrollSchedule' },
+  { header: 'Date of Submission', key: 'dateSubmitted' },
+  { header: 'Entity', key: 'entity' },
+  { header: 'Nature of Dispute/Request', key: 'nature' },
+  { header: 'Date/s of Dispute', key: 'disputeDates' },
+  { header: 'Full Details of Dispute/Inquiry', key: 'fullDetails' },
+  { header: 'Date of Action', key: 'dateAction' },
+  { header: 'Findings', key: 'findings' },
+  { header: 'Recommended Resolution', key: 'recommendedResolution' },
+  { header: 'Ticket Status', key: 'ticketStatus' },
+  { header: 'Payout Cut-Off Inclusion', key: 'payoutCutoff' },
+  { header: 'Amount', key: 'amount' },
+  { header: 'Update for Open Tickets', key: 'updateOpen' },
+  { header: 'Remarks', key: 'remarks' }
+];
+
+function openImportLegacyDisputesModal() {
+  var sel = document.getElementById('ild-client-select');
+  if (sel) {
+    var ck = window.currentWsClient || '';
+    var gk = Object.keys(clientGroups).find(function(g){ return (clientGroups[g].subs || [g]).indexOf(ck) >= 0; });
+    var subs = gk ? (clientGroups[gk].subs || [ck]) : (ck ? [ck] : []);
+    sel.innerHTML = subs.filter(function(sk){ return clients[sk] && !clients[sk]._churned; }).map(function(sk) {
+      return '<option value="' + sk + '"' + (sk === ck ? ' selected' : '') + '>' + _attrEsc(clients[sk].name) + '</option>';
+    }).join('');
+  }
+  var fileInput = document.getElementById('ild-file-input'); if (fileInput) fileInput.value = '';
+  var preview = document.getElementById('ild-preview'); if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
+  var results = document.getElementById('ild-results'); if (results) { results.style.display = 'none'; results.innerHTML = ''; }
+  window._ildParsedRows = null;
+  var confirmBtn = document.getElementById('ild-confirm-btn');
+  if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.style.opacity = '0.5'; confirmBtn.textContent = 'Import tickets'; }
+  var modal = document.getElementById('import-legacy-disputes-modal');
+  modal.style.display = 'flex'; modal.style.pointerEvents = 'auto';
+}
+
+function closeImportLegacyDisputesModal() {
+  var modal = document.getElementById('import-legacy-disputes-modal');
+  modal.style.display = 'none'; modal.style.pointerEvents = 'none';
+}
+
+// Matches the file's free-typed Entity text against the target client's real siblings within
+// the same group -- same resolution rule dtmSaveField already uses when someone picks a
+// Subcompany from the dropdown on a live ticket, so an imported row's client assignment
+// behaves identically to a manually-corrected one.
+function ildResolveEntity(entityText, clientKey) {
+  if (!entityText) return { matched: false, clientKey: clientKey };
+  var gk = Object.keys(clientGroups).find(function(g){ return (clientGroups[g].subs || [g]).indexOf(clientKey) >= 0; });
+  var subs = gk ? (clientGroups[gk].subs || [clientKey]) : [clientKey];
+  var norm = entityText.trim().toLowerCase();
+  var matchedKey = subs.find(function(sk){ return clients[sk] && clients[sk].name.trim().toLowerCase() === norm; });
+  return matchedKey ? { matched: true, clientKey: matchedKey } : { matched: false, clientKey: clientKey };
+}
+
+function ildParseDate(val) {
+  if (!val) return '';
+  var s = String(val).trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  var d = new Date(s);
+  if (isNaN(d.getTime())) return '';
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
+function ildParseFile() {
+  var fileInput = document.getElementById('ild-file-input');
+  var file = fileInput && fileInput.files && fileInput.files[0];
+  if (!file) { if (typeof showToast === 'function') showToast('Choose a file first', '#e67e00'); return; }
+  var clientKey = document.getElementById('ild-client-select').value;
+  if (!clientKey) { if (typeof showToast === 'function') showToast('Pick which client to import into', '#e67e00'); return; }
+
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var wb = XLSX.read(new Uint8Array(e.target.result), {type: 'array', raw: false});
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      var raw = XLSX.utils.sheet_to_json(ws, {header: 1, defval: ''});
+      if (!raw.length) { if (typeof showToast === 'function') showToast('That file has no rows', '#e67e00'); return; }
+
+      var headerRow = raw[0];
+      var colIdx = {};
+      ILD_FIELD_MAP.forEach(function(f) {
+        var target = f.header.trim().toLowerCase();
+        colIdx[f.key] = headerRow.findIndex(function(h) { return String(h||'').trim().toLowerCase() === target; });
+      });
+      var missing = ILD_FIELD_MAP.filter(function(f){ return colIdx[f.key] === -1; }).map(function(f){ return f.header; });
+
+      var mapped = [];
+      var warnings = [];
+      for (var ri = 1; ri < raw.length; ri++) {
+        var row = raw[ri];
+        if (!row || row.every(function(c){ return String(c==null?'':c).trim() === ''; })) continue;
+        var get = (function(row){ return function(key) {
+          var idx = colIdx[key];
+          return idx === -1 ? '' : String(row[idx] == null ? '' : row[idx]).trim();
+        }; })(row);
+        var ticketNo = get('ticketNo');
+        if (!ticketNo) { warnings.push('Row ' + (ri+1) + ': skipped, no Ticket #'); continue; }
+        var entityText = get('entity');
+        var resolved = ildResolveEntity(entityText, clientKey);
+        if (entityText && !resolved.matched) warnings.push('Row ' + (ri+1) + ' ("' + ticketNo + '"): Entity "' + entityText + '" doesn\'t match a known subcompany — saved as free text.');
+        var dateSubmittedRaw = get('dateSubmitted');
+        var dateSubmitted = ildParseDate(dateSubmittedRaw);
+        if (dateSubmittedRaw && !dateSubmitted) warnings.push('Row ' + (ri+1) + ' ("' + ticketNo + '"): couldn\'t read Date of Submission ("' + dateSubmittedRaw + '") — left blank.');
+        mapped.push({
+          ticketNo: ticketNo,
+          empNo: get('empNo'), empName: get('empName'),
+          payrollSchedule: get('payrollSchedule'),
+          dateSubmitted: dateSubmitted,
+          entity: entityText, resolvedClientKey: resolved.clientKey, entityMatched: resolved.matched,
+          nature: get('nature'), disputeDates: get('disputeDates'),
+          fullDetails: get('fullDetails'), dateAction: ildParseDate(get('dateAction')),
+          findings: get('findings'), recommendedResolution: get('recommendedResolution'),
+          legacyStatus: get('ticketStatus'), payoutCutoff: get('payoutCutoff'),
+          amount: get('amount'), updateOpen: get('updateOpen'), remarks: get('remarks')
+        });
+      }
+
+      if (missing.length) warnings.unshift('Columns not found in the file (left blank for every row): ' + missing.join(', '));
+      window._ildParsedRows = mapped;
+      window._ildWarnings = warnings;
+      ildRenderPreview();
+    } catch (err) {
+      console.error('Legacy dispute import parse failed:', err);
+      if (typeof showToast === 'function') showToast('Could not read that file: ' + err.message, '#c0392b');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function ildRenderPreview() {
+  var el = document.getElementById('ild-preview');
+  var confirmBtn = document.getElementById('ild-confirm-btn');
+  var rows = window._ildParsedRows || [];
+  var warnings = window._ildWarnings || [];
+  if (!el) return;
+  el.style.display = 'block';
+  var previewRows = rows.slice(0, 5);
+  var html = '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + rows.length + ' ticket' + (rows.length!==1?'s':'') + ' ready to import'
+    + (warnings.length ? ', ' + warnings.length + ' warning' + (warnings.length!==1?'s':'') : '') + '</div>';
+  if (previewRows.length) {
+    html += '<div style="overflow-x:auto;margin-top:8px;border:1px solid #EBEBEF;border-radius:10px;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
+      + '<tr style="background:#F8F8FA;"><th style="text-align:left;padding:6px 8px;">Ticket #</th><th style="text-align:left;padding:6px 8px;">Employee</th><th style="text-align:left;padding:6px 8px;">Entity</th><th style="text-align:left;padding:6px 8px;">Date submitted</th><th style="text-align:left;padding:6px 8px;">Nature</th></tr>'
+      + previewRows.map(function(r) {
+          return '<tr style="border-top:1px solid #F4F4F8;"><td style="padding:6px 8px;">' + _attrEsc(r.ticketNo) + '</td><td style="padding:6px 8px;">' + _attrEsc(r.empName) + '</td><td style="padding:6px 8px;">' + _attrEsc(r.entity) + (r.entityMatched ? '' : ' <span style="color:#e67e00;">(unmatched)</span>') + '</td><td style="padding:6px 8px;">' + _attrEsc(r.dateSubmitted) + '</td><td style="padding:6px 8px;">' + _attrEsc(r.nature) + '</td></tr>';
+        }).join('')
+      + '</table></div>'
+      + (rows.length > previewRows.length ? '<div style="font-size:10px;color:#9898a6;margin-top:4px;">+ ' + (rows.length - previewRows.length) + ' more row(s) not shown here — all will still be imported.</div>' : '');
+  }
+  if (warnings.length) {
+    html += '<div style="margin-top:8px;font-size:11px;color:#9A7B0A;background:#FFFBEA;border:1px solid #F5E6A8;border-radius:8px;padding:8px 10px;max-height:120px;overflow-y:auto;">'
+      + warnings.map(function(w){ return '<div>' + _attrEsc(w) + '</div>'; }).join('')
+      + '</div>';
+  }
+  el.innerHTML = html;
+  if (confirmBtn) {
+    confirmBtn.disabled = rows.length === 0;
+    confirmBtn.style.opacity = rows.length === 0 ? '0.5' : '1';
+    confirmBtn.textContent = 'Import ' + rows.length + ' ticket' + (rows.length!==1?'s':'');
+  }
+}
+
+// Sequential (not batched) inserts on purpose -- a single multi-row insert() is one Postgres
+// statement, so one bad row (e.g. a Ticket # that collides with something already in the
+// table) would fail the entire batch atomically. One row at a time means a bad row just gets
+// reported and skipped, and everything else still goes in.
+async function ildConfirmImport() {
+  var rows = window._ildParsedRows || [];
+  if (!rows.length) return;
+  var confirmBtn = document.getElementById('ild-confirm-btn');
+  var resultsEl = document.getElementById('ild-results');
+  if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'Importing…'; }
+  var succeeded = 0, failed = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var companyId = clients[r.resolvedClientKey] && clients[r.resolvedClientKey].companyId;
+    if (!companyId) { failed.push(r.ticketNo + ': target client has no company_id'); continue; }
+    var remarksParts = [];
+    if (r.remarks) remarksParts.push(r.remarks);
+    if (r.legacyStatus) remarksParts.push('[Legacy status: ' + r.legacyStatus + ']');
+    var row = {
+      // 'legacy_import' would be more accurate, but disputes.source has a check constraint
+      // only allowing 'manual'/'ticketing_tool' -- 'manual' fits well enough (a person ran
+      // this import), and the legacy origin is already preserved via other_remarks below.
+      id: r.ticketNo, source: 'manual',
+      company_id: companyId,
+      emp_no: r.empNo || null, emp_name: r.empName || null,
+      payroll_schedule: r.payrollSchedule || null,
+      date_submitted: r.dateSubmitted || null,
+      entity: r.entity || null, is_unrecognized_client: !r.entityMatched,
+      nature: r.nature || null,
+      dispute_dates: (r.disputeDates || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean),
+      full_details: r.fullDetails || null, date_action: r.dateAction || null,
+      findings: r.findings || null, recommended_resolution: r.recommendedResolution || null,
+      payout_cutoff: r.payoutCutoff || null, amount: r.amount || null,
+      update_open: r.updateOpen || null, other_remarks: remarksParts.join(' ') || null,
+      status: 'dst-closed', tat: 'tat-grey', tat_label: 'TAT n/a'
+    };
+    var res = await supabaseClient.from('disputes').insert(row);
+    if (res.error) failed.push(r.ticketNo + ': ' + res.error.message);
+    else succeeded++;
+  }
+  if (confirmBtn) { confirmBtn.textContent = 'Import ' + rows.length + ' tickets'; confirmBtn.disabled = false; }
+  if (resultsEl) {
+    resultsEl.style.display = 'block';
+    var html = '<div style="font-size:12px;font-weight:600;color:' + (failed.length ? '#c0392b' : '#1a7d34') + ';">' + succeeded + ' imported' + (failed.length ? ', ' + failed.length + ' failed' : '') + '</div>';
+    if (failed.length) html += '<div style="margin-top:6px;font-size:11px;color:#c0392b;max-height:140px;overflow-y:auto;">' + failed.map(function(f){ return '<div>' + _attrEsc(f) + '</div>'; }).join('') + '</div>';
+    resultsEl.innerHTML = html;
+  }
+  if (succeeded) {
+    if (typeof showToast === 'function') showToast(succeeded + ' legacy ticket' + (succeeded!==1?'s':'') + ' imported');
+    if (typeof loadDisputesFromSupabase === 'function') await loadDisputesFromSupabase();
+    if (window.currentWsClient && typeof refreshWsDisputesBadgesAndList === 'function') refreshWsDisputesBadgesAndList(window.currentWsClient);
+    if (typeof renderDisputes === 'function') renderDisputes();
+  }
+}
+</script>
+
 <!-- ADD NEW MEMBER MODAL -->
 <div class="log-modal" id="add-member-modal" style="display:none;pointer-events:none;">
   <div class="log-modal-box" style="width:560px;max-height:88vh;overflow-y:auto;">
@@ -23412,6 +23670,10 @@ function dsMetricsViewHtml(clientKey) {
 }
 
 function refreshWsDisputesBadgesAndList(key) {
+  // One-time bulk-write utility (importing an old/legacy tracker's tickets) -- admin-only,
+  // same gate the Admin page itself uses.
+  var importBtn = document.getElementById('ws-disp-import-btn');
+  if (importBtn) importBtn.style.display = (currentUser && currentUser.canServiceView) ? 'flex' : 'none';
   var wsDispEl = document.getElementById('ws-disputes-full');
   var tatColors = {'tat-red':'#c0392b','tat-yellow':'#e67e00','tat-green':'#32CE13','tat-grey':'#9898a6'};
   var tatBgs    = {'tat-red':'#fff0f0','tat-yellow':'#fff4e6','tat-green':'#edfae8','tat-grey':'#F4F4F8'};
