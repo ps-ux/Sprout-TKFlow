@@ -20673,6 +20673,22 @@ function ildParseFile() {
         });
       }
 
+      // A repeated Ticket # within the file (the actual cause of the "duplicate key" failures
+      // seen on a real run) would otherwise collide on disputes' text primary key -- rather
+      // than dropping the repeat, give it a disambiguated id and keep the original value
+      // visible via other_remarks (see ildConfirmImport) instead of silently losing that row.
+      var seenIds = {};
+      mapped.forEach(function(r) {
+        var finalId = r.ticketNo, n = 2;
+        while (seenIds[finalId]) { finalId = r.ticketNo + ' (' + n + ')'; n++; }
+        seenIds[finalId] = true;
+        if (finalId !== r.ticketNo) {
+          r.legacyTicketNoNote = r.ticketNo;
+          warnings.push('"' + r.ticketNo + '" appears more than once in this file — the repeat is saved as "' + finalId + '", with the original Ticket # kept in Remarks.');
+        }
+        r.finalId = finalId;
+      });
+
       if (missing.length) warnings.unshift('Columns not found in the file (left blank for every row): ' + missing.join(', '));
       window._ildParsedRows = mapped;
       window._ildWarnings = warnings;
@@ -20735,11 +20751,13 @@ async function ildConfirmImport() {
     var remarksParts = [];
     if (r.remarks) remarksParts.push(r.remarks);
     if (r.legacyStatus) remarksParts.push('[Legacy status: ' + r.legacyStatus + ']');
+    if (r.legacyTicketNoNote) remarksParts.push('[Original Ticket #: ' + r.legacyTicketNoNote + ']');
+    var idToUse = r.finalId || r.ticketNo;
     var row = {
       // 'legacy_import' would be more accurate, but disputes.source has a check constraint
       // only allowing 'manual'/'ticketing_tool' -- 'manual' fits well enough (a person ran
       // this import), and the legacy origin is already preserved via other_remarks below.
-      id: r.ticketNo, source: 'manual',
+      id: idToUse, source: 'manual',
       company_id: companyId,
       emp_no: r.empNo || null, emp_name: r.empName || null,
       payroll_schedule: r.payrollSchedule || null,
@@ -20754,7 +20772,16 @@ async function ildConfirmImport() {
       status: 'dst-closed', tat: 'tat-grey', tat_label: 'TAT n/a'
     };
     var res = await supabaseClient.from('disputes').insert(row);
-    if (res.error) failed.push(r.ticketNo + ': ' + res.error.message);
+    // 23505 = Postgres unique-violation. ildParseFile's dedup pass already disambiguates every
+    // repeat WITHIN this file, so this only fires if idToUse collides with a row that already
+    // existed in the table before this run (e.g. a re-run after a previous partial import) --
+    // retry once under a further-disambiguated id rather than dropping the row.
+    if (res.error && res.error.code === '23505') {
+      row.id = idToUse + ' [re-import]';
+      row.other_remarks = ('[Original Ticket #: ' + idToUse + '] ' + (row.other_remarks || '')).trim();
+      res = await supabaseClient.from('disputes').insert(row);
+    }
+    if (res.error) failed.push(idToUse + ': ' + res.error.message);
     else succeeded++;
   }
   if (confirmBtn) { confirmBtn.textContent = 'Import ' + rows.length + ' tickets'; confirmBtn.disabled = false; }
