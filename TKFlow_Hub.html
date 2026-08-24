@@ -576,6 +576,8 @@ function assignAvClass(shortKey, siblingClasses) {
       }
       existing.ticketingMode = c.ticketing_mode;
       existing.ticketingUrl = c.ticketing_url;
+      existing.mainProcessorUserId = c.main_processor_user_id || null;
+      existing.secondProcessorUserId = c.second_processor_user_id || null;
       // Churn state must round-trip through Supabase's companies.status column -- see
       // _persistCompanyStatus() -- otherwise a reload always comes back with whatever the
       // hardcoded seed/wizard default was (i.e. active), undoing any churn from before reload.
@@ -621,6 +623,8 @@ function assignAvClass(shortKey, siblingClasses) {
       // this group already has (seed hardcoded value, or the assignAvClass default just above
       // for a group with no seed entry at all).
       existingGroup.avClass = g.av_class || existingGroup.avClass || assignAvClass(g.code);
+      existingGroup.mainProcessorUserId = g.main_processor_user_id || null;
+      existingGroup.secondProcessorUserId = g.second_processor_user_id || null;
       var subs = (companiesRes.data || []).filter(function(c){ return c.group_id === g.id; });
       existingGroup.subs = subs.map(function(c){ return c.short_key; });
       existingGroup.subNames = {};
@@ -829,6 +833,7 @@ function assignAvClass(shortKey, siblingClasses) {
         if (r.companies && byType[r.relation_type]) byType[r.relation_type].push(r.companies.short_key);
       });
       currentUser = {
+        id: profile.id,
         name: profile.name,
         initials: profile.initials,
         email: profile.email,
@@ -856,6 +861,7 @@ function assignAvClass(shortKey, siblingClasses) {
       await loadLeaveMonitoringFromSupabase();
       await loadTaskRunHistoryFromSupabase();
       await loadCutoffProcessingFromSupabase();
+      await loadCutoffCoverageFromSupabase();
       if (typeof refreshUserUI === 'function') refreshUserUI();
       if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
       // updateAdminOverviewMetrics() also runs on DOMContentLoaded, before this whole load
@@ -2677,65 +2683,43 @@ function renderGroupOverview(grpKey) {
   tableWrap.appendChild(tableScroll);
   ovEl.appendChild(tableWrap);
 
-  // ── Row 2.5: Cut-off Coverage — who's processing each subcompany's current cut-off ──
+  // ── Row 2.5: Cut-off Coverage — who's actively processing this client's current cut-off ──
+  // One row per whole client (group or standalone), not per subcompany -- the Tasks tab
+  // already aggregates work across every sub, so "who's locked in" is a whole-client concept.
+  // Main/Second (below) are persistent designations set in Client Assignments; this row's
+  // dropdown is the actual hand-off action, and doubles as the rare "Third tier" escalation to
+  // someone not normally assigned to this client at all -- same mechanism, no separate UI.
   var covWrap = document.createElement('div');
   covWrap.style.cssText = 'background:#fff;border:1px solid #EBEBEF;border-radius:14px;overflow:hidden;margin-bottom:14px;';
   var covHdr = document.createElement('div');
   covHdr.style.cssText = 'padding:12px 18px;border-bottom:1px solid #EBEBEF;';
   covHdr.innerHTML = '<div style="font-size:13px;font-weight:600;color:#1a1a2e;">Cut-off coverage</div>'
-    + '<div style="font-size:11px;color:#9898a6;margin-top:2px;">Who\u2019s processing each subcompany\u2019s current cut-off \u2014 useful when assigning coverage for leave.</div>';
+    + '<div style="font-size:11px;color:#9898a6;margin-top:2px;">Who’s actively processing this cut-off — hand off here when Main can’t process it themselves.</div>';
   covWrap.appendChild(covHdr);
   var covBody = document.createElement('div');
-  var TEAM_MEMBERS = Object.values(USERS).map(function(u){ return u.name; });
-  subs.forEach(function(k) {
-    var c = clients[k];
-    var currentCutoffLabel = '\u2014';
-    var subRange = parseCutoffRange(c.cutoff);
-    if (subRange) {
-      var subCurRange = computeCurrentCutoffRange(subRange, c.payrollType);
-      var subOrdinal = cutoffPeriodOrdinal(subCurRange.startDay, c.payrollType);
-      currentCutoffLabel = subOrdinal + ' Payout \u00b7 ' + formatDateRangeLabel(subCurRange);
-    } else if (c.cutoff) {
-      currentCutoffLabel = c.cutoff; // fallback if the stored label isn't in a parseable date-range format
-    }
-    var assignedEntry = (window.cutoffCoverage && window.cutoffCoverage[k] && window.cutoffCoverage[k][currentCutoffLabel]) || null;
-    var explicitlyAssigned = assignedEntry ? (typeof assignedEntry === 'string' ? assignedEntry : assignedEntry.member) : '';
-    // Older entries may have been saved using a short name (e.g. "Zona Merto") from before
-    // this list was synced to USERS' full names ("Zona Rocelle Merto") — match those forward
-    // to the current full name so existing assignments don't silently show as Unassigned.
-    if (explicitlyAssigned && TEAM_MEMBERS.indexOf(explicitlyAssigned) === -1) {
-      var matchedFull = TEAM_MEMBERS.find(function(full) {
-        var parts = full.split(' ');
-        var shortForm = parts.length > 2 ? parts[0] + ' ' + parts[parts.length-1] : full;
-        return shortForm === explicitlyAssigned;
-      });
-      if (matchedFull) explicitlyAssigned = matchedFull;
-    }
-    // Default to whoever is actually the assigned Specialist/processor for this client, if
-    // nothing's been explicitly set yet — rather than defaulting to blank/Unassigned.
-    var defaultProcessorKey = Object.keys(USERS).find(function(uk){ return (USERS[uk].processClients||[]).indexOf(k) >= 0; });
-    var defaultProcessorName = defaultProcessorKey ? USERS[defaultProcessorKey].name : '';
-    var assigned = explicitlyAssigned || defaultProcessorName;
-    // If the person viewing this is themselves the default processor and nothing's been
-    // explicitly changed yet, their own name shows as the default value but can't be
-    // re-selected — the dropdown still shows it as "you", just disabled as a choice, so
-    // switching away and then trying to switch back to yourself isn't offered from here.
-    var viewerIsSelf = function(m) { return currentUser && m === currentUser.name; };
-    var lockSelf = defaultProcessorName && currentUser && currentUser.name === defaultProcessorName && !explicitlyAssigned;
-    var row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid #F4F4F8;flex-wrap:wrap;';
-    row.innerHTML = '<div style="flex:1;min-width:160px;"><div style="font-size:12px;font-weight:600;color:#1a1a2e;">' + c.name + '</div>'
-      + '<div style="font-size:11px;color:#9898a6;">' + currentCutoffLabel + '</div></div>'
-      + '<select style="padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;background:#fff;color:#1a1a2e;min-width:160px;" onchange="setCutoffCoverage(\'' + k + '\',\'' + currentCutoffLabel.replace(/'/g,"\\'") + '\',this.value)">'
-      + '<option value="">\u2014 Unassigned \u2014</option>'
-      + TEAM_MEMBERS.map(function(m){
-          var isSelfLocked = lockSelf && viewerIsSelf(m);
-          var label = m + (m===defaultProcessorName?' (default processor)':'') + (isSelfLocked?' \u2014 you':'');
-          return '<option value="' + m + '"' + (m===assigned?' selected':'') + (isSelfLocked?' disabled':'') + '>' + label + '</option>';
-        }).join('')
-      + '</select>';
-    covBody.appendChild(row);
-  });
+  var procScope = (typeof _procScope === 'function') ? _procScope(grpKey) : null;
+  var cutoffLabel = subs.length && typeof getCurrentCutoffLabel === 'function' ? getCurrentCutoffLabel(subs[0]) : 'Not yet set';
+  var usersById = {};
+  Object.values(USERS).forEach(function(u){ if (u.id) usersById[u.id] = u; });
+  var mainId = procScope ? procScope.obj.mainProcessorUserId : null;
+  var secondId = procScope ? procScope.obj.secondProcessorUserId : null;
+  var mainName = mainId && usersById[mainId] ? usersById[mainId].name : 'Not set';
+  var secondName = secondId && usersById[secondId] ? usersById[secondId].name : 'Not set';
+  var overrideEntry = procScope ? window._coverageStore[procScope.type + ':' + procScope.id + ':' + cutoffLabel] : null;
+  var overrideUserId = overrideEntry ? overrideEntry.coveringUserId : '';
+  var covRow = document.createElement('div');
+  covRow.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 18px;flex-wrap:wrap;';
+  covRow.innerHTML = '<div style="flex:1;min-width:200px;"><div style="font-size:12px;font-weight:600;color:#1a1a2e;">Main: ' + mainName + ' · Second: ' + secondName + '</div>'
+    + '<div style="font-size:11px;color:#9898a6;">' + cutoffLabel + '</div></div>'
+    + (procScope
+      ? '<select style="padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;background:#fff;color:#1a1a2e;min-width:180px;" onchange="setCutoffCoverage(\'' + grpKey + '\',\'' + cutoffLabel.replace(/'/g,"\\'") + '\',this.value)">'
+        + '<option value="">— Main is active —</option>'
+        + Object.values(USERS).filter(function(u){ return u.id; }).map(function(u) {
+            return '<option value="' + u.id + '"' + (u.id === overrideUserId ? ' selected' : '') + '>' + u.name + (u.id === mainId ? ' (Main)' : u.id === secondId ? ' (Second)' : '') + '</option>';
+          }).join('')
+        + '</select>'
+      : '<div style="font-size:11px;color:#9898a6;">Set up this client in Client Assignments first.</div>');
+  covBody.appendChild(covRow);
   covWrap.appendChild(covBody);
   ovEl.appendChild(covWrap);
 
@@ -3487,6 +3471,12 @@ function renderWsTasksSections(key) {
   var c = clients[key];
   if (!c) return;
 
+  // Main/Second/Third processor lock -- a client with no Main designated yet is never locked
+  // (opt-in per client, not a blanket new restriction). Cards stay fully visible either way so
+  // a locked-out viewer can still see progress for context; only the click action changes.
+  var _isLocked = (typeof canProcessCurrentCutoff === 'function') ? !canProcessCurrentCutoff(key) : false;
+  var _lockedClick = "showLockedProcessorToast('" + key + "')";
+
   const taskHTML = t => {
     var ts = taskStatus[key] && taskStatus[key][t.taskKey];
     var stCls = ts ? (ts.st==="done"?"tst-done":ts.st==="skipped"?"tst-prog":"tst-pend") : t.st;
@@ -3502,13 +3492,14 @@ function renderWsTasksSections(key) {
       }).join(' • ');
       runsBadge = '<span title="' + runsTitle + '" style="font-size:10px;color:#9898a6;background:#F4F4F8;border-radius:10px;padding:2px 7px;cursor:help;">' + runs.length + ' runs</span>';
     }
-    return "<div class=\"task-item\" style=\"cursor:pointer;\" onclick=\"openTaskRunner('" + (t.taskKey||"") + "','" + t.name + "')\">"
+    var _onclick = _isLocked ? _lockedClick : ("openTaskRunner('" + (t.taskKey||"") + "','" + t.name + "')");
+    return "<div class=\"task-item\" style=\"cursor:" + (_isLocked?'not-allowed':'pointer') + ";" + (_isLocked?'opacity:0.5;':'') + "\" onclick=\"" + _onclick + "\">"
     + "<div class=\"task-ico " + t.ico + "\"><i class=\"ti " + t.icon + "\"></i></div>"
     + "<div class=\"task-name\">" + t.name + "</div>"
     + "<div style=\"display:flex;align-items:center;gap:8px;margin-left:auto;\">"
     + runsBadge
     + "<span class=\"task-st " + stCls + "\">" + stLabel + "</span>"
-    + "<span style=\"font-size:11px;color:#1679FA;font-weight:500;\">Run →</span>"
+    + (_isLocked ? "<i class=\"ti ti-lock\" style=\"font-size:12px;color:#9898a6;\"></i>" : "<span style=\"font-size:11px;color:#1679FA;font-weight:500;\">Run →</span>")
     + "</div></div>";
   };
 
@@ -3530,7 +3521,7 @@ function renderWsTasksSections(key) {
     var label = doneCount === total ? 'Done' : (doneCount + '/' + total + ' processed');
     var barColor = doneCount === total ? 'var(--kk-500)' : (doneCount > 0 ? 'var(--ca-500)' : 'var(--n-200)');
     var pct = total ? Math.round((doneCount / total) * 100) : 0;
-    var runFn = "openTaskRunner('" + (t.taskKey||'') + "','" + t.name + "')";
+    var runFn = _isLocked ? _lockedClick : ("openTaskRunner('" + (t.taskKey||'') + "','" + t.name + "')");
     var checklist = applicableSubs.map(function(s) {
       var isDone = doneSubs.indexOf(s) >= 0;
       var subName = (clients[s] && clients[s].name) || s;
@@ -3538,12 +3529,12 @@ function renderWsTasksSections(key) {
         + '<i class="ti ' + (isDone ? 'ti-circle-check' : 'ti-circle-dashed') + '" style="font-size:12px;color:' + (isDone ? 'var(--kk-600)' : 'var(--n-300)') + ';"></i> ' + subName
         + '</div>';
     }).join('');
-    return '<div style="background:var(--bg-card,#fff);border:1px solid var(--border);border-radius:14px;padding:12px 14px;margin-bottom:6px;">'
-      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:9px;cursor:pointer;" onclick="' + runFn + '">'
+    return '<div style="background:var(--bg-card,#fff);border:1px solid var(--border);border-radius:14px;padding:12px 14px;margin-bottom:6px;' + (_isLocked?'opacity:0.5;':'') + '">'
+      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:9px;cursor:' + (_isLocked?'not-allowed':'pointer') + ';" onclick="' + runFn + '">'
       + '<div class="task-ico ' + t.ico + '"><i class="ti ' + t.icon + '"></i></div>'
       + '<div class="task-name">' + t.name + '</div>'
       + '<span class="task-st ' + cls + '" style="margin-left:auto;">' + label + '</span>'
-      + '<span style="font-size:11px;color:#1679FA;font-weight:500;">Run →</span>'
+      + (_isLocked ? '<i class="ti ti-lock" style="font-size:12px;color:#9898a6;"></i>' : '<span style="font-size:11px;color:#1679FA;font-weight:500;">Run →</span>')
       + '</div>'
       + '<div style="height:5px;background:var(--n-100);border-radius:3px;overflow:hidden;margin-bottom:10px;">'
       + '<div style="width:' + pct + '%;height:100%;background:' + barColor + ';"></div>'
@@ -6261,9 +6252,24 @@ function renderClientAssignments() {
     return specs.length ? 'Specialist: ' + specs.join(', ') : 'No specialist assigned';
   }
 
+  // Main/Second processor options are deliberately restricted to whoever's currently checked
+  // as Specialist for this group -- unlike the Group Overview coverage hand-off dropdown,
+  // which intentionally allows anyone (the rare "Third tier" case is someone NOT normally
+  // assigned to this client at all).
+  function processorOptionsFor(subKeys, selectedId) {
+    var specialistKeys = Object.keys(USERS).filter(function(uk){ return subKeys.some(function(sk){ return (USERS[uk].processClients||[]).includes(sk); }); });
+    return '<option value="">— Not set —</option>' + specialistKeys.filter(function(uk){ return USERS[uk].id; }).map(function(uk) {
+      var u = USERS[uk];
+      return '<option value="' + u.id + '"' + (u.id === selectedId ? ' selected' : '') + '>' + u.name + '</option>';
+    }).join('');
+  }
+
   container.innerHTML = groupKeys.map(function(gk) {
     var grp = clientGroups[gk];
     var subKeys = grp.subs || [gk];
+    var procScope = (typeof _procScope === 'function') ? _procScope(gk) : null;
+    var currentMainId = procScope ? procScope.obj.mainProcessorUserId : null;
+    var currentSecondId = procScope ? procScope.obj.secondProcessorUserId : null;
 
     var userRows = Object.keys(USERS).map(function(uk) {
       var u = USERS[uk];
@@ -6318,6 +6324,12 @@ function renderClientAssignments() {
       + '<div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;text-align:center;">Specialist</div>'
       + '</div>'
       + '<div data-assign-group="' + gk + '">' + userRows + '</div>'
+      + '<div style="display:grid;grid-template-columns:' + cols + ';padding:10px 14px;background:#FAFAFA;border-top:1px solid #EBEBEF;gap:10px;">'
+      + '<div><label class="settings-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.4px;">Main processor</label>'
+      + '<select id="main-proc-' + gk + '" class="task-input" style="width:100%;margin-top:4px;"' + (canEditAssignments ? '' : ' disabled') + '>' + processorOptionsFor(subKeys, currentMainId) + '</select></div>'
+      + '<div><label class="settings-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.4px;">Second processor</label>'
+      + '<select id="second-proc-' + gk + '" class="task-input" style="width:100%;margin-top:4px;"' + (canEditAssignments ? '' : ' disabled') + '>' + processorOptionsFor(subKeys, currentSecondId) + '</select></div>'
+      + '</div>'
       + '</div>'
       + '</div>';
   }).join('');
@@ -6778,6 +6790,24 @@ async function saveClientAssignment(groupKey) {
     });
     var insRes = await supabaseClient.from('user_company_relations').insert(relationRows);
     if (insRes.error) { console.warn('Could not save assignment changes', insRes.error); if (typeof showToast === 'function') showToast('Could not save assignment changes: ' + insRes.error.message, '#c0392b'); }
+  }
+
+  // Main/Second processor designations -- persisted to whichever row _procScope resolves to
+  // (a real multi-entity group's company_groups row, or the standalone client's own companies
+  // row), same group-vs-company split every other per-client-or-per-group value in this app
+  // already uses (profile_meta, av_class, etc).
+  var mainSel = document.getElementById('main-proc-' + groupKey);
+  var secondSel = document.getElementById('second-proc-' + groupKey);
+  var mainId = (mainSel && mainSel.value) || null;
+  var secondId = (secondSel && secondSel.value) || null;
+  var procScopeForSave = (typeof _procScope === 'function') ? _procScope(groupKey) : null;
+  if (procScopeForSave) {
+    procScopeForSave.obj.mainProcessorUserId = mainId;
+    procScopeForSave.obj.secondProcessorUserId = secondId;
+    var procUpdateRes = procScopeForSave.type === 'group'
+      ? await supabaseClient.from('company_groups').update({ main_processor_user_id: mainId, second_processor_user_id: secondId }).eq('id', procScopeForSave.id)
+      : await supabaseClient.from('companies').update({ main_processor_user_id: mainId, second_processor_user_id: secondId }).eq('id', procScopeForSave.id);
+    if (procUpdateRes.error) console.warn('Could not save Main/Second processor', procUpdateRes.error);
   }
 
   // Log the change to processor history if the Specialist actually changed — closes out
@@ -9587,56 +9617,63 @@ function generateCutoffOptions(clientKey) {
   return opts;
 }
 
-// ── Cut-off Coverage (per client, per cut-off) — replaces the old generic My Day
-// pass-off concept with something scoped to a specific subcompany's specific cut-off.
-// Each entry is {member, assignedBy, assignedByRole} so the admin view can show who actually
-// set it (an admin doing it on someone's behalf vs. a member setting their own coverage).
+// ── Cut-off Coverage (per client, per cut-off) — the same generic hand-off mechanism serves
+// both the ordinary Main-to-Second processor handoff and the rarer "Third tier" case (someone
+// not normally assigned to this client at all). Persists to cutoff_coverage, keyed by the
+// canonical getCurrentCutoffLabel() (not the old parseCutoffRange/computeCurrentCutoffRange
+// date-math this used to key off, which produced a different label format than the rest of
+// the app and could never correlate with anything else). One row = this person explicitly
+// overrides the designated Main processor for this client's current cut-off; no row = Main is
+// active. `key` is a clientGroups key (real or synthetic self-group), `userId` a real
+// users.id or '' to clear coverage back to Main.
 window.cutoffCoverage = window.cutoffCoverage || {};
-function setCutoffCoverage(clientKey, cutoffLabel, member) {
-  if (!window.cutoffCoverage[clientKey]) window.cutoffCoverage[clientKey] = {};
-  if (member) {
-    var actor = window.currentUser || currentUser;
-    window.cutoffCoverage[clientKey][cutoffLabel] = {
-      member: member,
+window._coverageStore = window._coverageStore || {};
+async function setCutoffCoverage(key, cutoffLabel, userId) {
+  var scope = _procScope(key);
+  if (!scope) return;
+  var subKeys = _procScopeSubKeys(key, scope);
+  var repClientKey = subKeys[0] || key;
+  if (!window.cutoffCoverage[repClientKey]) window.cutoffCoverage[repClientKey] = {};
+  var storeKey = scope.type + ':' + scope.id + ':' + cutoffLabel;
+  var actor = window.currentUser || currentUser;
+  if (userId) {
+    var coveringUser = Object.keys(USERS).map(function(uk){ return USERS[uk]; }).find(function(u){ return u.id === userId; });
+    if (!coveringUser) return;
+    window.cutoffCoverage[repClientKey][cutoffLabel] = {
+      member: coveringUser.name,
       assignedBy: actor ? actor.name : 'Unknown',
       assignedByRole: actor ? (actor.roleType === 'admin' ? 'Admin' : 'Member') : ''
     };
-    // This was previously just a display record for the Coverage Pass-Off tracker — it never
-    // actually granted the covering member real access, so they'd have no way to open the
-    // client's workspace at all despite being "assigned" to cover it. Find them in USERS by
-    // name and give them real access so they can genuinely process the cut-off.
-    //
-    // Both assignedClients AND processClients are needed: assignedClients alone gets them
-    // into the sidebar and shows calendar deadlines, but Notifications and dispute/Leave
-    // Monitoring schedule items are gated entirely on processClients — without it, they'd
-    // see the cut-off on their calendar but get zero alerts if a dispute tied to it breaches
-    // TAT, which defeats the point of a genuine coverage handoff.
-    var coveringKey = Object.keys(USERS).find(function(uk) { return USERS[uk].name === member; });
-    if (coveringKey && USERS[coveringKey]) {
-      var _cov = USERS[coveringKey];
-      if (!_cov.assignedClients.includes(clientKey)) _cov.assignedClients.push(clientKey);
-      if (!_cov.processClients) _cov.processClients = [];
-      if (!_cov.processClients.includes(clientKey)) _cov.processClients.push(clientKey);
-      if ((window.currentUser || currentUser) === _cov) {
-        if (typeof renderSidebarClients === 'function') renderSidebarClients();
-        if (typeof renderNotifCard === 'function') renderNotifCard();
-        if (typeof renderDashSchedule === 'function') renderDashSchedule();
-        if (typeof renderMiniCal === 'function') renderMiniCal();
-      }
-    }
-    if (typeof showToast === 'function') showToast(member + ' assigned to cover ' + cutoffLabel + ' for ' + ((clients[clientKey]&&clients[clientKey].name)||clientKey));
+    window._coverageStore[storeKey] = { coveringUserId: userId };
+    // This used to be just a display record for the Coverage Pass-Off tracker -- it never
+    // actually granted the covering member real access, so a true Third-tier pick (someone
+    // with no assignedClients entry for this client at all) would have no way to open the
+    // workspace despite being "assigned" to cover it. Both assignedClients AND processClients
+    // are needed: assignedClients alone gets them into the sidebar and shows calendar
+    // deadlines, but Notifications/Leave Monitoring/dispute TAT alerts are gated on
+    // processClients -- without it, they'd see the cut-off but get zero alerts.
+    _grantCoverageAccess(coveringUser, subKeys);
+    var upsertRes = await supabaseClient.from('cutoff_coverage').upsert({
+      scope_type: scope.type, scope_id: scope.id, cutoff_label: cutoffLabel,
+      covering_user_id: userId, assigned_by_user_id: actor && actor.id,
+      assigned_by_role: actor ? (actor.roleType === 'admin' ? 'Admin' : 'Member') : null
+    });
+    if (upsertRes.error) console.warn('Could not save cut-off coverage', upsertRes.error);
+    if (typeof showToast === 'function') showToast(coveringUser.name + ' assigned to cover ' + cutoffLabel + ' for ' + (scope.obj.name || key));
   } else {
-    delete window.cutoffCoverage[clientKey][cutoffLabel];
+    delete window.cutoffCoverage[repClientKey][cutoffLabel];
+    delete window._coverageStore[storeKey];
+    var delRes = await supabaseClient.from('cutoff_coverage').delete()
+      .eq('scope_type', scope.type).eq('scope_id', scope.id).eq('cutoff_label', cutoffLabel);
+    if (delRes.error) console.warn('Could not clear cut-off coverage', delRes.error);
   }
   // Keep the Admin > Coverage Pass-Off view live, regardless of which page/tab is currently
   // open — previously this only refreshed when you explicitly clicked into that tab again.
   if (typeof renderWorkspacePassoffs === 'function') renderWorkspacePassoffs();
-  // Also re-render the workspace's own Cut-off coverage dropdown -- its "disabled" state on
-  // your own name (see renderGroupOverview's lockSelf) is computed once at render time from
-  // whether anything's been explicitly assigned yet. Without refreshing here, that disabled
-  // attribute stays stuck from the very first render even after picking someone else, which
-  // is what made reselecting yourself after changing your mind look impossible.
   if (window.currentWsGroup && typeof renderGroupOverview === 'function') renderGroupOverview(window.currentWsGroup);
+  // Refresh the Tasks tab's lock state immediately, without needing a tab switch, since
+  // whoever's watching right now may have just been locked out or unlocked by this hand-off.
+  if (window.currentWsClient && typeof renderWsTasksSections === 'function') renderWsTasksSections(window.currentWsClient);
 }
 
 // Adds N working days (skipping Sat/Sun) to a date — used to give a buffer after the last
@@ -10068,6 +10105,14 @@ function markTaskOpened(clientKey, taskKey) {
 
 function openTaskRunner(taskKey, taskName) {
   if (!taskKey) return;
+  // Defense-in-depth: renderWsTasksSections already routes a locked-out click to
+  // showLockedProcessorToast instead of this function, but its onclick is inline HTML and
+  // technically triggerable from outside the rendered card.
+  var _wsKey = window.currentWsGroup || window.currentWsClient;
+  if (_wsKey && typeof canProcessCurrentCutoff === 'function' && !canProcessCurrentCutoff(_wsKey)) {
+    if (typeof showLockedProcessorToast === 'function') showLockedProcessorToast(_wsKey);
+    return;
+  }
   window._openTaskKey = taskKey;
   var modalBox = document.getElementById('task-modal-box');
   if (modalBox) modalBox.style.width = '1400px';
@@ -24774,6 +24819,125 @@ function _calScope() {
   var cli = typeof clients !== 'undefined' ? clients[key] : null;
   if (cli && cli.companyId) return { type: 'company', id: cli.companyId };
   return null;
+}
+
+// ── Main/Second/Third processor model ─────────────────────────────────────────
+// Same group-vs-standalone-company resolution as _calScope(), but returns the actual object
+// (clientGroups[key] or clients[key]) too, since callers need to read/write
+// mainProcessorUserId/secondProcessorUserId on it, not just its scope id.
+function _procScope(key) {
+  var grp = typeof clientGroups !== 'undefined' ? clientGroups[key] : null;
+  if (grp && grp.groupId) return { type: 'group', id: grp.groupId, obj: grp };
+  var cli = typeof clients !== 'undefined' ? clients[key] : null;
+  if (cli && cli.companyId) return { type: 'company', id: cli.companyId, obj: cli };
+  return null;
+}
+
+// Every subcompany a given scope covers -- a real group's every non-churned sub, or just the
+// one standalone client -- since granting/checking processor access needs to apply across the
+// whole client, not one arbitrary sub.
+function _procScopeSubKeys(key, scope) {
+  return scope.type === 'group'
+    ? (scope.obj.subs || []).filter(function(sk){ return clients[sk] && !clients[sk]._churned; })
+    : [key];
+}
+
+// Whether currentUser is allowed to open/run tasks for this client's CURRENT cut-off. Admins
+// always can (matches openWorkspace's existing admin bypass). A client with no Main processor
+// designated yet is never locked -- this is opt-in per client, not a blanket new restriction.
+// Otherwise: an explicit coverage hand-off (window._coverageStore) wins over Main; absent that,
+// Main is the only one allowed.
+function canProcessCurrentCutoff(key) {
+  var cu = window.currentUser || currentUser;
+  if (cu.roleType === 'admin') return true;
+  var scope = _procScope(key);
+  if (!scope || !scope.obj.mainProcessorUserId) return true;
+  var subKeys = _procScopeSubKeys(key, scope);
+  var cutoffLabel = (typeof getCurrentCutoffLabel === 'function') ? getCurrentCutoffLabel(subKeys[0] || key) : null;
+  var override = cutoffLabel && window._coverageStore && window._coverageStore[scope.type + ':' + scope.id + ':' + cutoffLabel];
+  var activeUserId = override ? override.coveringUserId : scope.obj.mainProcessorUserId;
+  return !!(cu.id && activeUserId && cu.id === activeUserId);
+}
+
+// Resolves who's actually the active processor right now, purely for the lock toast's message
+// -- separate from canProcessCurrentCutoff so the message can name the right person even when
+// the viewer already knows they're locked out.
+function _activeProcessorName(key) {
+  var scope = _procScope(key);
+  if (!scope) return '';
+  var subKeys = _procScopeSubKeys(key, scope);
+  var cutoffLabel = (typeof getCurrentCutoffLabel === 'function') ? getCurrentCutoffLabel(subKeys[0] || key) : null;
+  var override = cutoffLabel && window._coverageStore && window._coverageStore[scope.type + ':' + scope.id + ':' + cutoffLabel];
+  var activeUserId = override ? override.coveringUserId : scope.obj.mainProcessorUserId;
+  var activeUser = Object.keys(USERS).map(function(uk){ return USERS[uk]; }).find(function(u){ return u.id === activeUserId; });
+  return activeUser ? activeUser.name : '';
+}
+
+function showLockedProcessorToast(key) {
+  var name = _activeProcessorName(key);
+  if (typeof showToast === 'function') showToast('This client is locked to ' + (name || 'its assigned processor') + ' for the current cut-off.', '#e67e00');
+}
+
+// Shared by setCutoffCoverage (live hand-off) and loadCutoffCoverageFromSupabase (session
+// restore) -- both need to grant the covering user real workspace access across every
+// subcompany the scope covers, since a true "Third tier" pick can be someone with no
+// assignedClients entry for this client at all.
+function _grantCoverageAccess(coveringUser, subKeys) {
+  if (!coveringUser) return;
+  subKeys.forEach(function(sk) {
+    if (!coveringUser.assignedClients.includes(sk)) coveringUser.assignedClients.push(sk);
+    if (!coveringUser.processClients) coveringUser.processClients = [];
+    if (!coveringUser.processClients.includes(sk)) coveringUser.processClients.push(sk);
+  });
+  var cu = window.currentUser || currentUser;
+  if (cu && coveringUser.id && cu.id === coveringUser.id) {
+    subKeys.forEach(function(sk) {
+      if (!cu.assignedClients.includes(sk)) cu.assignedClients.push(sk);
+      if (!cu.processClients) cu.processClients = [];
+      if (!cu.processClients.includes(sk)) cu.processClients.push(sk);
+    });
+    if (typeof renderSidebarClients === 'function') renderSidebarClients();
+    if (typeof renderNotifCard === 'function') renderNotifCard();
+    if (typeof renderDashSchedule === 'function') renderDashSchedule();
+    if (typeof renderMiniCal === 'function') renderMiniCal();
+  }
+}
+
+// Loaded once at session-restore (see the main load chain) into window._coverageStore, keyed
+// 'scopeType:scopeId:cutoffLabel' -> {coveringUserId}, and also rebuilds the legacy
+// window.cutoffCoverage[repSubKey][cutoffLabel] shape renderWorkspacePassoffs() already reads,
+// and re-grants access exactly as the live setCutoffCoverage() does -- without this, a Third-
+// tier grant would evaporate (both the coverage record AND the access it grants) on reload.
+async function loadCutoffCoverageFromSupabase() {
+  var res = await supabaseClient.from('cutoff_coverage').select('*');
+  if (res.error) { console.warn('Failed to load cutoff coverage', res.error); return; }
+  window._coverageStore = {};
+  window.cutoffCoverage = window.cutoffCoverage || {};
+  var userById = {};
+  Object.keys(USERS).forEach(function(uk){ if (USERS[uk].id) userById[USERS[uk].id] = USERS[uk]; });
+  Object.keys(clientGroups).forEach(function(gk) {
+    var scope = _procScope(gk);
+    if (!scope) return;
+    var scopeRows = (res.data || []).filter(function(r){ return r.scope_type === scope.type && r.scope_id === scope.id; });
+    if (!scopeRows.length) return;
+    var subKeys = _procScopeSubKeys(gk, scope);
+    var repClientKey = subKeys[0];
+    scopeRows.forEach(function(row) {
+      window._coverageStore[scope.type + ':' + scope.id + ':' + row.cutoff_label] = { coveringUserId: row.covering_user_id };
+      var coveringUser = userById[row.covering_user_id];
+      if (!coveringUser) return;
+      _grantCoverageAccess(coveringUser, subKeys);
+      if (repClientKey) {
+        if (!window.cutoffCoverage[repClientKey]) window.cutoffCoverage[repClientKey] = {};
+        window.cutoffCoverage[repClientKey][row.cutoff_label] = {
+          member: coveringUser.name,
+          assignedBy: (userById[row.assigned_by_user_id] && userById[row.assigned_by_user_id].name) || 'Unknown',
+          assignedByRole: row.assigned_by_role || ''
+        };
+      }
+    });
+  });
+  if (typeof renderWorkspacePassoffs === 'function') renderWorkspacePassoffs();
 }
 
 // POCs meant to cover "all subcompanies" share one list per group, keyed exactly like
