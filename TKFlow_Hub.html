@@ -1092,6 +1092,7 @@ function signInWithGoogle() {
       <div class="tab" id="tab-lcv-btn" onclick="switchTab('ws-lcv')" style="display:none;"><i class="ti ti-file-check" style="font-size:14px"></i> Leave Credits Validation</div>
       <div class="tab" onclick="switchTab('ws-logs')"><i class="ti ti-clipboard-list" style="font-size:14px"></i> Ad hoc logs</div>
       <div class="tab" onclick="switchTab('ws-email')"><i class="ti ti-mail-forward" style="font-size:14px"></i> Email</div>
+      <div class="tab" onclick="switchTab('ws-notes')"><i class="ti ti-notes" style="font-size:14px"></i> Scratchpad</div>
       <div class="tab" onclick="switchTab('ws-profile')"><i class="ti ti-user" style="font-size:14px"></i> Client profile</div>
     </div>
 
@@ -1302,16 +1303,6 @@ function signInWithGoogle() {
           <div><div class="ws-name" id="ws-name"></div><div class="ws-meta" id="ws-meta"></div></div>
           <div class="ws-pills" id="ws-pills"></div>
         </div>
-
-        <!-- Scratchpad: lives outside any .tab-content panel so switchTab's per-tab show/hide
-             never touches it -- visible regardless of which tab is active, per-client (or
-             per-group), auto-saves on input with no save button. -->
-        <details id="ws-scratchpad-wrap" style="margin:0 0 16px;border:1px solid #EBEBEF;border-radius:12px;background:#FFFBEA;">
-          <summary style="padding:9px 14px;cursor:pointer;font-size:12px;font-weight:600;color:#9A7B0A;list-style:none;display:flex;align-items:center;gap:6px;user-select:none;"><i class="ti ti-note" style="font-size:14px;"></i> Scratchpad</summary>
-          <div style="padding:0 14px 12px;">
-            <textarea id="ws-scratchpad" oninput="saveClientScratchpad(this.value)" placeholder="Jot anything down for this client as you go -- nothing formal, just for you." style="width:100%;min-height:70px;border:1px solid #EBEBEF;border-radius:10px;padding:8px 10px;font-size:12px;font-family:Rubik,sans-serif;color:#1a1a2e;background:#fff;resize:vertical;box-sizing:border-box;outline:none;"></textarea>
-          </div>
-        </details>
 
         <!-- WS Overview -->
         <div class="tab-content active" id="ws-overview">
@@ -1547,6 +1538,37 @@ function signInWithGoogle() {
             <textarea id="email-body" style="width:100%;height:360px;padding:14px;border:1px solid #EBEBEF;border-radius:14px;font-size:13px;font-family:Rubik,sans-serif;color:#1a1a2e;resize:vertical;outline:none;line-height:1.8;box-sizing:border-box;" spellcheck="true"></textarea>
             <div style="font-size:11px;color:#9898a6;margin-top:6px;"><i class="ti ti-info-circle" style="font-size:12px;vertical-align:-2px;"></i> Review and edit before copying. Regenerate to reset.</div>
           </div>
+        </div>
+
+        <style>
+          .sp-note { width:220px; min-height:150px; border-radius:4px 4px 8px 8px; padding:12px 12px 8px; display:flex; flex-direction:column; box-shadow:0 3px 8px rgba(0,0,0,0.12); position:relative; transition:transform .1s; box-sizing:border-box; }
+          .sp-note:hover { transform:translateY(-2px); box-shadow:0 5px 12px rgba(0,0,0,0.16); }
+          .sp-note.sp-archived { opacity:0.55; }
+          .sp-note .sp-title, .sp-note .sp-body { background:transparent; border:none; outline:none; font-family:Rubik,sans-serif; resize:none; width:100%; box-sizing:border-box; color:#3a3410; }
+          .sp-note .sp-title { font-size:13px; font-weight:600; margin-bottom:6px; padding:0; }
+          .sp-note .sp-title::placeholder { color:#8a8460; }
+          .sp-note .sp-body { flex:1; font-size:12px; line-height:1.4; min-height:70px; }
+          .sp-note .sp-footer { display:flex; align-items:center; justify-content:space-between; margin-top:8px; padding-top:6px; border-top:1px solid rgba(0,0,0,0.1); font-size:10px; color:#6d6d55; }
+          .sp-note .sp-archive-btn { cursor:pointer; background:none; border:none; font-size:14px; color:#6d6d55; padding:2px; line-height:1; }
+          .sp-note .sp-archive-btn:hover { color:#1a1a2e; }
+          .sp-c0 { background:#FFF3A0; } .sp-c1 { background:#FFD6E8; } .sp-c2 { background:#C9F2C7; } .sp-c3 { background:#BEE3FF; } .sp-c4 { background:#FFDCB0; } .sp-c5 { background:#E3D4FF; }
+        </style>
+        <div class="tab-content" id="ws-notes">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+            <div>
+              <div style="font-size:13px;font-weight:600;color:#1a1a2e;">Scratchpad</div>
+              <div style="font-size:11px;color:#9898a6;margin-top:2px;">Quick notes for this client -- nothing formal, just for whoever's assigned here.</div>
+            </div>
+            <button onclick="spAddNote()" style="background:#32CE13;color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;"><i class="ti ti-plus" style="font-size:14px;"></i> New note</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+            <div style="position:relative;flex:1;min-width:180px;max-width:320px;">
+              <i class="ti ti-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:14px;color:#9898a6;"></i>
+              <input type="text" id="sp-search" oninput="spSetSearch(this.value)" placeholder="Search notes..." style="width:100%;border:1px solid #EBEBEF;border-radius:8px;padding:7px 10px 7px 30px;font-size:12px;font-family:Rubik,sans-serif;box-sizing:border-box;outline:none;">
+            </div>
+            <span id="sp-archived-toggle" onclick="spToggleShowArchived()" style="font-size:11px;color:#6d6d80;cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;"></span>
+          </div>
+          <div id="sp-notes-grid" style="display:flex;flex-wrap:wrap;gap:16px;"></div>
         </div>
 
         <div class="tab-content" id="ws-profile">
@@ -3308,12 +3330,17 @@ function switchTab(tab) {
   if (tab === 'ws-overview' && window.currentWsGroup && typeof renderGroupOverview === 'function') { renderGroupOverview(window.currentWsGroup); }
   if (tab === 'ws-leave')   { window._lmActiveYear = new Date().getFullYear(); setTimeout(function(){ if (typeof renderLeaveMonitoringLive === 'function') renderLeaveMonitoringLive(); }, 30); }
   if (tab === 'ws-lcv')     { setTimeout(function(){ if (typeof lcvRenderHome === 'function') lcvRenderHome(); }, 30); }
+  if (tab === 'ws-notes') {
+    window._spSearch = ''; window._spShowArchived = false;
+    var _spSearchEl = document.getElementById('sp-search'); if (_spSearchEl) _spSearchEl.value = '';
+    setTimeout(function(){ if (typeof renderScratchpadTab === 'function') renderScratchpadTab(); }, 30);
+  }
   document.querySelectorAll('.tab-content[id^="ws-"]').forEach(el => { el.classList.remove('active'); el.style.display = 'none'; });
   var tabEl = document.getElementById(tab);
   if (tabEl) { tabEl.classList.add('active'); tabEl.style.display = 'block'; }
   else { console.warn('switchTab: tab not found:', tab); return; }
   document.querySelectorAll('.tab-bar .tab').forEach((el, i) => {
-    const tabs = ['ws-overview','ws-tasks','ws-disputes','ws-leave','ws-lcv','ws-logs','ws-email','ws-profile'];
+    const tabs = ['ws-overview','ws-tasks','ws-disputes','ws-leave','ws-lcv','ws-logs','ws-email','ws-notes','ws-profile'];
     el.classList.toggle('active', tabs[i] === tab);
   });
   currentWsTab = tab;
@@ -3425,7 +3452,6 @@ function openWorkspace(key, keepSwitcher) {
   var wsMeta = document.getElementById('ws-meta'); if (wsMeta) wsMeta.textContent = c.meta;
   var wsPills = document.getElementById('ws-pills'); if (wsPills) wsPills.innerHTML =
     '<span class="ws-pill wsp-b">' + (c.cutoff) + '</span><span class="ws-pill ' + (c.statusClass === 'wsp-g' ? 'wsp-g' : 'wsp-o') + '">' + (c.status) + '</span>';
-  if (typeof renderClientScratchpad === 'function') renderClientScratchpad();
   var _el_ws_hc = document.getElementById('ws-hc'); if (_el_ws_hc) _el_ws_hc.textContent = c.hc;
   var _el_ws_absent = document.getElementById('ws-absent'); if (_el_ws_absent) _el_ws_absent.textContent = c.absent;
   // Dispute badges (ws-disp, ws-disp-sub, tab-disputes-badge) are already set group-wide by
@@ -19538,39 +19564,154 @@ function saveProfile() {
   showToast('Client profile updated');
 }
 
-// Free-form scratchpad, one per client/group -- deliberately NOT the structured Notes/Handoff
-// log in the Edit Profile modal (no date-stamping, no save button). Stored as its own
-// profileMeta.scratchpad field alongside notes/handoffLog so it doesn't clobber either, and
-// persists through the exact same scope resolution saveProfile() uses.
-function renderClientScratchpad() {
-  var el = document.getElementById('ws-scratchpad');
-  if (!el) return;
+// Scratchpad — many per-client/group sticky notes (title + body + created timestamp),
+// searchable, always sorted alphabetically by title, archivable. Lives in its own ws-notes
+// tab now instead of a widget floating above every tab. Replaces the old single free-form
+// profileMeta.scratchpad string; migrated below into a real note the first time this loads
+// for a client so nobody's existing text gets lost. Persists through the same scope
+// resolution saveProfile() and the old scratchpad used.
+window._spSearch = '';
+window._spShowArchived = false;
+window._spSaveTimers = window._spSaveTimers || {};
+
+function spGetNotes() {
   var target = epMetaTargetKey();
-  var meta = (target && target.obj.profileMeta) || {};
-  el.value = meta.scratchpad || '';
-  var wrap = document.getElementById('ws-scratchpad-wrap');
-  if (wrap) wrap.open = !!meta.scratchpad;
+  if (!target) return [];
+  if (!target.obj.profileMeta) target.obj.profileMeta = {};
+  var meta = target.obj.profileMeta;
+  if (!meta.scratchpadNotes) {
+    meta.scratchpadNotes = [];
+    if (meta.scratchpad) {
+      meta.scratchpadNotes.push({ id: 'sp' + Date.now(), title: 'Untitled note', body: meta.scratchpad, archived: false, createdAt: new Date().toISOString() });
+      meta.scratchpad = '';
+      spPersist();
+    }
+  }
+  return meta.scratchpadNotes;
 }
 
-window._scratchpadSaveTimers = window._scratchpadSaveTimers || {};
-function saveClientScratchpad(value) {
+function spPersist() {
   var target = epMetaTargetKey();
-  if (!target) return;
-  if (!target.obj.profileMeta) target.obj.profileMeta = {};
-  target.obj.profileMeta.scratchpad = value;
   var scope = typeof _calScope === 'function' ? _calScope() : null;
-  if (!scope) return;
+  if (!target || !scope) return;
   var timerKey = scope.type + ':' + scope.id;
-  if (window._scratchpadSaveTimers[timerKey]) clearTimeout(window._scratchpadSaveTimers[timerKey]);
-  window._scratchpadSaveTimers[timerKey] = setTimeout(function() {
-    delete window._scratchpadSaveTimers[timerKey];
+  if (window._spSaveTimers[timerKey]) clearTimeout(window._spSaveTimers[timerKey]);
+  window._spSaveTimers[timerKey] = setTimeout(function() {
+    delete window._spSaveTimers[timerKey];
     supabaseClient.from(scope.type === 'group' ? 'company_groups' : 'companies')
       .update({ profile_meta: target.obj.profileMeta })
       .eq('id', scope.id)
       .then(function(res) {
-        if (res.error) { console.warn('Could not save scratchpad', res.error); if (typeof showToast === 'function') showToast('Could not save note: ' + res.error.message, '#c0392b'); }
+        if (res.error) { console.warn('Could not save scratchpad note', res.error); if (typeof showToast === 'function') showToast('Could not save note: ' + res.error.message, '#c0392b'); }
       });
   }, 800);
+}
+
+function spSetSearch(value) { window._spSearch = (value || '').toLowerCase(); renderScratchpadTab(); }
+function spToggleShowArchived() { window._spShowArchived = !window._spShowArchived; renderScratchpadTab(); }
+
+function spAddNote() {
+  var notes = spGetNotes();
+  var note = { id: 'sp' + Date.now() + Math.random().toString(36).slice(2, 7), title: '', body: '', archived: false, createdAt: new Date().toISOString() };
+  notes.unshift(note);
+  spPersist();
+  renderScratchpadTab();
+  setTimeout(function() {
+    var el = document.getElementById('sp-title-' + note.id);
+    if (el) el.focus();
+  }, 30);
+}
+
+function spUpdateNote(id, field, value) {
+  var notes = spGetNotes();
+  var note = notes.filter(function(n){ return n.id === id; })[0];
+  if (!note) return;
+  note[field] = value;
+  spPersist();
+}
+
+function spArchiveNote(id, archived) {
+  var notes = spGetNotes();
+  var note = notes.filter(function(n){ return n.id === id; })[0];
+  if (!note) return;
+  note.archived = archived;
+  spPersist();
+  renderScratchpadTab();
+}
+
+function spFormatTimestamp(iso) {
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  var datePart = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  var timePart = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return datePart + ' · ' + timePart;
+}
+
+function spEscapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+var SP_COLORS = ['sp-c0','sp-c1','sp-c2','sp-c3','sp-c4','sp-c5'];
+
+function renderScratchpadTab() {
+  var grid = document.getElementById('sp-notes-grid');
+  var toggle = document.getElementById('sp-archived-toggle');
+  if (!grid) return;
+  var notes = spGetNotes();
+  var q = window._spSearch || '';
+  var matches = notes.filter(function(n) {
+    if (!q) return true;
+    return (n.title || '').toLowerCase().indexOf(q) !== -1 || (n.body || '').toLowerCase().indexOf(q) !== -1;
+  });
+  var active = matches.filter(function(n){ return !n.archived; });
+  var archived = matches.filter(function(n){ return n.archived; });
+  var sortByTitle = function(a, b) {
+    return (a.title || 'Untitled note').toLowerCase().localeCompare((b.title || 'Untitled note').toLowerCase());
+  };
+  active.sort(sortByTitle);
+  archived.sort(sortByTitle);
+
+  if (toggle) {
+    toggle.innerHTML = '<i class="ti ' + (window._spShowArchived ? 'ti-eye-off' : 'ti-archive') + '" style="font-size:13px;"></i> ' +
+      (window._spShowArchived ? 'Hide archived' : 'Show archived') + ' (' + archived.length + ')';
+  }
+
+  var shown = window._spShowArchived ? active.concat(archived) : active;
+
+  if (notes.length === 0) {
+    grid.innerHTML = '<div style="color:#9898a6;font-size:12px;padding:30px 0;width:100%;text-align:center;">No notes yet -- click "New note" to jot something down.</div>';
+    return;
+  }
+  if (shown.length === 0) {
+    grid.innerHTML = '<div style="color:#9898a6;font-size:12px;padding:30px 0;width:100%;text-align:center;">No notes match your search.</div>';
+    return;
+  }
+  grid.innerHTML = shown.map(function(n, i) {
+    var colorClass = SP_COLORS[i % SP_COLORS.length];
+    return '' +
+      '<div class="sp-note ' + colorClass + (n.archived ? ' sp-archived' : '') + '" id="sp-note-' + n.id + '">' +
+        '<input class="sp-title" id="sp-title-' + n.id + '" type="text" placeholder="Untitled note" value="' + spEscapeHtml(n.title) + '" ' +
+          'oninput="spUpdateNote(\'' + n.id + '\',\'title\',this.value)" onblur="renderScratchpadTab()">' +
+        '<textarea class="sp-body" placeholder="Jot something down...">' + spEscapeHtml(n.body) + '</textarea>' +
+        '<div class="sp-footer">' +
+          '<span>' + spFormatTimestamp(n.createdAt) + '</span>' +
+          '<button class="sp-archive-btn" title="' + (n.archived ? 'Unarchive' : 'Archive') + '" onclick="spArchiveNote(\'' + n.id + '\', ' + (!n.archived) + ')">' +
+            '<i class="ti ' + (n.archived ? 'ti-arrow-back-up' : 'ti-archive') + '"></i>' +
+          '</button>' +
+        '</div>' +
+      '</div>';
+  }).join('');
+
+  // Wire the body textarea's oninput after insertion instead of inline in the template above
+  // -- its value is set via innerHTML text content, not an attribute, so there's no quote-
+  // escaping hazard in doing this one via addEventListener instead of an inline handler.
+  shown.forEach(function(n) {
+    var noteEl = document.getElementById('sp-note-' + n.id);
+    var bodyEl = noteEl && noteEl.querySelector('.sp-body');
+    if (bodyEl) bodyEl.oninput = function() { spUpdateNote(n.id, 'body', this.value); };
+  });
 }
 
 // renderClientCards — filters out churned clients. (This used to be an "override" of an
