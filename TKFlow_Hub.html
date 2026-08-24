@@ -3474,8 +3474,15 @@ function renderWsTasksSections(key) {
   // Main/Second/Third processor lock -- a client with no Main designated yet is never locked
   // (opt-in per client, not a blanket new restriction). Cards stay fully visible either way so
   // a locked-out viewer can still see progress for context; only the click action changes.
-  var _isLocked = (typeof canProcessCurrentCutoff === 'function') ? !canProcessCurrentCutoff(key) : false;
-  var _lockedClick = "showLockedProcessorToast('" + key + "')";
+  // Must resolve via window.currentWsGroup (the group code, e.g. "KN"), not the bare `key`
+  // param (a specific sub's own short_key, e.g. "KNI") -- Main/Second for a real multi-entity
+  // group live on the GROUP's company_groups row, not any one sub's own companies row, and
+  // _procScope("KNI") would otherwise silently resolve to KNI's own (never-set) company scope
+  // instead of KN's group scope, so nobody would ever get locked for a grouped client. Matches
+  // the same window.currentWsGroup-first resolution openTaskRunner's guard already uses.
+  var _procKey = window.currentWsGroup || key;
+  var _isLocked = (typeof canProcessCurrentCutoff === 'function') ? !canProcessCurrentCutoff(_procKey) : false;
+  var _lockedClick = "showLockedProcessorToast('" + _procKey + "')";
 
   const taskHTML = t => {
     var ts = taskStatus[key] && taskStatus[key][t.taskKey];
