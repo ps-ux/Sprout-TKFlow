@@ -5996,7 +5996,10 @@ function renderNotifCard() {
   // the single exact calculated day, so an unactioned reminder from yesterday just silently
   // stopped generating today instead of carrying over as still-pending work. A row marked
   // done keeps showing (as completed) only through the rest of the day it was marked, via
-  // lmToggleDone's doneAt stamp, then stops generating entirely from the next day on.
+  // lmToggleDone's doneAt stamp, then stops generating entirely from the next day on -- but
+  // only once it's actually due; marking one done well ahead of its real anniversary (e.g.
+  // Christoph Cluever, anniversary Oct 1, checked off weeks early) shouldn't surface a "done"
+  // recap before that date ever arrives.
   var todayForLM = new Date(); todayForLM.setHours(0,0,0,0);
   var todayISOForLM = todayForLM.getFullYear() + '-' + String(todayForLM.getMonth()+1).padStart(2,'0') + '-' + String(todayForLM.getDate()).padStart(2,'0');
   var seenLMClients = {};
@@ -6012,10 +6015,13 @@ function renderNotifCard() {
     ['oneYear','fiveYear'].forEach(function(category) {
       (lmStore[category] || []).forEach(function(r) {
       if (!r.anniversary) return;
-      if (r.done) { if (r.doneAt !== todayISOForLM) return; }
       // Raw sub key (ck), not lmKey -- see the "due today" block above for why.
       var reminderDate = lastWorkingDayOnOrBefore(r.anniversary, ck);
-      if (!r.done && reminderDate.getTime() > todayForLM.getTime()) return;
+      // Gate on the real due date first, done or not -- otherwise a transfer marked done
+      // ahead of its actual anniversary would still flash a "done" recap before it was ever
+      // really due (see the comment above this block).
+      if (reminderDate.getTime() > todayForLM.getTime()) return;
+      if (r.done) { if (r.doneAt !== todayISOForLM) return; }
       var isEarly = reminderDate.getTime() !== new Date(r.anniversary.getFullYear(), r.anniversary.getMonth(), r.anniversary.getDate()).getTime();
       var overdueDays = Math.round((todayForLM - reminderDate) / 86400000);
       var transferLabel = r.yearsOfService ? (r.yearsOfService + 'yr transfer') : '1yr transfer';
