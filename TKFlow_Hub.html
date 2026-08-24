@@ -13008,7 +13008,7 @@ function tkBuildManualRemark(detRow, dayBios, hasApp, appType, forceFlag) {
     // "No Logs" even when the Biologs tab actually had a one-sided IN/OUT punch for the day,
     // where the automatic scan would have said "Missing IN/OUT Log" for identical data.
     if (typeof window._tkDeriveRemark === 'function') {
-      return { remark: window._tkDeriveRemark(biologs, dayBios || [], hasApp, appType), isHalfDay: false };
+      return { remark: window._tkDeriveRemark(biologs, dayBios || [], hasApp, appType, detRow.shift || ''), isHalfDay: false };
     }
     return { remark: 'No Logs; ' + appSuffix, isHalfDay: false };
   }
@@ -13031,7 +13031,7 @@ function tkBuildManualRemark(detRow, dayBios, hasApp, appType, forceFlag) {
     return { remark: 'Half Day Absent — manually flagged' + (hasApp ? '; Has ' + appType : '; No Pending Application'), isHalfDay: true };
   }
   if (typeof window._tkDeriveRemark === 'function') {
-    return { remark: window._tkDeriveRemark(biologs, dayBios || [], hasApp, appType), isHalfDay: false };
+    return { remark: window._tkDeriveRemark(biologs, dayBios || [], hasApp, appType, detRow.shift || ''), isHalfDay: false };
   }
   return { remark: appSuffix, isHalfDay: false };
 }
@@ -14615,15 +14615,59 @@ function runValidation(opts) {
   // That's a wrong filing (the COA should have covered the OUT gap instead), confirmed by the
   // user against real cases. Appends a note to the remark when detected; leaves it unchanged
   // otherwise (including when there's no Notes column data to check at all).
-  function tkAppendCoaMismatchNote(remark, bioEntries) {
+  //
+  // Pulls a single time-of-day (minutes since midnight) out of a biolog entry's logTime, which
+  // may have a date prefix (e.g. "Aug 5 10:35AM") -- same loose match the Biolog Entries panel
+  // uses, just re-declared here since that panel's helper lives in a different closure.
+  function coaEntryClock(logTime) {
+    var m = String(logTime || '').match(/(\d{1,2}):(\d{2})\s*([AP]M)/i);
+    if (!m) return null;
+    var h = parseInt(m[1], 10), mn = parseInt(m[2], 10), ap = m[3].toUpperCase();
+    if (ap === 'PM' && h !== 12) h += 12;
+    if (ap === 'AM' && h === 12) h = 0;
+    return h * 60 + mn;
+  }
+  // Confirmed by the user: some COA filings are just an AM/PM mix-up on the person's part --
+  // e.g. an IN COA logged at 6 PM against an 8 AM shift start, or an OUT COA at 7 PM against a
+  // shift that doesn't run anywhere near there. Only flags when the as-filed time is genuinely
+  // far from where its own claimed direction should land (>4 hrs) AND flipping AM/PM would
+  // land it convincingly closer (>2 hrs nearer) -- both together keep this narrow to the
+  // AM/PM-mixup case specifically, rather than also catching a legitimately unusual COA time.
+  function coaMismatchReason(coaEntry, shiftStr) {
+    var shift = parseShiftRange(shiftStr);
+    if (!shift || !coaEntry) return null;
+    var clock = coaEntryClock(coaEntry.logTime);
+    if (clock === null) return null;
+    var mode = (coaEntry.mode || '').toLowerCase();
+    var target = mode === 'in' ? shift.start : (mode === 'out' ? shift.end : null);
+    if (target === null) return null;
+    function dist(a, b) { var d = Math.abs(a - b) % 1440; return Math.min(d, 1440 - d); }
+    var actualDist = dist(clock, target);
+    var flippedDist = dist((clock + 720) % 1440, target); // AM/PM flip = +/- 12 hours
+    if (actualDist > 240 && flippedDist < actualDist - 120) {
+      var cleanTime = String(coaEntry.logTime || '').replace(/\d{4}/, '').replace(/\s+/g, ' ').trim();
+      return 'has pending COA but seems unmatched with the shift schedule (' + cleanTime + ' logged as ' + mode.toUpperCase() + ' — possible AM/PM mix-up)';
+    }
+    return null;
+  }
+  function tkAppendCoaMismatchNote(remark, bioEntries, shiftStr) {
     if (!remark || !bioEntries || !bioEntries.length) return remark;
     var missingDir = /^Missing IN Log/i.test(remark) ? 'in' : (/^Missing OUT Log/i.test(remark) ? 'out' : null);
-    if (!missingDir) return remark;
-    var oppositeDir = missingDir === 'in' ? 'out' : 'in';
-    var coaForOpposite = bioEntries.some(function(b){ return b.isCOA && (b.mode||'').toLowerCase() === oppositeDir; });
-    var genuineForOpposite = bioEntries.some(function(b){ return !b.isCOA && (b.mode||'').toLowerCase() === oppositeDir; });
-    if (coaForOpposite && genuineForOpposite) {
-      return remark + '; ' + missingDir.toUpperCase() + ' log not included in approved COA application';
+    if (missingDir) {
+      var oppositeDir = missingDir === 'in' ? 'out' : 'in';
+      var coaForOpposite = bioEntries.some(function(b){ return b.isCOA && (b.mode||'').toLowerCase() === oppositeDir; });
+      var genuineForOpposite = bioEntries.some(function(b){ return !b.isCOA && (b.mode||'').toLowerCase() === oppositeDir; });
+      if (coaForOpposite && genuineForOpposite) {
+        remark = remark + '; ' + missingDir.toUpperCase() + ' log not included in approved COA application';
+      }
+    }
+    // Broader check the narrow one above doesn't catch: a single COA punch whose own time
+    // doesn't plausibly match its claimed direction at all (not "there's a competing genuine
+    // punch," just "this COA's time makes no sense on its own").
+    var coaEntries = bioEntries.filter(function(b){ return b.isCOA; });
+    for (var ci = 0; ci < coaEntries.length; ci++) {
+      var mismatchReason = coaMismatchReason(coaEntries[ci], shiftStr);
+      if (mismatchReason) { remark = remark + '; ' + mismatchReason; break; }
     }
     return remark;
   }
@@ -14644,8 +14688,8 @@ function runValidation(opts) {
   // this logic. Safe to rely on: the review UI these two functions operate on only exists
   // after runValidation has already run at least once.
   window._tkDetectHalfDay = detectHalfDay;
-  window._tkDeriveRemark = function(biologs, bioEntries, hasApp, appType) {
-    return tkAppendCoaMismatchNote(deriveRemark(biologs, bioEntries, hasApp, appType), bioEntries);
+  window._tkDeriveRemark = function(biologs, bioEntries, hasApp, appType, shiftStr) {
+    return tkAppendCoaMismatchNote(deriveRemark(biologs, bioEntries, hasApp, appType), bioEntries, shiftStr);
   };
 
   function readFile(file) {
@@ -15071,7 +15115,7 @@ function runValidation(opts) {
         var halfDayLabel = isHalfDayAbsent ? ({ morning: 'Late IN', afternoon: 'Early OUT' }[halfDayResult.half] || 'Half Day Absent') : '';
         var remark = isHalfDayAbsent
           ? halfDayLabel + ' \u2014 ' + halfDayResult.reason + (hasApp ? '; Has ' + appType : '; No Pending Application')
-          : tkAppendCoaMismatchNote(deriveRemark(biologs, dayBios, hasApp, appType), dayBios);
+          : tkAppendCoaMismatchNote(deriveRemark(biologs, dayBios, hasApp, appType), dayBios, shift);
 
         // Get matched applications for this date
         var matchedApps = (appsByEmp[_curKey]||[]).filter(function(a){
