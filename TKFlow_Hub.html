@@ -1541,17 +1541,22 @@ function signInWithGoogle() {
         </div>
 
         <style>
-          .sp-note { width:220px; min-height:150px; border-radius:4px 4px 8px 8px; padding:12px 12px 8px; display:flex; flex-direction:column; box-shadow:0 3px 8px rgba(0,0,0,0.12); position:relative; transition:transform .1s; box-sizing:border-box; }
+          .sp-note { width:260px; min-height:210px; border-radius:4px 4px 8px 8px; padding:14px 14px 8px; display:flex; flex-direction:column; box-shadow:0 3px 8px rgba(0,0,0,0.12); position:relative; transition:transform .1s; box-sizing:border-box; }
           .sp-note:hover { transform:translateY(-2px); box-shadow:0 5px 12px rgba(0,0,0,0.16); }
           .sp-note.sp-archived { opacity:0.55; }
           .sp-note .sp-title, .sp-note .sp-body { background:transparent; border:none; outline:none; font-family:Rubik,sans-serif; resize:none; width:100%; box-sizing:border-box; color:#3a3410; }
-          .sp-note .sp-title { font-size:13px; font-weight:600; margin-bottom:6px; padding:0; }
+          .sp-note .sp-title { font-size:14px; font-weight:600; margin-bottom:6px; padding:0; }
           .sp-note .sp-title::placeholder { color:#8a8460; }
-          .sp-note .sp-body { flex:1; font-size:12px; line-height:1.4; min-height:70px; }
-          .sp-note .sp-footer { display:flex; align-items:center; justify-content:space-between; margin-top:8px; padding-top:6px; border-top:1px solid rgba(0,0,0,0.1); font-size:10px; color:#6d6d55; }
-          .sp-note .sp-archive-btn { cursor:pointer; background:none; border:none; font-size:14px; color:#6d6d55; padding:2px; line-height:1; }
-          .sp-note .sp-archive-btn:hover { color:#1a1a2e; }
+          .sp-note .sp-body { flex:1; font-size:12px; line-height:1.4; min-height:120px; }
+          .sp-note .sp-footer { display:flex; align-items:center; justify-content:space-between; margin-top:8px; padding-top:6px; border-top:1px solid rgba(0,0,0,0.1); font-size:10px; color:#6d6d55; gap:8px; }
+          .sp-note .sp-footer-actions { display:flex; align-items:center; gap:6px; flex-shrink:0; }
+          .sp-note .sp-icon-btn { cursor:pointer; background:none; border:none; font-size:14px; color:#6d6d55; padding:2px; line-height:1; }
+          .sp-note .sp-icon-btn:hover { color:#1a1a2e; }
           .sp-c0 { background:#FFF3A0; } .sp-c1 { background:#FFD6E8; } .sp-c2 { background:#C9F2C7; } .sp-c3 { background:#BEE3FF; } .sp-c4 { background:#FFDCB0; } .sp-c5 { background:#E3D4FF; }
+          .sp-zoom-card { box-shadow:0 24px 64px rgba(0,0,0,0.35) !important; border-radius:8px 8px 14px 14px !important; }
+          .sp-zoom-card:hover { transform:none !important; }
+          .sp-zoom-card .sp-title { font-size:18px; margin-bottom:10px; }
+          .sp-zoom-card .sp-body { font-size:14px; line-height:1.6; min-height:0; }
         </style>
         <div class="tab-content" id="ws-notes">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
@@ -19152,6 +19157,24 @@ function searchInDoc() {
   </div>
 </div>
 
+<!-- Scratchpad zoom -- expands one sticky note (same colors/fields) into a large, still-
+     editable view for notes with a lot of content instead of scrolling a tiny card. -->
+<div id="sp-zoom-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:3000;align-items:center;justify-content:center;backdrop-filter:blur(2px);pointer-events:none;">
+  <div class="sp-note sp-zoom-card" id="sp-zoom-card" style="width:560px;max-width:90vw;height:64vh;max-height:620px;padding:22px 24px 14px;">
+    <div style="display:flex;align-items:flex-start;gap:10px;">
+      <input class="sp-title" id="sp-zoom-title" type="text" placeholder="Untitled note" style="flex:1;" oninput="spZoomInput('title', this.value)">
+      <div onclick="spCloseZoom()" style="width:28px;height:28px;border-radius:10px;border:1px solid rgba(0,0,0,0.15);display:flex;align-items:center;justify-content:center;cursor:pointer;color:#6d6d55;font-size:15px;flex-shrink:0;"><i class="ti ti-x"></i></div>
+    </div>
+    <textarea class="sp-body" id="sp-zoom-body" placeholder="Jot something down..." oninput="spZoomInput('body', this.value)"></textarea>
+    <div class="sp-footer">
+      <span id="sp-zoom-timestamp"></span>
+      <div class="sp-footer-actions">
+        <button class="sp-icon-btn" id="sp-zoom-archive-btn" onclick="spZoomToggleArchive()"><i class="ti ti-archive"></i></button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── Client profile ──────────────────────────────────────────────────────────
 
@@ -19667,11 +19690,13 @@ function renderScratchpadTab() {
   });
   var active = matches.filter(function(n){ return !n.archived; });
   var archived = matches.filter(function(n){ return n.archived; });
-  var sortByTitle = function(a, b) {
-    return (a.title || 'Untitled note').toLowerCase().localeCompare((b.title || 'Untitled note').toLowerCase());
+  // Newest first -- date/time of creation, not title (title sorting made notes jump around
+  // the grid mid-edit since renaming a note changed where it landed alphabetically).
+  var sortByDate = function(a, b) {
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   };
-  active.sort(sortByTitle);
-  archived.sort(sortByTitle);
+  active.sort(sortByDate);
+  archived.sort(sortByDate);
 
   if (toggle) {
     toggle.innerHTML = '<i class="ti ' + (window._spShowArchived ? 'ti-eye-off' : 'ti-archive') + '" style="font-size:13px;"></i> ' +
@@ -19693,13 +19718,16 @@ function renderScratchpadTab() {
     return '' +
       '<div class="sp-note ' + colorClass + (n.archived ? ' sp-archived' : '') + '" id="sp-note-' + n.id + '">' +
         '<input class="sp-title" id="sp-title-' + n.id + '" type="text" placeholder="Untitled note" value="' + spEscapeHtml(n.title) + '" ' +
-          'oninput="spUpdateNote(\'' + n.id + '\',\'title\',this.value)" onblur="renderScratchpadTab()">' +
+          'oninput="spUpdateNote(\'' + n.id + '\',\'title\',this.value)">' +
         '<textarea class="sp-body" placeholder="Jot something down...">' + spEscapeHtml(n.body) + '</textarea>' +
         '<div class="sp-footer">' +
           '<span>' + spFormatTimestamp(n.createdAt) + '</span>' +
-          '<button class="sp-archive-btn" title="' + (n.archived ? 'Unarchive' : 'Archive') + '" onclick="spArchiveNote(\'' + n.id + '\', ' + (!n.archived) + ')">' +
-            '<i class="ti ' + (n.archived ? 'ti-arrow-back-up' : 'ti-archive') + '"></i>' +
-          '</button>' +
+          '<div class="sp-footer-actions">' +
+            '<button class="sp-icon-btn" title="Expand" onclick="spOpenZoom(\'' + n.id + '\')"><i class="ti ti-arrows-diagonal"></i></button>' +
+            '<button class="sp-icon-btn" title="' + (n.archived ? 'Unarchive' : 'Archive') + '" onclick="spArchiveNote(\'' + n.id + '\', ' + (!n.archived) + ')">' +
+              '<i class="ti ' + (n.archived ? 'ti-arrow-back-up' : 'ti-archive') + '"></i>' +
+            '</button>' +
+          '</div>' +
         '</div>' +
       '</div>';
   }).join('');
@@ -19712,6 +19740,53 @@ function renderScratchpadTab() {
     var bodyEl = noteEl && noteEl.querySelector('.sp-body');
     if (bodyEl) bodyEl.oninput = function() { spUpdateNote(n.id, 'body', this.value); };
   });
+}
+
+// Zoom: expands one note into a large, still-editable overlay for notes with a lot of
+// content instead of scrolling a 260px-wide card. Edits inside the modal write through the
+// same spUpdateNote()/spPersist() path as the grid card; the grid itself only re-renders on
+// close, so a note's position in the (now date-sorted) grid doesn't jump while it's open.
+window._spZoomId = null;
+
+function spOpenZoom(id) {
+  var note = spGetNotes().filter(function(n){ return n.id === id; })[0];
+  if (!note) return;
+  window._spZoomId = id;
+  document.getElementById('sp-zoom-title').value = note.title || '';
+  document.getElementById('sp-zoom-body').value = note.body || '';
+  document.getElementById('sp-zoom-timestamp').textContent = spFormatTimestamp(note.createdAt);
+  var archiveBtn = document.getElementById('sp-zoom-archive-btn');
+  if (archiveBtn) {
+    archiveBtn.title = note.archived ? 'Unarchive' : 'Archive';
+    archiveBtn.innerHTML = '<i class="ti ' + (note.archived ? 'ti-arrow-back-up' : 'ti-archive') + '"></i>';
+  }
+  var card = document.getElementById('sp-zoom-card');
+  var sourceEl = document.getElementById('sp-note-' + id);
+  var colorClass = (sourceEl && SP_COLORS.filter(function(c){ return sourceEl.classList.contains(c); })[0]) || SP_COLORS[0];
+  card.className = 'sp-note sp-zoom-card ' + colorClass;
+  var modal = document.getElementById('sp-zoom-modal');
+  modal.style.display = 'flex'; modal.style.pointerEvents = 'auto';
+  setTimeout(function(){ document.getElementById('sp-zoom-title').focus(); }, 30);
+}
+
+function spZoomInput(field, value) {
+  if (!window._spZoomId) return;
+  spUpdateNote(window._spZoomId, field, value);
+}
+
+function spZoomToggleArchive() {
+  if (!window._spZoomId) return;
+  var note = spGetNotes().filter(function(n){ return n.id === window._spZoomId; })[0];
+  if (!note) return;
+  spArchiveNote(note.id, !note.archived);
+  spCloseZoom();
+}
+
+function spCloseZoom() {
+  var modal = document.getElementById('sp-zoom-modal');
+  modal.style.display = 'none'; modal.style.pointerEvents = 'none';
+  window._spZoomId = null;
+  renderScratchpadTab();
 }
 
 // renderClientCards — filters out churned clients. (This used to be an "override" of an
