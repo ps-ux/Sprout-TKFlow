@@ -19736,7 +19736,8 @@ function spToggleShowArchived() { window._spShowArchived = !window._spShowArchiv
 
 function spAddNote() {
   var notes = spGetNotes();
-  var note = { id: 'sp' + Date.now() + Math.random().toString(36).slice(2, 7), title: '', body: '', archived: false, createdAt: new Date().toISOString() };
+  var actor = window.currentUser || currentUser;
+  var note = { id: 'sp' + Date.now() + Math.random().toString(36).slice(2, 7), title: '', body: '', archived: false, createdAt: new Date().toISOString(), createdBy: actor ? actor.name : '' };
   notes.unshift(note);
   spPersist();
   renderScratchpadTab();
@@ -19822,7 +19823,7 @@ function renderScratchpadTab() {
           'oninput="spUpdateNote(\'' + n.id + '\',\'title\',this.value)">' +
         '<textarea class="sp-body" placeholder="Jot something down...">' + spEscapeHtml(n.body) + '</textarea>' +
         '<div class="sp-footer">' +
-          '<span>' + spFormatTimestamp(n.createdAt) + '</span>' +
+          '<span title="' + spEscapeHtml(n.createdBy || '') + '">' + (n.createdBy ? spEscapeHtml(n.createdBy.split(' ')[0]) + ' · ' : '') + spFormatTimestamp(n.createdAt) + '</span>' +
           '<div class="sp-footer-actions">' +
             '<button class="sp-icon-btn" title="Expand" onclick="spOpenZoom(\'' + n.id + '\')"><i class="ti ti-arrows-diagonal"></i></button>' +
             '<button class="sp-icon-btn" title="' + (n.archived ? 'Unarchive' : 'Archive') + '" onclick="spArchiveNote(\'' + n.id + '\', ' + (!n.archived) + ')">' +
@@ -19855,7 +19856,7 @@ function spOpenZoom(id) {
   window._spZoomId = id;
   document.getElementById('sp-zoom-title').value = note.title || '';
   document.getElementById('sp-zoom-body').value = note.body || '';
-  document.getElementById('sp-zoom-timestamp').textContent = spFormatTimestamp(note.createdAt);
+  document.getElementById('sp-zoom-timestamp').textContent = (note.createdBy ? note.createdBy + ' · ' : '') + spFormatTimestamp(note.createdAt);
   var archiveBtn = document.getElementById('sp-zoom-archive-btn');
   if (archiveBtn) {
     archiveBtn.title = note.archived ? 'Unarchive' : 'Archive';
