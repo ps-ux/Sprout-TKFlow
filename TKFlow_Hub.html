@@ -12999,13 +12999,24 @@ function tkBuildManualRemark(detRow, dayBios, hasApp, appType, forceFlag) {
   if (bioU === 'NO LOGS' || bioU === '') {
     var appSuffixCap = hasApp ? 'Has ' + appType : 'No Pending Application';
     if (forceFlag === 'half') return { remark: 'Half Day Absent — manually flagged; ' + appSuffixCap, isHalfDay: true };
+    // Cross-check the separate Biologs-file entries the same way the automatic scan's
+    // deriveRemark already does, instead of a flat "No Logs" -- this used to say plain
+    // "No Logs" even when the Biologs tab actually had a one-sided IN/OUT punch for the day,
+    // where the automatic scan would have said "Missing IN/OUT Log" for identical data.
+    if (typeof window._tkDeriveRemark === 'function') {
+      return { remark: window._tkDeriveRemark(biologs, dayBios || [], hasApp, appType), isHalfDay: false };
+    }
     return { remark: 'No Logs; ' + appSuffix, isHalfDay: false };
   }
   if (forceFlag !== 'absent' && typeof window._tkDetectHalfDay === 'function') {
     var halfDayResult = window._tkDetectHalfDay(detRow.shift || '', biologs, detRow.totalHrs || 0, detRow.undertimeMins || 0);
     if (halfDayResult) {
+      // "Late IN"/"Early OUT" read clearer than "Half Day Absent" for the two cases that are
+      // literally that; every other half-day reason (leave-short, short-total, partial,
+      // full-missing) doesn't map as cleanly, so those keep the original label.
+      var _hdLabel = { morning: 'Late IN', afternoon: 'Early OUT' }[halfDayResult.half] || 'Half Day Absent';
       return {
-        remark: 'Half Day Absent — ' + halfDayResult.reason + (hasApp ? '; Has ' + appType : '; No Pending Application'),
+        remark: _hdLabel + ' — ' + halfDayResult.reason + (hasApp ? '; Has ' + appType : '; No Pending Application'),
         isHalfDay: true
       };
     }
@@ -14459,9 +14470,16 @@ function runValidation(opts) {
     // not the employee's full regular shift. Comparing logged time against ITS midpoint
     // misreports a plain late arrival on the working half as "morning half not covered" --
     // flag it plainly as the leave it already is instead of running the coverage math on a
-    // window that was never meant to represent a full day.
+    // window that was never meant to represent a full day. Only flag it, though, if the
+    // remaining half itself wasn't adequately covered -- this used to be an unconditional
+    // short-circuit with no hours check at all, so a Half Day Leave day the employee fully
+    // worked through still got flagged for review every time.
     if (/half\s*day/i.test(shiftStr)) {
-      return { half: 'leave', reason: 'Approved Half Day Leave on file for this date' };
+      var HALF_DAY_LEAVE_HRS_THRESHOLD = 4.5; // "less than 4 or 5 hours" on the working half
+      if (totalHrs > 0 && totalHrs < HALF_DAY_LEAVE_HRS_THRESHOLD) {
+        return { half: 'leave-short', reason: 'Half Day Leave on file, but only ' + totalHrs + ' hrs logged for the working half' };
+      }
+      return null; // adequately covered their working half -- not an absence issue
     }
 
     // Arrival: nearest occurrence relative to shift start (can be negative = early).
@@ -14946,13 +14964,22 @@ function runValidation(opts) {
       var isHolidayLabel = shiftU.includes('HOLIDAY');
       var isRestLabel    = shiftU.includes('REST DAY');
       var isLeaveLabel   = shiftU.includes('LEAVE'); // catches ON LEAVE, UNPAID LEAVE, HALF DAY LEAVE, (LEAVE)
-      var isSpecialDay   = isHolidayLabel || isRestLabel || isLeaveLabel;
+      // A date before the employee's actual start -- the source file marks this directly in
+      // the Shift column itself (not Biologs, which just reads NO LOGS alongside it every
+      // time) rather than requiring a separate hire-date cross-reference.
+      var isNotYetHiredLabel = shiftU.includes('NOT YET HIRED');
+      var isSpecialDay   = isHolidayLabel || isRestLabel || isLeaveLabel || isNotYetHiredLabel;
       var shiftHasSchedule = !!parseShiftRange(shift); // does the shift text include an actual time range?
+      // A Half Day Leave shift keeps a real time range for its remaining working half (e.g.
+      // "1:00 PM to 5:00 PM (HALF DAY LEAVE)") -- distinct from isLeaveLabel's broader match
+      // (which also catches plain ON LEAVE/UNPAID LEAVE), since only this specific case should
+      // fall back to a half-day (not full-day) absence when that remaining half has no logs.
+      var isHalfDayLeaveLabel = /half\s*day/i.test(shift);
 
       if (isSpecialDay && !isMarkedAbsentInSummary) {
         if (!shiftHasSchedule) {
-          // Pure label, no schedule attached (e.g. plain "ON LEAVE", "HOLIDAY", "REST DAY")
-          // — no work was ever expected on this day.
+          // Pure label, no schedule attached (e.g. plain "ON LEAVE", "HOLIDAY", "REST DAY",
+          // "NOT YET HIRED") — no work was ever expected on this day.
           if (bioU === 'NO LOGS') continue; // excused
           // If they somehow have logs anyway, fall through to normal handling below.
         } else {
@@ -14966,6 +14993,11 @@ function runValidation(opts) {
             // Leave with a schedule + real logs: the leave is invalidated by attendance,
             // but only counts against them if they didn't meet a full day's hours.
             if (bioU !== 'NO LOGS' && totalHrs >= 9) continue; // present, met required hours
+            // Half Day Leave specifically with NO LOGS on the remaining working half used to
+            // fall all the way through to a full-day absence below -- wrong, since the OTHER
+            // half is already excused by the leave itself. Handled via halfDayResult just
+            // below instead of a `continue` here, since this needs to become a half-day
+            // absence (with its own remark), not get skipped entirely.
           }
           // Otherwise (No Logs against a defined schedule) falls through as an absence.
         }
@@ -14988,9 +15020,15 @@ function runValidation(opts) {
       var halfDayResult = null;
       if (!isSameTime && bioU !== 'NO LOGS') {
         halfDayResult = detectHalfDay(shift, biologs, totalHrs, undertimeMins);
+      } else if (!isSameTime && bioU === 'NO LOGS' && isLeaveLabel && isHalfDayLeaveLabel && shiftHasSchedule && !isMarkedAbsentInSummary) {
+        // detectHalfDay is never called when biologs is literally NO LOGS (see the branch
+        // above) -- without this, a Half Day Leave day with zero logs on its remaining
+        // working half fell straight into isFullAbsent below as a full-day absence, when the
+        // leave already excuses the OTHER half.
+        halfDayResult = { half: 'leave-no-logs', reason: 'No logs for the working half of this Half Day Leave' };
       }
 
-      var isFullAbsent = isMarkedAbsentInSummary || (bioU === 'NO LOGS');
+      var isFullAbsent = isMarkedAbsentInSummary || (bioU === 'NO LOGS' && !halfDayResult);
       var isHalfDayAbsent = !isFullAbsent && !!halfDayResult;
       var isAbsent = isFullAbsent || isHalfDayAbsent;
       // Late/Undertime are independent — can coexist with absent on same day. Gated by the
@@ -15024,8 +15062,12 @@ function runValidation(opts) {
           return a.dateFromObj && dateObj>=a.dateFromObj && dateObj<=(a.dateToObj||a.dateFromObj);
         });
         var appType = matchApp ? matchApp.type+(matchApp.status?' ('+matchApp.status+')':'') : '';
+        // "Late IN"/"Early OUT" read clearer than "Half Day Absent" for those two specific
+        // reasons; every other half-day reason (leave-no-logs, leave-short, short-total,
+        // partial, full-missing) doesn't map as cleanly, so those keep the original label.
+        var halfDayLabel = isHalfDayAbsent ? ({ morning: 'Late IN', afternoon: 'Early OUT' }[halfDayResult.half] || 'Half Day Absent') : '';
         var remark = isHalfDayAbsent
-          ? 'Half Day Absent \u2014 ' + halfDayResult.reason + (hasApp ? '; Has ' + appType : '; No Pending Application')
+          ? halfDayLabel + ' \u2014 ' + halfDayResult.reason + (hasApp ? '; Has ' + appType : '; No Pending Application')
           : tkAppendCoaMismatchNote(deriveRemark(biologs, dayBios, hasApp, appType), dayBios);
 
         // Get matched applications for this date
