@@ -6188,7 +6188,7 @@ function renderTeamCapacity() {
     var profile = teamProfiles[uk] || {};
     var proc = procScopesFor(u.id);
     return {
-      name: u.name, initials: u.initials,
+      uk: uk, name: u.name, initials: u.initials,
       avBg: profile.avBg || '#F4F4F8', avTxt: profile.avTxt || '#9898a6',
       clientsLabel: proc.names.length ? proc.names.join(' \u00b7 ') : '\u2014',
       specCount: proc.names.length,
@@ -6198,11 +6198,19 @@ function renderTeamCapacity() {
 
   var maxLoad = Math.max.apply(null, rows.map(function(r){ return r.specCount; }).concat([1]));
 
+  // Client name list starts collapsed (it can get long -- e.g. 4+ group names joined
+  // together) -- click the card to expand/collapse it, same chevron-rotate pattern as Client
+  // Assignments' cards (toggleAssignCard). Expand state is kept in window._tcExpanded rather
+  // than just toggling the DOM in place, since renderTeamCapacity() can re-run and rebuild the
+  // whole grid from scratch (e.g. after a processor/coverage change) -- without it, an
+  // expanded card would silently re-collapse the next time anything triggers a re-render.
   grid.innerHTML = rows.map(function(r) {
     var pct = Math.max(3, Math.round((r.specCount / maxLoad) * 100));
-    return '<div class="team-card">'
+    var isExpanded = !!(window._tcExpanded || {})[r.uk];
+    return '<div class="team-card" onclick="toggleTeamCard(\'' + r.uk + '\')" style="cursor:pointer;">'
       + '<div class="tc-av" style="background:' + r.avBg + ';color:' + r.avTxt + ';">' + r.initials + '</div>'
-      + '<div class="tc-info"><div class="tc-name">' + r.name + '</div><div class="tc-clients">' + r.clientsLabel + '</div>'
+      + '<div class="tc-info"><div class="tc-name">' + r.name + ' <i class="ti ti-chevron-right" id="tc-chev-' + r.uk + '" style="font-size:10px;color:#9898a6;vertical-align:1px;transition:transform 0.15s;' + (isExpanded ? 'transform:rotate(90deg);' : '') + '"></i></div>'
+      + '<div class="tc-clients" id="tc-clients-' + r.uk + '" style="display:' + (isExpanded ? 'block' : 'none') + ';">' + r.clientsLabel + '</div>'
       + '<div style="font-size:11px;color:#9898a6;margin-top:2px;">Main: ' + r.mainCount + ' · Second: ' + r.secondCount + '</div></div>'
       + '<div class="tc-right"><div class="tc-specialist">' + r.specCount + ' client' + (r.specCount !== 1 ? 's' : '') + '</div>'
       + '<div class="tc-bar"><div class="tc-fill fill-g" style="width:' + pct + '%"></div></div></div>'
@@ -6736,6 +6744,17 @@ function renderWorkspacePassoffs() {
       + '<button onclick="openWorkspace(\'' + r.clientKey + '\')" style="padding:5px 12px;background:#F8F8FA;color:#6b6b80;border:1px solid #EBEBEF;border-radius:7px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;">View client</button>'
       + '</div>';
   }).join('');
+}
+
+// Team Capacity's card-click expand/collapse for the client-name list -- see renderTeamCapacity's
+// window._tcExpanded comment for why state is tracked here rather than just toggled in the DOM.
+function toggleTeamCard(uk) {
+  if (!window._tcExpanded) window._tcExpanded = {};
+  window._tcExpanded[uk] = !window._tcExpanded[uk];
+  var body = document.getElementById('tc-clients-' + uk);
+  var chev = document.getElementById('tc-chev-' + uk);
+  if (body) body.style.display = window._tcExpanded[uk] ? 'block' : 'none';
+  if (chev) chev.style.transform = window._tcExpanded[uk] ? 'rotate(90deg)' : 'rotate(0deg)';
 }
 
 function toggleAssignCard(gk) {
