@@ -557,6 +557,11 @@ function assignAvClass(shortKey, siblingClasses) {
       existing.hc = c.headcount;
       existing.payrollType = c.payroll_type;
       existing.basicPayOffset = c.basic_pay_offset;
+      // Null/unset = use Validation's generic 60%-of-required-day fallback threshold. Only set
+      // when a client's own backend timekeeping system has a documented auto-halfday rule (see
+      // detectHalfDay's HALF_DAY_HRS_THRESHOLD) -- KN's biometric system, for example, marks
+      // half-day at a 180-min shortfall from the required day, not the generic 60% guess.
+      existing.halfDayShortfallMinutes = c.half_day_shortfall_minutes || null;
       // Only overwrite when the DB actually has something saved -- cutoffs defaults to '[]'
       // for every row that predates this column (nothing ever wrote it before), and several
       // seed clients have real hardcoded cutoffs in this file that an unconditional overwrite
@@ -6877,6 +6882,30 @@ function setBasicPayOffset(subKeysCsv, val) {
   if (typeof showToast === 'function') showToast('Basic Pay cut-off offset updated');
 }
 
+// Same "applies to every subcompany passed" convention as setBasicPayOffset above. Blank/0
+// clears the override, falling back to Current Attendance Validation's generic 60%-of-
+// required-day half-day threshold (see detectHalfDay's HALF_DAY_HRS_THRESHOLD).
+function setHalfDayShortfallMinutes(subKeysCsv, val) {
+  var mins = parseInt(val, 10);
+  if (!mins || mins <= 0) mins = null;
+  subKeysCsv.split(',').forEach(function(sk) {
+    if (!clients[sk]) return;
+    clients[sk].halfDayShortfallMinutes = mins;
+    var companyId = clients[sk].companyId;
+    if (companyId) {
+      supabaseClient.from('companies').update({ half_day_shortfall_minutes: mins }).eq('short_key', sk).then(function(res) {
+        if (res.error) { console.warn('Could not save half-day shortfall threshold for ' + sk, res.error); if (typeof showToast === 'function') showToast('Could not save half-day threshold: ' + res.error.message, '#c0392b'); }
+      });
+    }
+  });
+  if (typeof renderClientProfile === 'function' && window.currentWsGroup) {
+    renderClientProfile(window.currentWsGroup);
+  } else if (typeof renderClientProfile === 'function' && window.currentWsClient) {
+    renderClientProfile(window.currentWsClient);
+  }
+  if (typeof showToast === 'function') showToast('Half-day shortfall threshold updated');
+}
+
 // Applies to every subcompany passed (comma-separated keys), matching setBasicPayOffset's
 // convention -- a group's subs usually share one payroll cadence.
 function setPayrollType(subKeysCsv, type) {
@@ -7647,6 +7676,19 @@ function renderClientProfile(key) {
     + '</select>'
     + '</div>';
 
+  // Overrides Current Attendance Validation's generic 60%-of-required-day half-day guess with
+  // a real number from this client's own backend timekeeping system, when we have one on file
+  // (e.g. KN's biometric system documents a 180-min/3-hr shortfall rule). Blank = use the
+  // generic fallback.
+  var currentShortfallMin = clients[subs[0]].halfDayShortfallMinutes || '';
+  var shortfallAllSame = subs.every(function(k){ return (clients[k].halfDayShortfallMinutes || '') === currentShortfallMin; });
+  var halfDayShortfallControl = '<div style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:12px 16px;margin-bottom:16px;">'
+    + '<div style="font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Half-Day Shortfall Threshold</div>'
+    + '<div style="font-size:11px;color:#9898a6;margin-bottom:8px;">For Current Attendance Validation’s half-day detection. Set this to the client’s own backend timekeeping system’s auto-halfday rule (minutes short of a full day), if known. Leave blank to use the generic 60%-of-required-day fallback.</div>'
+    + (shortfallAllSame ? '' : '<div style="font-size:11px;color:#e67e00;margin-bottom:8px;"><i class="ti ti-alert-triangle" style="font-size:11px;"></i> Subcompanies currently have different thresholds — changing this applies to all.</div>')
+    + '<input type="number" min="1" value="' + currentShortfallMin + '" placeholder="e.g. 180 (default: 60% of required hours)" onchange="setHalfDayShortfallMinutes(\'' + subs.join(',') + '\', this.value)" style="width:100%;padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;color:#1a1a2e;outline:none;box-sizing:border-box;"> min'
+    + '</div>';
+
   // ── Expanded Scope: optional features some clients have on top of the standard 6 tasks.
   // Built here but rendered AFTER the Applicable Tasks matrix below.
   var expandedScopeSection = '';
@@ -7851,7 +7893,7 @@ function renderClientProfile(key) {
     + '<button onclick="toggleCutoffEditMode(\'' + cutoffEditKey + '\')" style="padding:5px 12px;background:' + (cutoffEditing ? '#DCFCE7' : '#F8F8FA') + ';border:1px solid ' + (cutoffEditing ? '#32CE13' : '#EBEBEF') + ';border-radius:7px;font-size:11px;color:' + (cutoffEditing ? '#1F7A0A' : '#1a1a2e') + ';cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:4px;">'
     + (cutoffEditing ? '<i class="ti ti-check" style="font-size:11px;"></i> Done editing' : '<i class="ti ti-pencil" style="font-size:11px;"></i> Edit')
     + '</button>';
-  var scheduleBody = payrollTypeControl + cutoffSection + basicPayOffsetControl;
+  var scheduleBody = payrollTypeControl + cutoffSection + basicPayOffsetControl + halfDayShortfallControl;
 
   var scopeBody = tasksSection
     + '<div style="font-size:11px;color:#9898a6;margin-top:8px;margin-bottom:12px;">Turning a task off hides it from that subcompany\'s Tasks aggregate and the Group Overview\'s task-status table, and excludes it from task-completion counts.</div>'
@@ -14169,7 +14211,7 @@ function runValidationBatch() {
     window.tkSummaryEmployees = [];
     window._tkRaw = null;
     runValidation({
-      attFile: attFile, acFile: acFile, bioFile: bioFile, silent: true,
+      attFile: attFile, acFile: acFile, bioFile: bioFile, silent: true, clientKey: g.clientKey,
       onDone: function() {
         g.tkReviewRows = tkReviewRows.slice(); // snapshot — own array, same row objects
         g.tkSummaryEmployees = window.tkSummaryEmployees;
@@ -14327,6 +14369,11 @@ function runValidation(opts) {
   var attFile = opts.attFile || taskFiles['tk-att'];
   var acFile  = opts.acFile  || taskFiles['tk-ac'];
   var bioFile = opts.bioFile || taskFiles['tk-bio'];
+  // Which subcompany this run is for -- detectHalfDay below reads this client's own
+  // halfDayShortfallMinutes override, if one's configured (see Client Profile's Half-Day
+  // Shortfall Threshold field). Falls back to whatever workspace is currently open for the
+  // rare/legacy case of a caller that doesn't pass this explicitly.
+  var ck = opts.clientKey || window.currentWsGroup || window.currentWsClient;
 
   if (!attFile || typeof XLSX === 'undefined') {
     if (btn && !opts.silent) { btn.disabled = false; btn.innerHTML = 'Process files'; }
@@ -14525,8 +14572,15 @@ function runValidation(opts) {
     var fileHasRealUndertime = undertimeMins > 0;
     // Comparing against a flat "< 8 hrs" cutoff flagged anyone even a few minutes short of a
     // full day (e.g. 7.93 hrs -- 4 min under 8) as a HALF day, which isn't what "half day" means.
-    // Using a fraction of the required day instead keeps the bar proportional to an actual half.
-    var HALF_DAY_HRS_THRESHOLD = REQUIRED_HRS_FALLBACK * 0.6; // 5.4 hrs
+    // Using a fraction of the required day instead keeps the bar proportional to an actual half
+    // -- this generic 60% guess is the fallback for clients we have no real policy data for.
+    // When the client's own backend timekeeping system documents a real auto-halfday shortfall
+    // rule (Client Profile's Half-Day Shortfall Threshold field, e.g. KN's biometric system:
+    // 180 min short of the required day), use that instead of the guess.
+    var shortfallOverrideMin = (ck && clients[ck] && clients[ck].halfDayShortfallMinutes) || null;
+    var HALF_DAY_HRS_THRESHOLD = shortfallOverrideMin
+      ? REQUIRED_HRS_FALLBACK - (shortfallOverrideMin / 60)
+      : REQUIRED_HRS_FALLBACK * 0.6; // 5.4 hrs
     if (!fileHasRealUndertime && overrunPastShiftEnd > 60 && totalHrs > 0 && totalHrs < HALF_DAY_HRS_THRESHOLD) {
       return { half: 'short-total', reason: 'only ' + totalHrs + ' of the required ' + REQUIRED_HRS_FALLBACK + ' hrs logged' };
     }
