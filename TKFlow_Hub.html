@@ -6157,46 +6157,42 @@ function renderTeamCapacity() {
   var grid = document.getElementById('admin-team-grid');
   if (!grid) return;
 
-  function groupNamesFor(subKeys) {
-    var names = [];
-    Object.keys(clientGroups).forEach(function(gk) {
-      var subs = clientGroups[gk].subs || [gk];
-      if (subs.some(function(sk){ return subKeys.indexOf(sk) >= 0; })) names.push(clientGroups[gk].name);
-    });
-    return names;
-  }
-
-  // How many clients (real groups + standalone companies, one count each -- not one per
-  // subcompany) this person is Main/Second processor for, via the same _procScope resolution
-  // Client Assignments/canProcessCurrentCutoff already use. Requires a real Supabase Auth id
-  // (mainProcessorUserId/secondProcessorUserId are uuid-keyed) -- someone without one yet
-  // just shows 0 for both, same as they'd show up nowhere in the processor dropdowns either.
-  function procCountsFor(userId) {
-    var main = 0, second = 0;
-    if (!userId) return { main: main, second: second };
+  // Which clients (real groups + standalone companies, one per client -- not one per
+  // subcompany) this person is Main or Second processor for, via the same _procScope
+  // resolution Client Assignments/canProcessCurrentCutoff already use. Replaces the old
+  // processClients-based "specialist" count entirely -- the two are separate assignments
+  // (the Specialist checkbox vs. the Main/Second dropdowns) that can disagree, which is
+  // exactly why the headline count didn't match Main+Second below it before. Requires a real
+  // Supabase Auth id (mainProcessorUserId/secondProcessorUserId are uuid-keyed) -- someone
+  // without one yet just shows nothing, same as they'd show up nowhere in the processor
+  // dropdowns either.
+  function procScopesFor(userId) {
+    var names = [], main = 0, second = 0;
+    if (!userId) return { names: names, main: main, second: second };
     Object.keys(clientGroups).forEach(function(gk) {
       var subs = clientGroups[gk].subs || [gk];
       if (!subs.some(function(sk){ return clients[sk] && !clients[sk]._churned; })) return;
       var scope = (typeof _procScope === 'function') ? _procScope(gk) : null;
       if (!scope) return;
-      if (scope.obj.mainProcessorUserId === userId) main++;
-      if (scope.obj.secondProcessorUserId === userId) second++;
+      var isMain = scope.obj.mainProcessorUserId === userId;
+      var isSecond = scope.obj.secondProcessorUserId === userId;
+      if (isMain) main++;
+      if (isSecond) second++;
+      if (isMain || isSecond) names.push(clientGroups[gk].name);
     });
-    return { main: main, second: second };
+    return { names: names, main: main, second: second };
   }
 
   var rows = Object.keys(USERS).map(function(uk) {
     var u = USERS[uk];
     var profile = teamProfiles[uk] || {};
-    var specSubs = (u.processClients || []).filter(function(sk){ return clients[sk] && !clients[sk]._churned; });
-    var specGroups = groupNamesFor(specSubs);
-    var procCounts = procCountsFor(u.id);
+    var proc = procScopesFor(u.id);
     return {
       name: u.name, initials: u.initials,
       avBg: profile.avBg || '#F4F4F8', avTxt: profile.avTxt || '#9898a6',
-      clientsLabel: specGroups.length ? specGroups.join(' \u00b7 ') : '\u2014',
-      specCount: specGroups.length,
-      mainCount: procCounts.main, secondCount: procCounts.second
+      clientsLabel: proc.names.length ? proc.names.join(' \u00b7 ') : '\u2014',
+      specCount: proc.names.length,
+      mainCount: proc.main, secondCount: proc.second
     };
   });
 
