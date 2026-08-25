@@ -6920,6 +6920,28 @@ function setHalfDayShortfallMinutes(subKeysCsv, val) {
   if (typeof showToast === 'function') showToast('Half-day shortfall threshold updated');
 }
 
+// Switches the Half-Day Shortfall Threshold control between one shared value for the whole
+// group and one editable card per subcompany -- key is the same subs.join(',') string used
+// throughout Client Profile for this kind of per-section edit-mode toggle (see cutoffEditKey).
+// Turning per-sub mode OFF doesn't just hide the extra inputs -- it actually re-merges every
+// sub back onto whichever value the first sub currently has, since leaving them silently
+// divergent while showing only one merged input would misrepresent what's actually saved.
+function setHalfDayPerSubMode(key, on) {
+  if (!window._halfDayPerSubMode) window._halfDayPerSubMode = {};
+  window._halfDayPerSubMode[key] = on;
+  if (!on) {
+    var subs = key.split(',');
+    var val = (clients[subs[0]] && clients[subs[0]].halfDayShortfallMinutes) || '';
+    setHalfDayShortfallMinutes(key, val); // re-renders Client Profile itself
+    return;
+  }
+  if (typeof renderClientProfile === 'function' && window.currentWsGroup) {
+    renderClientProfile(window.currentWsGroup);
+  } else if (typeof renderClientProfile === 'function' && window.currentWsClient) {
+    renderClientProfile(window.currentWsClient);
+  }
+}
+
 // Applies to every subcompany passed (comma-separated keys), matching setBasicPayOffset's
 // convention -- a group's subs usually share one payroll cadence.
 function setPayrollType(subKeysCsv, type) {
@@ -7693,15 +7715,39 @@ function renderClientProfile(key) {
   // Overrides Current Attendance Validation's generic 60%-of-required-day half-day guess with
   // a real number from this client's own backend timekeeping system, when we have one on file
   // (e.g. KN's biometric system documents a 180-min/3-hr shortfall rule). Blank = use the
-  // generic fallback.
+  // generic fallback. Subs can genuinely run on different backend systems (KN's own policy
+  // file has different Grace Period settings per sub, for instance) -- same "one shared
+  // control, or one per sub once they diverge" pattern as the Cutoff Schedule section above,
+  // except divergence here is manual (setHalfDayPerSubMode), not something a file upload can
+  // cause on its own the way a calendar re-upload can for cutoffs.
+  function halfDayInputHtml(value, saveKeysCsv) {
+    return '<input type="number" min="1" value="' + (value || '') + '" placeholder="e.g. 180 (default: 60% of required hours)" onchange="setHalfDayShortfallMinutes(\'' + saveKeysCsv + '\', this.value)" style="width:100%;padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;color:#1a1a2e;outline:none;box-sizing:border-box;"> min';
+  }
+  var halfDayShortfallKey = subs.join(',');
   var currentShortfallMin = clients[subs[0]].halfDayShortfallMinutes || '';
   var shortfallAllSame = subs.every(function(k){ return (clients[k].halfDayShortfallMinutes || '') === currentShortfallMin; });
-  var halfDayShortfallControl = '<div style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:12px 16px;margin-bottom:16px;">'
-    + '<div style="font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Half-Day Shortfall Threshold</div>'
-    + '<div style="font-size:11px;color:#9898a6;margin-bottom:8px;">For Current Attendance Validation’s half-day detection. Set this to the client’s own backend timekeeping system’s auto-halfday rule (minutes short of a full day), if known. Leave blank to use the generic 60%-of-required-day fallback.</div>'
-    + (shortfallAllSame ? '' : '<div style="font-size:11px;color:#e67e00;margin-bottom:8px;"><i class="ti ti-alert-triangle" style="font-size:11px;"></i> Subcompanies currently have different thresholds — changing this applies to all.</div>')
-    + '<input type="number" min="1" value="' + currentShortfallMin + '" placeholder="e.g. 180 (default: 60% of required hours)" onchange="setHalfDayShortfallMinutes(\'' + subs.join(',') + '\', this.value)" style="width:100%;padding:6px 10px;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;color:#1a1a2e;outline:none;box-sizing:border-box;"> min'
-    + '</div>';
+  var halfDayPerSubMode = subs.length > 1 && (!!(window._halfDayPerSubMode || {})[halfDayShortfallKey] || !shortfallAllSame);
+  var halfDayShortfallHeader = '<div style="font-size:11px;font-weight:600;color:#9898a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Half-Day Shortfall Threshold</div>'
+    + '<div style="font-size:11px;color:#9898a6;margin-bottom:8px;">For Current Attendance Validation’s half-day detection. Set this to the client’s own backend timekeeping system’s auto-halfday rule (minutes short of a full day), if known. Leave blank to use the generic 60%-of-required-day fallback.</div>';
+  var halfDayShortfallControl;
+  if (halfDayPerSubMode) {
+    halfDayShortfallControl = '<div style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:12px 16px;margin-bottom:16px;">'
+      + halfDayShortfallHeader
+      + subs.map(function(k) {
+          return '<div style="margin-bottom:10px;">'
+            + '<div style="font-size:11px;font-weight:600;color:#32CE13;margin-bottom:4px;">' + clients[k].name + '</div>'
+            + halfDayInputHtml(clients[k].halfDayShortfallMinutes, k)
+            + '</div>';
+        }).join('')
+      + '<button onclick="setHalfDayPerSubMode(\'' + halfDayShortfallKey + '\', false)" style="padding:6px 12px;background:#fff;border:1px solid #EBEBEF;color:#6b6b80;border-radius:12px;font-size:11px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;">Use one shared threshold for all subcompanies</button>'
+      + '</div>';
+  } else {
+    halfDayShortfallControl = '<div style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:12px 16px;margin-bottom:16px;">'
+      + halfDayShortfallHeader
+      + halfDayInputHtml(currentShortfallMin, halfDayShortfallKey)
+      + (subs.length > 1 ? '<div style="margin-top:8px;"><button onclick="setHalfDayPerSubMode(\'' + halfDayShortfallKey + '\', true)" style="padding:6px 12px;background:#fff;border:1px solid #EBEBEF;color:#6b6b80;border-radius:12px;font-size:11px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;">Set different thresholds per subcompany</button></div>' : '')
+      + '</div>';
+  }
 
   // ── Expanded Scope: optional features some clients have on top of the standard 6 tasks.
   // Built here but rendered AFTER the Applicable Tasks matrix below.
