@@ -3807,6 +3807,12 @@ function closeWorkspace() {
       </div>
 
       <div style="margin-bottom:16px;">
+        <label class="field-label">Half-Day Shortfall Threshold (optional)</label>
+        <div style="font-size:11px;color:#9898a6;margin-bottom:8px;">If this client's own backend timekeeping system documents a real auto-halfday rule (minutes short of a full day), enter it here — e.g. KN's biometric system uses 180. Leave blank to use Current Attendance Validation's generic 60%-of-required-day fallback; can also be set later in Client Profile.</div>
+        <input class="modal-input" type="number" min="1" id="ac-half-day-shortfall" placeholder="e.g. 180" style="width:100%;">
+      </div>
+
+      <div style="margin-bottom:16px;">
         <div class="field-label">Timekeeping calendar</div>
         <div style="font-size:11px;color:#9898a6;margin-bottom:8px;">Upload the client's payroll calendar (.xlsx) now, or later from Client Profile — either way it becomes the real source of truth for cut-off dates.</div>
         <div style="border:1.5px dashed #EBEBEF;border-radius:14px;padding:20px;text-align:center;cursor:pointer;background:#F8F8FA;" onclick="document.getElementById('ac-cal-input').click()" id="ac-cal-dropzone" ondragover="return dzDragOver(event)" ondragleave="dzDragLeave(event)" ondrop="dzDrop(event,'ac-cal-input')">
@@ -4745,6 +4751,8 @@ function openAddClient() {
   // so those fields start empty regardless of what the previous open left behind.
   var offsetSel = document.getElementById('ac-basic-offset');
   if (offsetSel) offsetSel.value = '0';
+  var halfDayShortfallInput = document.getElementById('ac-half-day-shortfall');
+  if (halfDayShortfallInput) halfDayShortfallInput.value = '';
   goStep(1);
 }
 
@@ -5169,6 +5177,10 @@ async function _saveClientConfirmed() {
   }
   const basicOffsetEl = document.getElementById('ac-basic-offset');
   const basicPayOffsetVal = basicOffsetEl ? parseInt(basicOffsetEl.value, 10) || 0 : 0;
+  // Optional -- blank/0 means "no known backend-policy rule for this client yet", which keeps
+  // Validation's generic 60%-of-required-day fallback (see detectHalfDay's HALF_DAY_HRS_THRESHOLD).
+  const halfDayShortfallEl = document.getElementById('ac-half-day-shortfall');
+  const halfDayShortfallVal = (halfDayShortfallEl && parseInt(halfDayShortfallEl.value, 10) > 0) ? parseInt(halfDayShortfallEl.value, 10) : null;
   // Reads however many cutoff blocks renderCutoffFields() rendered for this payroll type
   // (2 for Semi-monthly, 1 for Monthly, 4 for Weekly) instead of two hardcoded reads.
   const newClientCutoffs = [];
@@ -5291,6 +5303,7 @@ async function _saveClientConfirmed() {
       cutoff: 'Not yet set',
       payrollType: payrollType,
       basicPayOffset: basicPayOffsetVal,
+      halfDayShortfallMinutes: halfDayShortfallVal,
       taskConfig: { email_support: ticketingEnabled, leave_monitoring: leaveMonitoringEnabled, leave_credits_validation: lcvEnabled, validation: validationEnabled, variance: varianceEnabled, disputes_summary: disputesEnabled, newhires: newhiresEnabled, profile: profileEnabled, shift_management: shiftMgmtEnabled, holiday_setup: holidaySetupEnabled, payroll_id_sync: payrollIdSyncEnabled },
       hc: 0, absent: 0, disp: 0, dispSub: 'No disputes yet',
       group: subKeys.length > 1 ? key : undefined,
@@ -5338,6 +5351,7 @@ async function _saveClientConfirmed() {
       headcount: 0,
       payroll_type: payrollType,
       basic_pay_offset: basicPayOffsetVal,
+      half_day_shortfall_minutes: halfDayShortfallVal,
       cutoffs: newClientCutoffs,
       task_config: { email_support: ticketingEnabled, leave_monitoring: leaveMonitoringEnabled, leave_credits_validation: lcvEnabled, validation: validationEnabled, variance: varianceEnabled, disputes_summary: disputesEnabled, newhires: newhiresEnabled, profile: profileEnabled, shift_management: shiftMgmtEnabled, holiday_setup: holidaySetupEnabled, payroll_id_sync: payrollIdSyncEnabled },
       ticketing_mode: 'otk'
