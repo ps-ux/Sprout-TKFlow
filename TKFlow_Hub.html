@@ -3829,7 +3829,11 @@ function closeWorkspace() {
         </div>
       </div>
 
-      <div style="margin-bottom:16px;">
+      <!-- Only meaningful if the client actually availed the Via Ticketing Tool/email-support
+           add-on (Step 2, addon-ticketing-toggle) -- shown/hidden in sync with that toggle's
+           state, kept current on every step change (see goStep) since the toggle isn't reset
+           when the wizard reopens. -->
+      <div id="ac-email-support-tat" style="margin-bottom:16px;display:none;">
         <div class="field-label">Email support turnaround</div>
         <div style="font-size:11px;color:#9898a6;margin-bottom:8px;">Standard turnaround times (per OTK policy)</div>
         <div style="background:#F8F8FA;border-radius:14px;padding:12px 14px;">
@@ -4761,6 +4765,14 @@ function closeModal() {
 }
 
 function goStep(n) {
+  // Email support turnaround (Step 4) only applies once the Via Ticketing Tool/email-support
+  // add-on is actually on (Step 2's addon-ticketing-toggle) -- re-synced here rather than only
+  // in that toggle's own onclick, since the toggle's state isn't reset when the wizard reopens.
+  var ticketingToggleEl = document.getElementById('addon-ticketing-toggle');
+  var emailSupportTatEl = document.getElementById('ac-email-support-tat');
+  if (ticketingToggleEl && emailSupportTatEl) {
+    emailSupportTatEl.style.display = ticketingToggleEl.classList.contains('off') ? 'none' : 'block';
+  }
   for (let i = 1; i <= 4; i++) {
     document.getElementById('modal-step-' + i).style.display = i === n ? 'block' : 'none';
     const ind = document.getElementById('step-ind-' + i);
