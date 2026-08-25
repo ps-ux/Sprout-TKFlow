@@ -1046,7 +1046,10 @@ function signInWithGoogle() {
       <div class="nav-item" id="nav-admin" onclick="switchPage('admin')"><i class="ti ti-shield-check"></i> Admin <span class="nav-badge" id="nav-admin-badge" style="background:#e67e00;color:#fff;">Admin</span></div>
     </div>
     <div class="nav-section">
-      <div class="nav-label">Client Workspace</div>
+      <!-- Hidden for admins in renderSidebarClients (it renders its own My Clients/Team's
+           Clients/On Hold Clients headers immediately below) -- otherwise this sat directly
+           above those with nothing of its own underneath it, looking like an empty section. -->
+      <div class="nav-label" id="sidebar-client-workspace-label">Client Workspace</div>
       <div id="sidebar-client-links">
       <div class="nav-item" id="sidebar-group-KN" style="gap:8px;">
         <div style="width:20px;height:20px;border-radius:5px;background:#edfae8;color:#32CE13;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0;">KN</div>
@@ -3160,7 +3163,23 @@ function closeWorkspace() {
   document.getElementById('nav-dashboard').classList.add('active');
   // Remove active client highlight
   document.querySelectorAll('.nav-item[id^="sidebar-group-"]').forEach(el => el.classList.remove('active'));
-}function renderSidebarClients() {
+}
+
+// Sidebar's My Clients/Team's Clients/On Hold Clients collapse toggle -- direct DOM
+// manipulation for a snappy click, with window._sidebarSectionCollapsed as the source of truth
+// so a later renderSidebarClients() re-render (data reload, group change, etc.) doesn't
+// silently re-expand a section the user collapsed.
+function toggleSidebarSection(key) {
+  if (!window._sidebarSectionCollapsed) window._sidebarSectionCollapsed = {};
+  var collapsed = !window._sidebarSectionCollapsed[key];
+  window._sidebarSectionCollapsed[key] = collapsed;
+  var body = document.getElementById('sidebar-section-body-' + key);
+  var chev = document.getElementById('sidebar-section-chev-' + key);
+  if (body) body.style.display = collapsed ? 'none' : '';
+  if (chev) chev.style.transform = collapsed ? 'rotate(-90deg)' : 'rotate(0deg)';
+}
+
+function renderSidebarClients() {
   var container = document.getElementById('sidebar-client-links');
   if (!container) return;
 
@@ -3200,12 +3219,30 @@ function closeWorkspace() {
     return el;
   }
 
-  function sectionHeader(text) {
+  // Collapsible section header -- click to hide/show everything under it. State persists
+  // across re-renders in window._sidebarSectionCollapsed (renderSidebarClients rebuilds this
+  // whole container from scratch often -- on data reload, on group changes, etc. -- so a plain
+  // DOM toggle alone would silently re-expand on the next re-render).
+  function sectionHeader(text, key) {
+    var isCollapsed = !!(window._sidebarSectionCollapsed || {})[key];
     var hdr = document.createElement('div');
     hdr.className = 'nav-label';
+    hdr.id = 'sidebar-section-hdr-' + key;
     hdr.style.marginTop = '10px';
-    hdr.textContent = text;
+    hdr.style.cursor = 'pointer';
+    hdr.style.display = 'flex';
+    hdr.style.alignItems = 'center';
+    hdr.style.justifyContent = 'space-between';
+    hdr.innerHTML = '<span>' + text + '</span><i class="ti ti-chevron-down" id="sidebar-section-chev-' + key + '" style="font-size:10px;transition:transform 0.15s;' + (isCollapsed ? 'transform:rotate(-90deg);' : '') + '"></i>';
+    hdr.onclick = function(){ toggleSidebarSection(key); };
     return hdr;
+  }
+
+  function sectionBody(key) {
+    var body = document.createElement('div');
+    body.id = 'sidebar-section-body-' + key;
+    if (!!(window._sidebarSectionCollapsed || {})[key]) body.style.display = 'none';
+    return body;
   }
 
   // Admins always see every active client, regardless of whether they're specifically the
@@ -3215,6 +3252,14 @@ function closeWorkspace() {
   // Clients marked "On hold" in their profile are pulled out into their own section
   // regardless of assignment, and shown dimmed/grayed so it's visually clear at a glance.
   var isAdmin = currentUser.roleType === 'admin';
+
+  // The static "Client Workspace" label above #sidebar-client-links only makes sense when
+  // nothing else labels this area -- for admins, My Clients/Team's Clients/On Hold Clients
+  // immediately below already do that job, and having both sat right on top of each other
+  // looked like an empty "Client Workspace" section with nothing under it before the real
+  // clients started.
+  var cwLabel = document.getElementById('sidebar-client-workspace-label');
+  if (cwLabel) cwLabel.style.display = isAdmin ? 'none' : '';
 
   if (isAdmin) {
     var myGroups = [], teamGroups = [], onHoldGroups = [];
@@ -3234,16 +3279,22 @@ function closeWorkspace() {
     });
 
     if (myGroups.length) {
-      container.appendChild(sectionHeader('My Clients'));
-      myGroups.forEach(function(gk){ container.appendChild(buildGroupEl(gk, false)); });
+      container.appendChild(sectionHeader('My Clients', 'my'));
+      var myBody = sectionBody('my');
+      myGroups.forEach(function(gk){ myBody.appendChild(buildGroupEl(gk, false)); });
+      container.appendChild(myBody);
     }
     if (teamGroups.length) {
-      container.appendChild(sectionHeader('Team\u2019s Clients'));
-      teamGroups.forEach(function(gk){ container.appendChild(buildGroupEl(gk, false)); });
+      container.appendChild(sectionHeader('Team\u2019s Clients', 'team'));
+      var teamBody = sectionBody('team');
+      teamGroups.forEach(function(gk){ teamBody.appendChild(buildGroupEl(gk, false)); });
+      container.appendChild(teamBody);
     }
     if (onHoldGroups.length) {
-      container.appendChild(sectionHeader('On Hold Clients'));
-      onHoldGroups.forEach(function(gk){ container.appendChild(buildGroupEl(gk, true)); });
+      container.appendChild(sectionHeader('On Hold Clients', 'onhold'));
+      var onHoldBody = sectionBody('onhold');
+      onHoldGroups.forEach(function(gk){ onHoldBody.appendChild(buildGroupEl(gk, true)); });
+      container.appendChild(onHoldBody);
     }
   } else {
     // Members only see clients they actually have access to (unchanged behavior), but
@@ -3258,8 +3309,10 @@ function closeWorkspace() {
     });
     memberActive.forEach(function(gk){ container.appendChild(buildGroupEl(gk, false)); });
     if (memberOnHold.length) {
-      container.appendChild(sectionHeader('On Hold Clients'));
-      memberOnHold.forEach(function(gk){ container.appendChild(buildGroupEl(gk, true)); });
+      container.appendChild(sectionHeader('On Hold Clients', 'onhold'));
+      var memberOnHoldBody = sectionBody('onhold');
+      memberOnHold.forEach(function(gk){ memberOnHoldBody.appendChild(buildGroupEl(gk, true)); });
+      container.appendChild(memberOnHoldBody);
     }
   }
 
