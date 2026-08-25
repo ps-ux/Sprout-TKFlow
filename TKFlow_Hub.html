@@ -16677,7 +16677,7 @@ function lmRenderUpcomingSection(ck) {
     + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">'
     + '<thead><tr style="background:#F4F4F8;">'
     + hdr('Emp ID') + hdr('Name') + hdr('Leave Type') + hdr('Tier') + hdr('Hire Date') + hdr('Anniversary')
-    + hdr('Current Bal.') + hdr('Used') + hdr('Should Be') + hdr('Total for Year') + hdr('Add')
+    + hdr('Current Bal.') + hdr('Used') + hdr('Total for the Year') + hdr('Add')
     + '<th style="' + actionsThStyle + '"></th></tr></thead><tbody>'
     + allRows.map(function(x) {
         var r = x.row;
@@ -16692,8 +16692,7 @@ function lmRenderUpcomingSection(ck) {
           + '<td style="padding:8px 10px;white-space:nowrap;">' + fmtLMDate(r.anniversary) + '</td>'
           + '<td style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? lmEditableCell(x.category, x.idx, 'currentBalance', r.currentBalance) : '—') + '</td>'
           + '<td style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? lmEditableCell(x.category, x.idx, 'used', r.used) : '—') + '</td>'
-          + '<td id="lm-shouldbe-' + x.category + '-' + x.idx + '" style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? r.shouldBe.toFixed(2) : '—') + '</td>'
-          + '<td style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? '—' : r.totalCreditsForYear) + '</td>'
+          + '<td id="lm-shouldbe-' + x.category + '-' + x.idx + '" style="padding:8px 10px;text-align:right;">' + (isOneYearTier ? r.shouldBe.toFixed(2) : r.totalCreditsForYear) + '</td>'
           + '<td id="lm-formanual-' + x.category + '-' + x.idx + '" style="padding:8px 10px;text-align:right;">' + lmSignedColorValue(isOneYearTier ? r.forManualEdit : r.creditsToAdd) + '</td>'
           + '<td style="' + actionsTdStyleBase + rowBg + ';">' + lmActionButtons(x.category, x.idx, r.done) + '</td></tr>';
       }).join('')
