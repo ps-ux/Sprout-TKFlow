@@ -8280,6 +8280,22 @@ function getTATDeadline(emailTimeStr) {
   return deadline;
 }
 
+// Handles a Date of Action saved before this field carried a time component (plain
+// "YYYY-MM-DD", from before the Replied-At-merge) -- parseTATEmailTime alone returns null for
+// these, which silently left old tickets never freezing at all (still counting live forever).
+// Assumes end-of-day (6 PM, matching getTATDeadline's own EOD convention) since the exact reply
+// time was never recorded for these -- an approximation, not the real moment, but the closest
+// defensible one given only the day is known. Manually parsed (not `new Date(str)`) so a bare
+// date string is read as LOCAL midnight, not UTC midnight -- the latter shifts a full day
+// backward in PH's positive UTC offset, the same bug class already fixed elsewhere for
+// calendar/leave dates.
+function parseLegacyDateActionEOD(str) {
+  if (!str) return null;
+  var m = (str + '').trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10), 18, 0, 0);
+}
+
 // dateActionStr (optional) is when the team actually acted on/replied to this ticket -- once
 // set, TAT stops ticking against the live clock and freezes at whether THAT moment beat the
 // deadline. Without this, a ticket answered well within TAT kept drifting toward/into "red"
@@ -8291,7 +8307,7 @@ function getTATClass(emailTimeStr, status, dateActionStr) {
   if (!emailTimeStr || status === 'Closed' || status === 'Done' || status === 'Resolved') return 'grey';
   const deadline = getTATDeadline(emailTimeStr);
   if (!deadline) return 'grey';
-  const dateAction = dateActionStr ? parseTATEmailTime(dateActionStr) : null;
+  const dateAction = dateActionStr ? (parseTATEmailTime(dateActionStr) || parseLegacyDateActionEOD(dateActionStr)) : null;
   const now = dateAction || new Date();
   const msLeft = deadline - now;
   if (msLeft < 0) return 'red';
@@ -8310,7 +8326,7 @@ function getTATLabel(emailTimeStr, status, dateActionStr) {
   if (status === 'Closed' || status === 'Done' || status === 'Resolved') return 'TAT n/a';
   const deadline = getTATDeadline(emailTimeStr);
   if (!deadline) return 'No TAT';
-  const dateAction = dateActionStr ? parseTATEmailTime(dateActionStr) : null;
+  const dateAction = dateActionStr ? (parseTATEmailTime(dateActionStr) || parseLegacyDateActionEOD(dateActionStr)) : null;
   const now = dateAction || new Date();
   const msLeft = deadline - now;
   if (msLeft < 0) {
@@ -23699,12 +23715,14 @@ function dtmSaveEmailTime(inputValue) {
 // Date of Action doubles as the actual moment the team acted on/replied to this ticket
 // (merged from the old separate "Replied At" field -- both described the same real moment).
 // Handles both the "MMM D, h:mmAM/PM" format this field now saves in and older plain
-// "YYYY-MM-DD"-style values saved before it carried a time component (falls back to midnight
-// for those, via a plain Date parse).
+// "YYYY-MM-DD"-style values saved before it carried a time component (falls back to end-of-day
+// via parseLegacyDateActionEOD -- see getTATClass -- same convention the TAT freeze itself uses,
+// not a separate guess).
 function dtmDateActionToInputValue(d) {
   var raw = d.dateAction;
   if (!raw) return '';
   var dt = (typeof parseTATEmailTime === 'function') ? parseTATEmailTime(raw) : null;
+  if (!dt) dt = (typeof parseLegacyDateActionEOD === 'function') ? parseLegacyDateActionEOD(raw) : null;
   if (!dt) {
     dt = new Date(raw);
     if (isNaN(dt.getTime())) return '';
