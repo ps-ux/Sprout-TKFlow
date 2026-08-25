@@ -7930,7 +7930,7 @@ function updateDashboardTATAlerts() {
   sourceDisputes.forEach(d => {
     if (myClientKeys.indexOf(d.client) === -1) return;
     if (d.status === 'dst-closed' || d.status === 'Closed' || d.status === 'Done') return;
-    const cls = d.tat === 'tat-red' ? 'red' : d.tat === 'tat-yellow' ? 'yellow' : (d.emailTime ? getTATClass(d.emailTime, d.status, d.repliedAt) : null);
+    const cls = d.tat === 'tat-red' ? 'red' : d.tat === 'tat-yellow' ? 'yellow' : (d.emailTime ? getTATClass(d.emailTime, d.status, d.dateAction) : null);
     if (cls === 'red')    breached++;
     if (cls === 'yellow') dueSoon++;
   });
@@ -8054,27 +8054,28 @@ function getTATDeadline(emailTimeStr) {
   return deadline;
 }
 
-// repliedAtStr (optional) is when a reply was actually logged (see dtmSaveRepliedAt) -- once
+// dateActionStr (optional) is when the team actually acted on/replied to this ticket -- once
 // set, TAT stops ticking against the live clock and freezes at whether THAT moment beat the
 // deadline. Without this, a ticket answered well within TAT kept drifting toward/into "red"
 // forever just because nobody had formally closed it out yet, which measured how long a ticket
 // had been sitting open, not whether the actual reply was on time -- the real question TAT is
-// supposed to answer.
-function getTATClass(emailTimeStr, status, repliedAtStr) {
+// supposed to answer. This used to be a separate "Replied At" field, merged into Date of
+// Action since both described the same real moment (see dtmSaveDateAction).
+function getTATClass(emailTimeStr, status, dateActionStr) {
   if (!emailTimeStr || status === 'Closed' || status === 'Done' || status === 'Resolved') return 'grey';
   const deadline = getTATDeadline(emailTimeStr);
   if (!deadline) return 'grey';
-  const repliedAt = repliedAtStr ? parseTATEmailTime(repliedAtStr) : null;
-  const now = repliedAt || new Date();
+  const dateAction = dateActionStr ? parseTATEmailTime(dateActionStr) : null;
+  const now = dateAction || new Date();
   const msLeft = deadline - now;
   if (msLeft < 0) return 'red';
   // "Due soon" only means something while still awaiting a reply -- once replied, it's a
   // binary on-time/late, never "soon".
-  if (!repliedAt && msLeft < 2 * 60 * 60 * 1000) return 'yellow';
+  if (!dateAction && msLeft < 2 * 60 * 60 * 1000) return 'yellow';
   return 'green';
 }
 
-function getTATLabel(emailTimeStr, status, repliedAtStr) {
+function getTATLabel(emailTimeStr, status, dateActionStr) {
   if (!emailTimeStr) return 'No TAT';
   // Was the literal string 'Resolved' -- since this TAT badge renders right next to the
   // ticket's own status pill, a Closed ticket showed two tags that looked like conflicting
@@ -8083,8 +8084,8 @@ function getTATLabel(emailTimeStr, status, repliedAtStr) {
   if (status === 'Closed' || status === 'Done' || status === 'Resolved') return 'TAT n/a';
   const deadline = getTATDeadline(emailTimeStr);
   if (!deadline) return 'No TAT';
-  const repliedAt = repliedAtStr ? parseTATEmailTime(repliedAtStr) : null;
-  const now = repliedAt || new Date();
+  const dateAction = dateActionStr ? parseTATEmailTime(dateActionStr) : null;
+  const now = dateAction || new Date();
   const msLeft = deadline - now;
   if (msLeft < 0) {
     const over = Math.abs(msLeft);
@@ -8093,11 +8094,11 @@ function getTATLabel(emailTimeStr, status, repliedAtStr) {
     const m = Math.floor((over % 3600000) / 60000);
     // Past a day, minutes stop being useful precision -- show days + hours instead of
     // hours climbing past 24 (e.g. "168h 0m ago" for a week-old ticket).
-    if (repliedAt) return d > 0 ? ('Replied ' + d + 'd ' + h + 'h late') : ('Replied ' + h + 'h ' + m + 'm late');
+    if (dateAction) return d > 0 ? ('Replied ' + d + 'd ' + h + 'h late') : ('Replied ' + h + 'h ' + m + 'm late');
     if (d > 0) return 'Overdue by ' + d + 'd ' + h + 'h ago';
     return 'Overdue by ' + (h) + 'h ' + (m) + 'm ago';
   }
-  if (repliedAt) return 'Replied on time';
+  if (dateAction) return 'Replied on time';
   const d = Math.floor(msLeft / 86400000);
   const h = Math.floor((msLeft % 86400000) / 3600000);
   const m = Math.floor((msLeft % 3600000) / 60000);
@@ -8135,8 +8136,8 @@ function recomputeAllDisputeTAT() {
       || (typeof tatTimeFromISO === 'function' && tatTimeFromISO(d.submittedAt))
       || (typeof tatTimeFromDateSubmitted === 'function' && tatTimeFromDateSubmitted(d.dateSubmitted));
     if (!basisTime) return;
-    var newTat = 'tat-' + getTATClass(basisTime, d.statusLabel, d.repliedAt);
-    var newTatLabel = getTATLabel(basisTime, d.statusLabel, d.repliedAt);
+    var newTat = 'tat-' + getTATClass(basisTime, d.statusLabel, d.dateAction);
+    var newTatLabel = getTATLabel(basisTime, d.statusLabel, d.dateAction);
     if (d.tat !== newTat || d.tatLabel !== newTatLabel) {
       d.tat = newTat;
       d.tatLabel = newTatLabel;
@@ -23390,7 +23391,9 @@ async function _openNewDisputeTicketInner(clientKey) {
     submittedAt: today.toISOString(),
     entity: clientObj ? clientObj.name : clientKey,
     nature: '', disputeDates: '', fullDetails: '',
-    dateAction: todayISO, findings: '', recommendedResolution: '',
+    // Blank, not today -- Date of Action now also drives the TAT freeze (see getTATClass), so
+    // it must stay unset until the team actually acts/replies, not pre-filled at creation.
+    dateAction: '', findings: '', recommendedResolution: '',
     payoutCutoff: clientObj ? (ticketApplicableCutoffKey(clientObj) || '') : '',
     amount: '', piPayout: clientObj ? (ticketApplicableCutoffKey(clientObj) || '') : '', piLines: [], updateOpen: '', otherRemarks: '',
     sub: '', client: clientKey,
@@ -23452,22 +23455,31 @@ function dtmSaveEmailTime(inputValue) {
   if (typeof recomputeAllDisputeTAT === 'function') recomputeAllDisputeTAT();
 }
 
-// "Replied at" is the actual moment a reply was sent -- unlike Email Received, it has no
-// fallback source (nothing to derive it from if it was never logged), so this is just a plain
-// read of d.repliedAt.
-function dtmRepliedAtToInputValue(d) {
-  var dt = (typeof parseTATEmailTime === 'function') ? parseTATEmailTime(d.repliedAt) : null;
-  if (!dt) return '';
+// Date of Action doubles as the actual moment the team acted on/replied to this ticket
+// (merged from the old separate "Replied At" field -- both described the same real moment).
+// Handles both the "MMM D, h:mmAM/PM" format this field now saves in and older plain
+// "YYYY-MM-DD"-style values saved before it carried a time component (falls back to midnight
+// for those, via a plain Date parse).
+function dtmDateActionToInputValue(d) {
+  var raw = d.dateAction;
+  if (!raw) return '';
+  var dt = (typeof parseTATEmailTime === 'function') ? parseTATEmailTime(raw) : null;
+  if (!dt) {
+    dt = new Date(raw);
+    if (isNaN(dt.getTime())) return '';
+  }
   return dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0')
     + 'T' + String(dt.getHours()).padStart(2,'0') + ':' + String(dt.getMinutes()).padStart(2,'0');
 }
 
 // Once this is set, TAT stops counting against the live clock and freezes at whether THIS
-// moment beat the deadline (see getTATClass/getTATLabel's repliedAt param) -- clearing the
+// moment beat the deadline (see getTATClass/getTATLabel's dateAction param) -- clearing the
 // input (blank inputValue) un-freezes it back to a live countdown. Also refreshes this ticket's
 // own badge immediately, since recomputeAllDisputeTAT only re-renders the OTHER surfaces
 // (notif card, dashboard, ws disputes list) and never the currently-open ticket detail itself.
-function dtmSaveRepliedAt(inputValue) {
+// Also feeds "Date Ticket Closed" in exports once status is Closed (see dsOverviewRows) --
+// one real moment now drives both, instead of two separately-tracked fields.
+function dtmSaveDateAction(inputValue) {
   var m = (inputValue || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
   var str = '';
   if (m) {
@@ -23477,7 +23489,7 @@ function dtmSaveRepliedAt(inputValue) {
     var hour12 = hour % 12; if (hour12 === 0) hour12 = 12;
     str = MONTHS[parseInt(m[2], 10) - 1] + ' ' + parseInt(m[3], 10) + ', ' + hour12 + ':' + min + ap;
   }
-  dtmSaveField('repliedAt', str);
+  dtmSaveField('dateAction', str);
   if (typeof recomputeAllDisputeTAT === 'function') recomputeAllDisputeTAT();
   var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
   var tb = document.getElementById('dtm-tat-badge');
@@ -23676,10 +23688,11 @@ function openDisputeTicket(id, clientContext) {
     // under the hood for exports/table columns and as the TAT fallback for pushed tickets that
     // only ever send a date, never a time.
     ['Email Received',     'emailTime',     d, 'datetime'],
-    // When the actual reply went out -- freezes the TAT badge above at on-time/late instead of
-    // it continuing to tick against the live clock (see getTATClass/getTATLabel, dtmSaveRepliedAt).
-    ['Replied At',          'repliedAt',     d, 'datetime'],
-    ['Date of Action',     'dateAction',    d.dateAction, 'date'],
+    // When the team actually acted on/replied to this ticket -- freezes the TAT badge above at
+    // on-time/late instead of it continuing to tick against the live clock (see
+    // getTATClass/getTATLabel, dtmSaveDateAction). Used to be a separate "Replied At" field;
+    // merged in since both described the same real moment of interacting with the employee.
+    ['Date of Action',     'dateAction',    d, 'datetime'],
     // Two distinct facts live in this one field now: a read-only "Received during" line (which
     // cut-off was actually current when the email came in -- see dtmReceivedCutoffLabel,
     // computed fresh from Email Received, never stored/editable) and the actual dropdown below
@@ -23710,9 +23723,9 @@ function openDisputeTicket(id, clientContext) {
       return dtmSelectWithOtherHtml(f[0], f[1], f[2], f[4], 'dtm-other-' + f[1]);
     }
     if (f[3] === 'datetime') {
-      var isReplied = f[1] === 'repliedAt';
-      var dtVal = isReplied ? dtmRepliedAtToInputValue(f[2]) : dtmEmailTimeToInputValue(f[2]);
-      var dtSaveFn = isReplied ? 'dtmSaveRepliedAt' : 'dtmSaveEmailTime';
+      var isDateAction = f[1] === 'dateAction';
+      var dtVal = isDateAction ? dtmDateActionToInputValue(f[2]) : dtmEmailTimeToInputValue(f[2]);
+      var dtSaveFn = isDateAction ? 'dtmSaveDateAction' : 'dtmSaveEmailTime';
       return '<div style="background:var(--bg-secondary,#F4F4F8);border-radius:12px;padding:8px 12px;">'
         + '<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">' + f[0] + '</div>'
         + '<input type="datetime-local" value="' + dtVal + '" onchange="' + dtSaveFn + '(this.value)" '
@@ -24298,7 +24311,7 @@ function dtmMapRowToDispute(row, companyIdToKey) {
     recommendedResolution: row.recommended_resolution || '', payoutCutoff: row.payout_cutoff || '',
     amount: row.amount || '', updateOpen: row.update_open || '', otherRemarks: row.other_remarks || '',
     cutoff: row.cutoff || '', tat: row.tat || 'tat-grey', tatLabel: row.tat_label || '',
-    emailTime: row.email_time || '', repliedAt: row.replied_at || '',
+    emailTime: row.email_time || '',
     status: row.status, statusLabel: TICKET_STATUS_LABELS[row.status] || row.status,
     attendancePeriod: row.attendance_period || '', piPayout: row.pi_payout || '',
     piLines: piLines,
@@ -24326,7 +24339,7 @@ function dtmBuildDisputeRow(d) {
     payout_cutoff: d.payoutCutoff || null, amount: d.amount || null,
     update_open: d.updateOpen || null, other_remarks: d.otherRemarks || null,
     cutoff: d.cutoff || null, tat: d.tat || null, tat_label: d.tatLabel || null,
-    email_time: d.emailTime || null, replied_at: d.repliedAt || null,
+    email_time: d.emailTime || null,
     status: d.status || 'dst-open',
     is_unrecognized_client: !!d._unrecognizedClient,
     attendance_period: d.attendancePeriod || null, pi_payout: d.piPayout || null
