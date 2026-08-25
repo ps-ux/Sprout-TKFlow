@@ -588,6 +588,12 @@ function assignAvClass(shortKey, siblingClasses) {
       // hardcoded seed/wizard default was (i.e. active), undoing any churn from before reload.
       existing._churned = c.status === 'Churned';
       if (existing._churned) existing.status = 'Churned';
+      // A member's own private sandbox client (see the "TEST_" short_key convention) -- fully
+      // usable like any real client (sidebar, workspace, task runners all still work), but
+      // excluded everywhere real work gets aggregated: Dashboard/Admin overview totals, Team
+      // Capacity, Member Metrics. Unlike _churned, this is NOT excluded from ordinary
+      // navigation/workspace access -- the whole point is that it stays usable for testing.
+      existing._isTest = c.is_test === true;
       if (group) { existing.group = group.code; existing.groupName = group.name; }
       // Only meaningful for a standalone client (no group_id) -- a grouped company's avClass
       // gets overwritten by its group's own color further down regardless (see the groups
@@ -6171,7 +6177,7 @@ function renderTeamCapacity() {
     if (!userId) return { names: names, main: main, second: second };
     Object.keys(clientGroups).forEach(function(gk) {
       var subs = clientGroups[gk].subs || [gk];
-      if (!subs.some(function(sk){ return clients[sk] && !clients[sk]._churned; })) return;
+      if (!subs.some(function(sk){ return clients[sk] && !clients[sk]._churned && !clients[sk]._isTest; })) return;
       var scope = (typeof _procScope === 'function') ? _procScope(gk) : null;
       if (!scope) return;
       var isMain = scope.obj.mainProcessorUserId === userId;
@@ -6247,7 +6253,7 @@ function renderMemberMetrics() {
   if (!tbody) return;
 
   function clientsStrFor(uk) {
-    var subKeys = (USERS[uk].processClients || []).filter(function(sk){ return clients[sk] && !clients[sk]._churned; });
+    var subKeys = (USERS[uk].processClients || []).filter(function(sk){ return clients[sk] && !clients[sk]._churned && !clients[sk]._isTest; });
     var groupNames = [];
     Object.keys(clientGroups).forEach(function(gk) {
       var subs = clientGroups[gk].subs || [gk];
@@ -6262,7 +6268,7 @@ function renderMemberMetrics() {
   // per-task average, not a per-cutoff-period one: a person who processes 5 tasks a day
   // shows up here based on those 5 individual durations, not one lump start-to-finish span.
   function avgProcessingDaysFor(uk) {
-    var subKeys = USERS[uk].processClients || [];
+    var subKeys = (USERS[uk].processClients || []).filter(function(sk){ return clients[sk] && !clients[sk]._isTest; });
     var durations = (window.taskDurationLog || [])
       .filter(function(e){ return subKeys.indexOf(e.clientKey) >= 0; })
       .map(function(e){ return e.durationMs / 86400000; }); // ms -> days
@@ -6283,7 +6289,7 @@ function renderMemberMetrics() {
   // Currently-open TAT overdue tickets across this person's assigned clients — a live snapshot,
   // not a historical monthly count (no log of past overdue tickets exists to sum over time).
   function openBreachesFor(uk) {
-    var subKeys = USERS[uk].processClients || [];
+    var subKeys = (USERS[uk].processClients || []).filter(function(sk){ return clients[sk] && !clients[sk]._isTest; });
     if (typeof allDisputes === 'undefined') return 0;
     return allDisputes.filter(function(d){ return subKeys.indexOf(d.client) >= 0 && d.tat === 'tat-red' && d.status !== 'dst-closed'; }).length;
   }
@@ -21594,13 +21600,13 @@ function computeCutoffProgress() {
   var myGroupKeys = Object.keys(clientGroups).filter(function(gk) {
     var subs = clientGroups[gk].subs || [gk];
     return subs.some(function(sk) {
-      return (currentUser.processClients||[]).indexOf(sk) >= 0 && clients[sk] && !clients[sk]._churned;
+      return (currentUser.processClients||[]).indexOf(sk) >= 0 && clients[sk] && !clients[sk]._churned && !clients[sk]._isTest;
     });
   });
 
   myGroupKeys.forEach(function(gk) {
     var grp = clientGroups[gk];
-    var subs = (grp.subs || [gk]).filter(function(sk){ return clients[sk] && !clients[sk]._churned; });
+    var subs = (grp.subs || [gk]).filter(function(sk){ return clients[sk] && !clients[sk]._churned && !clients[sk]._isTest; });
     if (!subs.length) return;
     var repKey = subs[0];
 
@@ -21662,13 +21668,13 @@ function showCutoffProgressDetail() {
   document.body.appendChild(overlay);
 }
 
-function updateDashboardMetrics(){var myC=Object.entries(clients).filter(function(e){return (currentUser.processClients||[]).includes(e[0])&&!e[1]._churned;});var myClientKeys=myC.map(function(e){return e[0];});var myHC=myC.reduce(function(s,e){return s+(e[1].hc||0);},0),myD=(typeof allDisputes!=='undefined'?allDisputes.filter(function(d){return myClientKeys.indexOf(d.client)>=0&&d.status!=='dst-closed';}).length:myC.reduce(function(s,e){return s+(e[1].disp||0);},0)),myS=myC.filter(function(e){return e[1].status==='Submitted';}).length,myN=myC.map(function(e){return e[0];}).join(' - ');var cards=document.querySelectorAll('.mcard');if(cards[0]){
+function updateDashboardMetrics(){var myC=Object.entries(clients).filter(function(e){return (currentUser.processClients||[]).includes(e[0])&&!e[1]._churned&&!e[1]._isTest;});var myClientKeys=myC.map(function(e){return e[0];});var myHC=myC.reduce(function(s,e){return s+(e[1].hc||0);},0),myD=(typeof allDisputes!=='undefined'?allDisputes.filter(function(d){return myClientKeys.indexOf(d.client)>=0&&d.status!=='dst-closed';}).length:myC.reduce(function(s,e){return s+(e[1].disp||0);},0)),myS=myC.filter(function(e){return e[1].status==='Submitted';}).length,myN=myC.map(function(e){return e[0];}).join(' - ');var cards=document.querySelectorAll('.mcard');if(cards[0]){
   var v=cards[0].querySelector('.mcard-val'),sub=cards[0].querySelector('.mcard-sub');
   // Big number = distinct main clients (groups) where I'm the assigned Specialist, not just
   // anywhere I happen to have visibility (e.g. admin auto-access to every client).
   var myGroupKeys=Object.keys(clientGroups).filter(function(gk){
     var subs=clientGroups[gk].subs||[gk];
-    return subs.some(function(sk){ return (currentUser.processClients||[]).includes(sk) && clients[sk] && !clients[sk]._churned; });
+    return subs.some(function(sk){ return (currentUser.processClients||[]).includes(sk) && clients[sk] && !clients[sk]._churned && !clients[sk]._isTest; });
   });
   if(v)v.textContent=myGroupKeys.length;
   if(sub){
@@ -21676,7 +21682,7 @@ function updateDashboardMetrics(){var myC=Object.entries(clients).filter(functio
   }
 }if(cards[1]){var v=cards[1].querySelector('.mcard-val'),s=cards[1].querySelector('.mcard-sub');if(v)v.textContent=myHC;if(s)s.textContent='across my clients';}if(cards[2]){var v=cards[2].querySelector('.mcard-val'),s=cards[2].querySelector('.mcard-sub');if(v)v.textContent=myD;if(s)s.textContent='open tickets';}if(cards[3]){var v=cards[3].querySelector('.mcard-val'),s=cards[3].querySelector('.mcard-sub');var cp=computeCutoffProgress();if(v)v.textContent=cp.totalActual+'/'+cp.totalExpected;if(s)s.textContent=cp.pendingClients.length?(cp.pendingClients.length+' client'+(cp.pendingClients.length!==1?'s':'')+' pending'):'all caught up';window._dashCutoffProgress=cp;}var isL=currentUser.canServiceView||currentUser.canSeeAllDisputes,sL=document.querySelector('[data-svc-label]'),sR=document.getElementById('service-metrics-row');if(sR)sR.style.display=isL?'grid':'none';if(sL)sL.style.display=isL?'flex':'none';if(isL&&typeof renderServiceMetrics==='function')renderServiceMetrics();var cN=document.getElementById('nav-capacity');if(cN)cN.style.display=isL?'flex':'none';var cS=document.getElementById('team-capacity-section');if(cS)cS.style.display=isL?'block':'none';var t=document.getElementById('topbar-title');if(t)t.textContent=(typeof getTimeGreeting==='function')?getTimeGreeting(currentUser.name.split(' ')[0]):'Good day, '+currentUser.name.split(' ')[0];}
 function filterClientGrid(){var grid=document.querySelector('.client-grid');if(!grid)return;grid.querySelectorAll('.client-card').forEach(function(card){var oc=card.getAttribute('onclick')||'',km=oc.match(/openWorkspace\('(\w+)'\)/);if(km)card.style.display=currentUser.assignedClients.includes(km[1])?'':'none';});}
-function renderServiceMetrics(){var c=document.getElementById('service-metrics-row');if(!c)return;var all=Object.values(clients).filter(function(x){return !x._churned;});var tC=all.length,tH=all.reduce(function(s,x){return s+(x.hc||0);},0),tD=all.reduce(function(s,x){return s+(x.disp||0);},0),tS=all.filter(function(x){return x.status==='Submitted';}).length;function mc(l,v,s2,ic,col,bg){return '<div style="background:var(--bg-card,#fff);border:1px solid var(--border,#EBEBEF);border-radius:16px;padding:14px 16px;"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><div style="font-size:11px;font-weight:600;color:var(--text-muted,#9898a6);text-transform:uppercase;letter-spacing:.5px;">'+l+'</div><div style="width:28px;height:28px;border-radius:12px;background:'+bg+';display:flex;align-items:center;justify-content:center;"><i class="ti '+ic+'" style="font-size:14px;color:'+col+'"></i></div></div><div style="font-size:26px;font-weight:700;color:var(--text-primary,#1a1a2e);line-height:1;">'+v+'</div><div style="font-size:11px;color:var(--text-muted,#9898a6);margin-top:3px;">'+s2+'</div></div>';}c.innerHTML=mc('Total clients',tC,'For MPS service','ti-building-community','#32CE13','#DCFCE7')+mc('Total headcount',tH,'Across all clients','ti-users','#1679FA','#e8f0fe')+mc('Open disputes',tD,'Across all clients','ti-ticket','#c0392b','#fff0f0')+mc('Cut-off progress',tS+'/'+tC,'Clients submitted','ti-circle-check','#32CE13','#edfae8');}
+function renderServiceMetrics(){var c=document.getElementById('service-metrics-row');if(!c)return;var all=Object.values(clients).filter(function(x){return !x._churned&&!x._isTest;});var tC=all.length,tH=all.reduce(function(s,x){return s+(x.hc||0);},0),tD=all.reduce(function(s,x){return s+(x.disp||0);},0),tS=all.filter(function(x){return x.status==='Submitted';}).length;function mc(l,v,s2,ic,col,bg){return '<div style="background:var(--bg-card,#fff);border:1px solid var(--border,#EBEBEF);border-radius:16px;padding:14px 16px;"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><div style="font-size:11px;font-weight:600;color:var(--text-muted,#9898a6);text-transform:uppercase;letter-spacing:.5px;">'+l+'</div><div style="width:28px;height:28px;border-radius:12px;background:'+bg+';display:flex;align-items:center;justify-content:center;"><i class="ti '+ic+'" style="font-size:14px;color:'+col+'"></i></div></div><div style="font-size:26px;font-weight:700;color:var(--text-primary,#1a1a2e);line-height:1;">'+v+'</div><div style="font-size:11px;color:var(--text-muted,#9898a6);margin-top:3px;">'+s2+'</div></div>';}c.innerHTML=mc('Total clients',tC,'For MPS service','ti-building-community','#32CE13','#DCFCE7')+mc('Total headcount',tH,'Across all clients','ti-users','#1679FA','#e8f0fe')+mc('Open disputes',tD,'Across all clients','ti-ticket','#c0392b','#fff0f0')+mc('Cut-off progress',tS+'/'+tC,'Clients submitted','ti-circle-check','#32CE13','#edfae8');}
 
 // Admin overview's 4 cards are meant to be true TEAM-WIDE totals — everyone's clients, not
 // just whoever's currently previewing the hub — unlike the Dashboard cards, which are scoped
@@ -21686,12 +21692,12 @@ function renderServiceMetrics(){var c=document.getElementById('service-metrics-r
 function updateAdminOverviewMetrics(){
   var groupKeys = Object.keys(clientGroups).filter(function(gk){
     var subs = clientGroups[gk].subs || [gk];
-    return subs.some(function(sk){ return clients[sk] && !clients[sk]._churned; });
+    return subs.some(function(sk){ return clients[sk] && !clients[sk]._churned && !clients[sk]._isTest; });
   });
-  var allClients = Object.values(clients).filter(function(x){ return !x._churned; });
+  var allClients = Object.values(clients).filter(function(x){ return !x._churned && !x._isTest; });
   var totalHC = allClients.reduce(function(s,x){ return s + (x.hc || 0); }, 0);
   var totalDisputes = (typeof allDisputes !== 'undefined')
-    ? allDisputes.filter(function(d){ return d.status !== 'dst-closed' && clients[d.client] && !clients[d.client]._churned; }).length
+    ? allDisputes.filter(function(d){ return d.status !== 'dst-closed' && clients[d.client] && !clients[d.client]._churned && !clients[d.client]._isTest; }).length
     : allClients.reduce(function(s,x){ return s + (x.disp || 0); }, 0);
   var teamMemberCount = Object.keys(USERS).length;
 
