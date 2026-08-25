@@ -24,9 +24,11 @@ from users u
 where u.short_key is not null
   and not exists (select 1 from companies c where c.short_key = 'TEST_' || upper(u.short_key));
 
--- Grant the owning member both assigned + processing access to their own test client (same as
--- a normal new client's specialist gets), and every can_assign admin assigned access to all
--- test clients (same auto-grant every real client already gets).
+-- Grant ONLY the owning member assigned + processing access to their own test client --
+-- deliberately NOT auto-granting every can_assign admin access the way real clients do (see
+-- renderSidebarClients' isTestGroup carve-out in TKFlow_Hub.html): a test client is a private
+-- sandbox, not something that should show up in every admin's "Team's Clients" list. An admin
+-- still gets their OWN test client from this same insert, same as anyone else.
 insert into user_company_relations (user_id, company_id, relation_type)
 select u.id, c.id, 'assigned'
 from users u
@@ -41,13 +43,4 @@ from users u
 join companies c on c.short_key = 'TEST_' || upper(u.short_key)
 where not exists (
   select 1 from user_company_relations r where r.user_id = u.id and r.company_id = c.id and r.relation_type = 'processing'
-);
-
-insert into user_company_relations (user_id, company_id, relation_type)
-select a.id, c.id, 'assigned'
-from users a
-cross join companies c
-where a.can_assign = true and c.is_test = true
-and not exists (
-  select 1 from user_company_relations r where r.user_id = a.id and r.company_id = c.id and r.relation_type = 'assigned'
 );

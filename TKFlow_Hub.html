@@ -3225,6 +3225,11 @@ function closeWorkspace() {
       if (!activeSubs.length) return;
       if (isGroupOnHold(grpKey)) { onHoldGroups.push(grpKey); return; }
       var isMine = activeSubs.some(function(k){ return (currentUser.processClients||[]).indexOf(k) >= 0; });
+      // Test clients are private per-member sandboxes -- an admin should still see their OWN
+      // under "My Clients" like anyone else, but every other member's shouldn't clutter
+      // "Team's Clients" the way every real client legitimately does.
+      var isTestGroup = activeSubs.every(function(k){ return clients[k]._isTest; });
+      if (isTestGroup && !isMine) return;
       (isMine ? myGroups : teamGroups).push(grpKey);
     });
 
