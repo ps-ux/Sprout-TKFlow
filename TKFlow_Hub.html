@@ -14592,8 +14592,12 @@ function runValidation(opts) {
 
     // Raised from 60% -- a case covering just barely over 60% of the shift (e.g. 60.2%) was
     // still a real half-day concern (e.g. leaving well before the shift's actual end), not a
-    // near-full day.
-    if (coverageRatio < 0.7) {
+    // near-full day. Same "file's own real Undertime figure is authoritative" guard as the
+    // short-total check above -- without it, a date the file already fully explains as
+    // ordinary Late + Undertime (e.g. logged in late, logged out early, real minutes in both
+    // columns) still got independently re-flagged as Half Day Absent by this coverage math,
+    // producing a conflicting second classification for the exact same gap.
+    if (!fileHasRealUndertime && coverageRatio < 0.7) {
       return { half: 'partial', reason: 'Logs overlap shift midpoint but cover only ' + Math.round(coverageRatio*100) + '% of the shift' };
     }
     // A shift window that's genuinely short by design (a half-day-length shift) and is fully
