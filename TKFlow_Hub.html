@@ -3294,6 +3294,14 @@ function switchPage(page) {
     var adminVisible = currentUser.canServiceView;
     if (!adminVisible) { switchPage('dashboard'); return; }
     if (typeof renderOrgChart === 'function') renderOrgChart();
+    // Team Capacity is the default-visible admin sub-tab (see admin-capacity-panel's static
+    // markup -- it has no display:none, unlike every other admin panel), but nothing ever
+    // rendered it fresh on opening Admin itself -- only switchAdminTab('capacity') did, which
+    // only fires on an explicit tab click. Whatever it last showed was whatever the very first
+    // renderTeamCapacity() call (DOMContentLoaded, before login/real USERS data even existed)
+    // left behind, staying stale until someone happened to click into another admin sub-tab
+    // and back. Render it fresh every time Admin opens instead of relying on that leftover.
+    if (typeof renderTeamCapacity === 'function') renderTeamCapacity();
   } else {
     // Any other page (workspace included) — the subtitle was previously left showing
     // whatever the last page had set (e.g. Admin's "Team overview..." text bleeding
@@ -6158,16 +6166,37 @@ function renderTeamCapacity() {
     return names;
   }
 
+  // How many clients (real groups + standalone companies, one count each -- not one per
+  // subcompany) this person is Main/Second processor for, via the same _procScope resolution
+  // Client Assignments/canProcessCurrentCutoff already use. Requires a real Supabase Auth id
+  // (mainProcessorUserId/secondProcessorUserId are uuid-keyed) -- someone without one yet
+  // just shows 0 for both, same as they'd show up nowhere in the processor dropdowns either.
+  function procCountsFor(userId) {
+    var main = 0, second = 0;
+    if (!userId) return { main: main, second: second };
+    Object.keys(clientGroups).forEach(function(gk) {
+      var subs = clientGroups[gk].subs || [gk];
+      if (!subs.some(function(sk){ return clients[sk] && !clients[sk]._churned; })) return;
+      var scope = (typeof _procScope === 'function') ? _procScope(gk) : null;
+      if (!scope) return;
+      if (scope.obj.mainProcessorUserId === userId) main++;
+      if (scope.obj.secondProcessorUserId === userId) second++;
+    });
+    return { main: main, second: second };
+  }
+
   var rows = Object.keys(USERS).map(function(uk) {
     var u = USERS[uk];
     var profile = teamProfiles[uk] || {};
     var specSubs = (u.processClients || []).filter(function(sk){ return clients[sk] && !clients[sk]._churned; });
     var specGroups = groupNamesFor(specSubs);
+    var procCounts = procCountsFor(u.id);
     return {
       name: u.name, initials: u.initials,
       avBg: profile.avBg || '#F4F4F8', avTxt: profile.avTxt || '#9898a6',
       clientsLabel: specGroups.length ? specGroups.join(' \u00b7 ') : '\u2014',
-      specCount: specGroups.length
+      specCount: specGroups.length,
+      mainCount: procCounts.main, secondCount: procCounts.second
     };
   });
 
@@ -6177,7 +6206,8 @@ function renderTeamCapacity() {
     var pct = Math.max(3, Math.round((r.specCount / maxLoad) * 100));
     return '<div class="team-card">'
       + '<div class="tc-av" style="background:' + r.avBg + ';color:' + r.avTxt + ';">' + r.initials + '</div>'
-      + '<div class="tc-info"><div class="tc-name">' + r.name + '</div><div class="tc-clients">' + r.clientsLabel + '</div></div>'
+      + '<div class="tc-info"><div class="tc-name">' + r.name + '</div><div class="tc-clients">' + r.clientsLabel + '</div>'
+      + '<div style="font-size:11px;color:#9898a6;margin-top:2px;">Main: ' + r.mainCount + ' · Second: ' + r.secondCount + '</div></div>'
       + '<div class="tc-right"><div class="tc-specialist">' + r.specCount + ' client' + (r.specCount !== 1 ? 's' : '') + '</div>'
       + '<div class="tc-bar"><div class="tc-fill fill-g" style="width:' + pct + '%"></div></div></div>'
       + '</div>';
