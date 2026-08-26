@@ -286,7 +286,14 @@ module.exports = async function handler(req, res) {
     const ics = buildICS('TKFlow — ' + user.name + '’s To-Dos', events, new Date());
 
     res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
-    res.setHeader('Cache-Control', 'public, max-age=1800');
+    // `public, max-age=...` (this route's original setting) let the browser AND any shared/CDN
+    // cache reuse a stale response for the full window -- confirmed live: a re-fetch minutes
+    // after a real data-affecting fix returned an identical DTSTAMP, i.e. a cached response, not
+    // a fresh one. Google's own poll cadence (hours) already throttles real request volume far
+    // more than any Cache-Control here would; the compute cost of a fresh response is trivial
+    // (a handful of REST reads), so there's no real benefit to caching, only staleness risk for
+    // what's meant to be a live to-do list.
+    res.setHeader('Cache-Control', 'no-store');
     res.status(200).send(ics);
   } catch (err) {
     console.error('calendar feed error', err);
