@@ -200,9 +200,9 @@ body { font-family: 'Rubik', sans-serif; background: #F7F5F2; color: var(--text-
 .disp-name { font-size: 13px; font-weight: 500; color: var(--text-primary); }
 .disp-det { font-size: 11px; color: var(--text-muted); }
 .disp-st { font-size: 10px; font-weight: 500; padding: 2px 8px; border-radius: 14px; white-space: nowrap; margin-top: 2px; }
-#dtm-section-findings summary::-webkit-details-marker, #dtm-section-pi summary::-webkit-details-marker { display: none; }
-#dtm-section-findings summary::before, #dtm-section-pi summary::before { content: '\25B8'; display: inline-block; margin-right: 6px; transition: transform 0.15s; color: var(--text-muted); }
-#dtm-section-findings[open] summary::before, #dtm-section-pi[open] summary::before { transform: rotate(90deg); }
+#dtm-section-info summary::-webkit-details-marker, #dtm-section-findings summary::-webkit-details-marker, #dtm-section-pi summary::-webkit-details-marker { display: none; }
+#dtm-section-info summary::before, #dtm-section-findings summary::before, #dtm-section-pi summary::before { content: '\25B8'; display: inline-block; margin-right: 6px; transition: transform 0.15s; color: var(--text-muted); }
+#dtm-section-info[open] summary::before, #dtm-section-findings[open] summary::before, #dtm-section-pi[open] summary::before { transform: rotate(90deg); }
 .dst-open { background: var(--tm-50); color: var(--tm-700); }
 .dst-rev { background: var(--ca-50); color: var(--ca-700); }
 .dst-resolved { background: #F3E8FF; color: #7C3AED; }
@@ -23543,8 +23543,35 @@ if (_origSwitchPage2) {
 
       <div id="dtm-unrecognized-client-banner" style="display:none;background:#fff4e6;border:1px solid #FDBA74;border-radius:14px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#9A3412;"></div>
 
-      <!-- Section 1: Ticket Info — always visible, this is what matters when first logging a ticket -->
-      <div style="font-size:11px;font-weight:700;color:#32CE13;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Ticket Info</div>
+      <!-- Employee name — kept outside every collapsible section so it stays visible no matter
+           which one is open. Only editable copy of this field now (removed from the Ticket
+           Info fields grid below to avoid two places drifting out of sync). -->
+      <div style="margin-bottom:14px;">
+        <input id="dtm-employee-name" type="text" placeholder="Employee name" oninput="dtmSaveField('name',this.value)" style="width:100%;border:none;background:transparent;padding:0;font-size:17px;font-weight:700;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;">
+      </div>
+
+      <!-- Section 1: Ticket Info — open by default; openDisputeTicket() switches the default
+           open section to Findings/PI instead if this ticket already has content there. All
+           three sections share name="dtm-section" for native exclusive-accordion behavior
+           (opening one auto-closes the others). -->
+      <details name="dtm-section" id="dtm-section-info" open style="margin-bottom:14px;border:1px solid var(--border,#EBEBEF);border-radius:14px;padding:0;">
+        <summary style="padding:10px 14px;cursor:pointer;font-size:11px;font-weight:700;color:#1a1a2e;text-transform:uppercase;letter-spacing:.5px;list-style:none;">Ticket Info</summary>
+        <div style="padding:0 14px 14px;">
+
+          <!-- Status buttons + Save — top of Ticket Info, not buried under the fields -->
+          <div style="margin-bottom:16px;">
+            <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;">Update status</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button onclick="dtmUpdateStatus('dst-open')" data-status="dst-open" class="dtm-st-btn" style="padding:7px 16px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Open</button>
+              <button onclick="dtmUpdateStatus('dst-rev')" data-status="dst-rev" class="dtm-st-btn" style="padding:7px 16px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">In Progress</button>
+              <button onclick="dtmUpdateStatus('dst-resolved')" data-status="dst-resolved" class="dtm-st-btn" style="padding:7px 16px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Resolved</button>
+              <button onclick="dtmUpdateStatus('dst-closed')" data-status="dst-closed" class="dtm-st-btn" style="padding:7px 16px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Closed</button>
+              <button onclick="dtmSaveAll()" style="margin-left:auto;padding:7px 18px;border-radius:12px;border:none;background:var(--ub-500);color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;">
+                <i class="ti ti-device-floppy" style="font-size:14px;"></i> Save
+              </button>
+            </div>
+          </div>
+
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;" id="dtm-fields-grid"></div>
 
       <div style="margin-bottom:14px;">
@@ -23560,47 +23587,28 @@ if (_origSwitchPage2) {
         <textarea id="dtm-full-details" rows="3" placeholder="Description of the concern..." oninput="dtmSaveField('fullDetails',this.value)" style="width:100%;font-size:13px;color:var(--text-primary);background:var(--bg-secondary,#F4F4F8);border:none;border-radius:14px;padding:12px 14px;line-height:1.6;min-height:50px;resize:vertical;outline:none;font-family:Rubik,sans-serif;box-sizing:border-box;"></textarea>
       </div>
 
-      <!-- Status buttons -->
-      <div style="margin-bottom:16px;">
-        <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;">Update status</div>
-        <div style="display:flex;gap:8px;">
-          <button onclick="dtmUpdateStatus('dst-open')" data-status="dst-open" class="dtm-st-btn" style="padding:7px 16px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Open</button>
-          <button onclick="dtmUpdateStatus('dst-rev')" data-status="dst-rev" class="dtm-st-btn" style="padding:7px 16px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">In Progress</button>
-          <button onclick="dtmUpdateStatus('dst-resolved')" data-status="dst-resolved" class="dtm-st-btn" style="padding:7px 16px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Resolved</button>
-          <button onclick="dtmUpdateStatus('dst-closed')" data-status="dst-closed" class="dtm-st-btn" style="padding:7px 16px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Closed</button>
-          <button onclick="dtmSaveAll()" style="margin-left:auto;padding:7px 18px;border-radius:12px;border:none;background:var(--ub-500);color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;">
-            <i class="ti ti-device-floppy" style="font-size:14px;"></i> Save
-          </button>
-        </div>
-      </div>
-
-      <div style="height:1px;background:var(--border,#EBEBEF);margin-bottom:16px;"></div>
-
-      <!-- Email upload + AI auto-fill -->
-      <div style="background:var(--bg-secondary,#F4F4F8);border-radius:16px;padding:14px 16px;margin-bottom:16px;">
+      <!-- Paste email body -> auto-fill (plain text-pattern parser, no AI/upload -- see
+           dtmExtractFromPasteText) -->
+      <div style="background:var(--bg-secondary,#F4F4F8);border-radius:16px;padding:14px 16px;">
         <div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:4px;display:flex;align-items:center;gap:6px;">
           <i class="ti ti-mail" style="font-size:14px;color:#32CE13;"></i>
-          Upload email thread
-          <span style="font-size:10px;background:#DCFCE7;color:#32CE13;padding:2px 8px;border-radius:20px;font-weight:600;">AI auto-fill</span>
+          Paste email body
+          <span style="font-size:10px;background:#DCFCE7;color:#32CE13;padding:2px 8px;border-radius:20px;font-weight:600;">Auto-fill</span>
         </div>
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">Upload the email thread and AI will extract dispute details and fill the form automatically.</div>
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <label style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border:1.5px dashed var(--border,#EBEBEF);border-radius:12px;cursor:pointer;font-size:12px;color:var(--text-secondary);background:var(--bg-card,#fff);" onmouseover="this.style.borderColor='#32CE13'" onmouseout="this.style.borderColor=''" ondragover="return dzDragOver(event)" ondragleave="dzDragLeave(event)" ondrop="dzDrop(event,'dtm-file-input')">
-            <i class="ti ti-paperclip" style="font-size:14px;"></i>
-            Attach .pdf, .eml, .txt, .png, .jpg
-            <input type="file" id="dtm-file-input" accept=".pdf,.eml,.msg,.txt,.png,.jpg" style="display:none;" onchange="dtmHandleFile(this)">
-          </label>
-          <span id="dtm-file-name" style="font-size:11px;color:var(--text-muted);"></span>
-        </div>
-        <div id="dtm-file-preview" style="margin-top:10px;display:none;"></div>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">Paste the request email's body below and matching fields will fill in automatically.</div>
+        <textarea id="dtm-paste-area" rows="6" placeholder="Paste email content here..." style="width:100%;padding:10px 12px;border:1px solid var(--border,#EBEBEF);border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;resize:vertical;outline:none;box-sizing:border-box;background:var(--bg-card,#fff);color:var(--text-primary);"></textarea>
         <div id="dtm-ai-status" style="display:none;margin-top:10px;padding:10px 12px;background:#DCFCE7;border-radius:12px;font-size:12px;color:#32CE13;"></div>
-        <button id="dtm-extract-btn" onclick="dtmExtractWithAI()" style="display:none;margin-top:10px;padding:8px 18px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;">
-          <i class="ti ti-sparkles" style="font-size:13px;"></i> Extract &amp; auto-fill with AI
+        <button onclick="dtmExtractFromPasteText()" style="margin-top:10px;padding:8px 18px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;">
+          <i class="ti ti-wand" style="font-size:13px;"></i> Extract &amp; auto-fill
         </button>
       </div>
+
+        </div>
+      </details>
+
       <!-- Section 2: OTK Findings & Resolution — collapsed by default on a fresh ticket
            (nothing to show yet); openDisputeTicket() force-opens it if it already has content. -->
-      <details id="dtm-section-findings" style="margin-bottom:14px;border:1px solid var(--border,#EBEBEF);border-radius:14px;padding:0;">
+      <details name="dtm-section" id="dtm-section-findings" style="margin-bottom:14px;border:1px solid var(--border,#EBEBEF);border-radius:14px;padding:0;">
         <summary style="padding:10px 14px;cursor:pointer;font-size:11px;font-weight:700;color:#1a1a2e;text-transform:uppercase;letter-spacing:.5px;list-style:none;">OTK Findings &amp; Resolution</summary>
         <div style="padding:0 14px 14px;">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
@@ -23627,7 +23635,7 @@ if (_origSwitchPage2) {
       </details>
 
       <!-- Section 3: Payroll Instructions — same collapsed-unless-filled behavior -->
-      <details id="dtm-section-pi" style="margin-bottom:16px;border:1px solid var(--border,#EBEBEF);border-radius:14px;padding:0;">
+      <details name="dtm-section" id="dtm-section-pi" style="margin-bottom:16px;border:1px solid var(--border,#EBEBEF);border-radius:14px;padding:0;">
         <summary style="padding:10px 14px;cursor:pointer;font-size:11px;font-weight:700;color:#1a1a2e;text-transform:uppercase;letter-spacing:.5px;list-style:none;">Payroll Instructions</summary>
         <div style="padding:0 14px 14px;">
           <div style="margin-bottom:10px;">
@@ -23710,8 +23718,6 @@ if (_origSwitchPage2) {
 var dtmCurrentId = null;
 var dtmCurrentClient = null;
 var dtmLogs = {};
-var dtmPendingFile = null;
-var dtmPendingImageB64 = null;
 
 var dtmTatColors = {'tat-red':'#c0392b','tat-yellow':'#e67e00','tat-green':'#32CE13','tat-grey':'#9898a6'};
 var dtmTatBgs    = {'tat-red':'#fff0f0','tat-yellow':'#fff4e6','tat-green':'#edfae8','tat-grey':'#F4F4F8'};
@@ -24073,9 +24079,11 @@ function openDisputeTicket(id, clientContext) {
   // Fields grid — editable inputs, wired to auto-save on change. Subcompany and Type of
   // Request are dropdowns (see dtmSelectWithOtherHtml) rather than free text, so they can't
   // drift from real subcompany names or an inconsistent set of dispute categories.
+  // Employee name lives in its own always-visible input above the accordion now (dtm-employee-
+  // name), not in this grid -- kept out of fieldSpecs so it isn't edited in two places.
+  document.getElementById('dtm-employee-name').value = d.name || '';
   var dtmRequestTypes = ['Payroll Dispute', 'Leave Application', 'Missing / Incorrect Logs', 'Others'];
   var fieldSpecs = [
-    ['Employee Name',    'name',            d.name],
     ['Employee No.',     'empNo',           d.empNo],
     ['Employee Email',   'empEmail',        d.empEmail],
     ['Subcompany',       'entity',          d.entity || d.client, 'select', dtmSubcompanyOptions(d.client).concat(['Others'])],
@@ -24174,15 +24182,23 @@ function openDisputeTicket(id, clientContext) {
 
   // Collapsed by default on a fresh ticket (nothing to see yet) — auto-expand only if this
   // ticket already has content in that section, so reviewing an existing ticket isn't
-  // hiding anything behind an extra click.
+  // hiding anything behind an extra click. The three sections share name="dtm-section" for
+  // native exclusive-accordion behavior (opening one auto-closes the others) -- but that only
+  // auto-CLOSES siblings when one opens, it never auto-REOPENS a different one when the open
+  // one closes, so Ticket Info's default-open state has to be set explicitly every time too,
+  // not just left to whatever the HTML `open` attribute happened to be on page load.
   var findingsSection = document.getElementById('dtm-section-findings');
-  if (findingsSection) findingsSection.open = !!(d.findings || d.recommendedResolution || d.updateOpen || d.otherRemarks);
+  var hasFindings = !!(d.findings || d.recommendedResolution || d.updateOpen || d.otherRemarks);
+  if (findingsSection) findingsSection.open = hasFindings;
   // d.piPayout is auto-computed for every ticket at creation time (the cutoff-label
   // auto-fill), so it's always truthy regardless of whether the user has entered anything --
   // checking it here meant this section showed expanded on literally every ticket. Only real
   // user-added payroll instruction lines should trigger auto-expand.
   var piSection = document.getElementById('dtm-section-pi');
-  if (piSection) piSection.open = !!(Array.isArray(d.piLines) && d.piLines.length);
+  var hasPi = !!(Array.isArray(d.piLines) && d.piLines.length);
+  if (piSection) piSection.open = hasPi;
+  var infoSection = document.getElementById('dtm-section-info');
+  if (infoSection) infoSection.open = !(hasFindings || hasPi);
 
   // Status buttons
   document.querySelectorAll('.dtm-st-btn').forEach(function(btn) {
@@ -24193,14 +24209,11 @@ function openDisputeTicket(id, clientContext) {
     btn.style.fontWeight  = active ? '600' : '500';
   });
 
-  // Reset upload area
-  dtmPendingFile = null; dtmPendingImageB64 = null;
-  document.getElementById('dtm-file-name').textContent = '';
-  document.getElementById('dtm-file-preview').style.display = 'none';
-  document.getElementById('dtm-file-preview').innerHTML = '';
-  document.getElementById('dtm-ai-status').style.display = 'none';
-  document.getElementById('dtm-extract-btn').style.display = 'none';
-  document.getElementById('dtm-file-input').value = '';
+  // Reset paste-extract area
+  var pasteArea = document.getElementById('dtm-paste-area');
+  if (pasteArea) pasteArea.value = '';
+  var aiStatusEl = document.getElementById('dtm-ai-status');
+  if (aiStatusEl) aiStatusEl.style.display = 'none';
 
   dtmRenderLog(id);
   dtmSwitchTab('details');
@@ -24938,120 +24951,115 @@ function dtmRenderLog(id) {
   el.scrollTop = el.scrollHeight;
 }
 
-// \u2500\u2500 Email upload + AI extraction \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-function dtmHandleFile(input) {
-  var file = input.files[0]; if (!file) return;
-  dtmPendingFile = file;
-  document.getElementById('dtm-file-name').textContent = file.name;
-  document.getElementById('dtm-extract-btn').style.display = 'inline-flex';
-  var prev = document.getElementById('dtm-file-preview');
-  if (file.type.startsWith('image/')) {
-    var reader = new FileReader();
-    reader.onload = function(e) {
-      dtmPendingImageB64 = e.target.result.split(',')[1];
-      prev.innerHTML = '<img src="' + e.target.result + '" style="max-width:100%;border-radius:12px;max-height:160px;object-fit:contain;">';
-      prev.style.display = 'block';
-    };
-    reader.readAsDataURL(file);
-  } else {
-    prev.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-card,#fff);border:1px solid var(--border,#EBEBEF);border-radius:12px;font-size:12px;color:var(--text-secondary);"><i class="ti ti-file" style="font-size:16px;color:#32CE13;"></i>' + file.name + '</div>';
-    prev.style.display = 'block';
-  }
-}
+// \u2500\u2500 Paste-email text-pattern parser (no AI, no upload) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// Replaces the old Anthropic-API-backed "Upload email thread" feature, which had no auth
+// headers at all and could never have worked, and which would have meant calling a paid
+// external API directly from browser code regardless. This instead does plain "find each known
+// label, take the text after it" matching against the fixed-template timekeeping request
+// emails (Name / Business Unit / Employee's ID number (PDM ID) / Business Group / Manager /
+// Location / Shift / Type of Request / Description) -- deterministic, free, and everything
+// stays in the browser; nothing is sent anywhere.
+var DTM_PASTE_FIELD_LABELS = [
+  { label: 'Name', key: 'nameRaw' },
+  { label: 'Business Unit / Functional Unit', key: 'businessUnit' },
+  { label: "Employee's ID number (PDM ID)", key: 'empNo' },
+  { label: 'Business Group', key: 'entity' },
+  { label: 'Manager', key: 'manager' },
+  { label: 'Location', key: 'location' },
+  { label: 'Shift', key: 'shift' },
+  { label: 'Type of Request', key: 'nature' },
+  { label: 'Description', key: 'description' }
+];
 
-function dtmExtractWithAI() {
-  if (!dtmPendingFile || !dtmCurrentId) return;
-  var statusEl = document.getElementById('dtm-ai-status');
-  statusEl.style.display = 'block';
-  statusEl.innerHTML = '<i class="ti ti-sparkles" style="font-size:13px;margin-right:4px;"></i>Reading file...';
-  document.getElementById('dtm-extract-btn').style.display = 'none';
+function dtmRegexEscape(str) { return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-  var isImage = dtmPendingFile.type.startsWith('image/');
-  var isText  = dtmPendingFile.type === 'text/plain' || dtmPendingFile.name.endsWith('.txt') || dtmPendingFile.name.endsWith('.eml');
-
-  if (isImage && dtmPendingImageB64) {
-    dtmCallAI(null, dtmPendingImageB64);
-  } else if (isText) {
-    var reader = new FileReader();
-    reader.onload = function(e) { dtmCallAI(e.target.result, null); };
-    reader.readAsText(dtmPendingFile);
-  } else {
-    statusEl.innerHTML = '<i class="ti ti-sparkles" style="font-size:13px;margin-right:4px;"></i>Paste the email text below for AI extraction:<br>'
-      + '<textarea id="dtm-paste-area" rows="5" placeholder="Paste email content here..." style="width:100%;margin-top:8px;padding:8px;border:1px solid #BBF7D0;border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;resize:none;outline:none;box-sizing:border-box;"></textarea>'
-      + '<button onclick="dtmExtractFromPaste()" style="margin-top:6px;padding:7px 14px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Extract</button>';
-  }
-}
-
-function dtmExtractFromPaste() {
-  var el = document.getElementById('dtm-paste-area');
-  if (!el || !el.value.trim()) return;
-  document.getElementById('dtm-ai-status').innerHTML = '<i class="ti ti-sparkles" style="font-size:13px;margin-right:4px;"></i>Extracting with AI...';
-  dtmCallAI(el.value.trim(), null);
-}
-
-function dtmCallAI(text, imageB64) {
-  var statusEl = document.getElementById('dtm-ai-status');
-  statusEl.innerHTML = '<i class="ti ti-sparkles" style="font-size:13px;margin-right:4px;"></i>Extracting dispute details with AI...';
-
-  var sysPrompt = 'You are a payroll dispute assistant. Extract dispute details from the email and return ONLY valid JSON with these exact keys: {"employeeName":"","employeeNumber":"","entity":"","payrollSchedule":"","dateSubmitted":"","natureOfDispute":"","disputeDates":"","fullDetails":"","dateOfAction":"","payoutCutoff":"","amount":"","piPayout":"","piCode":"","piNumber":"","piAddDed":"","piRemarks":""}. '
-    + 'piCode must be one of exactly these codes if a payroll adjustment is mentioned (else leave blank): Absent, Undertime, Ord-OT, Ord-ND, Ord-ND-OT, RD, RD-OT, RD-ND, RD-ND-OT, SH, SH-OT, SH-ND, SH-ND-OT, LH, LH-OT, LH-ND, LH-ND-OT, SH-RD, SH-RD-OT, SH-RD-ND, SH-RD-ND-OT, LH-RD, LH-RD-OT, LH-RD-ND, LH-RD-ND-OT, DH, DH-OT, DH-ND, DH-ND-OT, DH-RD, DH-RD-OT, DH-RD-ND, DH-RD-ND-OT. '
-    + 'piNumber is the numeric quantity (e.g. 2 for "2 hrs OT"). piAddDed is "Addition" or "Deduction". piPayout is the payout period this should be applied to (e.g. "May 2nd"), if mentioned. piRemarks is a short note on why/what to do with the adjustment. If a field is not found, leave it as empty string. Return ONLY the JSON, no other text.';
-
-  var userContent = imageB64
-    ? [{type:'image', source:{type:'base64', media_type:'image/jpeg', data:imageB64}}, {type:'text', text:'Extract all dispute details from this email screenshot.'}]
-    : 'Extract dispute details from this email:\n\n' + text;
-
-  fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({model:'claude-sonnet-4-6', max_tokens:800, system:sysPrompt, messages:[{role:'user', content:userContent}]})
-  })
-  .then(function(r) { return r.json(); })
-  .then(function(data) {
-    var raw = (data.content || []).map(function(c) { return c.text || ''; }).join('');
-    var clean = raw.replace(/'''json|'''/g, '').trim();
-    var ext = JSON.parse(clean);
-    var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
-    if (d) {
-      if (ext.employeeName)    d.name            = ext.employeeName;
-      if (ext.employeeNumber)  d.empNo            = ext.employeeNumber;
-      if (ext.entity)          d.entity           = ext.entity;
-      if (ext.payrollSchedule) d.payrollSchedule  = ext.payrollSchedule;
-      if (ext.dateSubmitted)   d.dateSubmitted     = ext.dateSubmitted;
-      if (ext.natureOfDispute) d.nature            = ext.natureOfDispute;
-      if (ext.disputeDates)    d.disputeDates      = ext.disputeDates;
-      if (ext.fullDetails)     d.fullDetails       = ext.fullDetails;
-      if (ext.dateOfAction)    d.dateAction        = ext.dateOfAction;
-      if (ext.payoutCutoff)    d.payoutCutoff      = ext.payoutCutoff;
-      if (ext.amount)          d.amount            = ext.amount;
-      if (ext.piPayout)        d.piPayout          = ext.piPayout;
-      if (ext.piCode || ext.piNumber) {
-        if (!Array.isArray(d.piLines)) d.piLines = [];
-        d.piLines.push({
-          code: ext.piCode || '',
-          number: ext.piNumber || '',
-          addDed: ext.piAddDed === 'Deduction' ? 'Deduction' : 'Addition',
-          remarks: ext.piRemarks || ''
-        });
-      }
+function dtmParseEmailBody(text) {
+  var lines = String(text || '').split(/\r\n|\r|\n/);
+  var out = {};
+  var currentKey = null;
+  lines.forEach(function(line) {
+    // Stop capturing into Description once trailing Gmail attachment-footer noise starts
+    // (e.g. "One attachment \u00b7 Scanned by Gmail") -- otherwise that ends up appended to
+    // Full Details along with the real description.
+    if (currentKey === 'description' && /^\s*(one attachment|\d+\s+attachments?|scanned by gmail)/i.test(line)) {
+      currentKey = null;
+      return;
     }
-    var cu = window.currentUser || currentUser;
-    dtmAddLog(dtmCurrentId, {
-      time: new Date().toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}),
-      author: cu ? cu.name.split(' ')[0] : 'You',
-      note: 'Email attached: ' + dtmPendingFile.name + ' \u2014 AI auto-filled fields',
-      type: 'ai'
-    });
-    statusEl.style.display = 'none';
-    openDisputeTicket(dtmCurrentId);
-    if (typeof showToast === 'function') showToast('Fields auto-filled from email!');
-  })
-  .catch(function(err) {
-    statusEl.innerHTML = '<span style="color:#c0392b;"><i class="ti ti-alert-circle" style="font-size:13px;margin-right:4px;"></i>AI extraction failed. Please fill fields manually.</span>';
-    var cu = window.currentUser || currentUser;
-    dtmAddLog(dtmCurrentId, {time: new Date().toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}), author: cu ? cu.name.split(' ')[0] : 'You', note: 'Email attached: ' + dtmPendingFile.name, type: 'email'});
-    dtmRenderLog(dtmCurrentId);
+    var matched = null;
+    for (var i = 0; i < DTM_PASTE_FIELD_LABELS.length; i++) {
+      var f = DTM_PASTE_FIELD_LABELS[i];
+      var re = new RegExp('^\\s*' + dtmRegexEscape(f.label) + '\\s*:\\s*(.*)$', 'i');
+      var m = line.match(re);
+      if (m) { matched = { key: f.key, value: m[1].trim() }; break; }
+    }
+    if (matched) {
+      out[matched.key] = matched.value;
+      currentKey = matched.key;
+    } else if (currentKey) {
+      // Continuation line of a multi-line value (realistically only Description).
+      var trimmed = line.trim();
+      if (trimmed) out[currentKey] = (out[currentKey] ? out[currentKey] + ' ' : '') + trimmed;
+    }
   });
+  return out;
+}
+
+function dtmExtractFromPasteText() {
+  var el = document.getElementById('dtm-paste-area');
+  var statusEl = document.getElementById('dtm-ai-status');
+  if (!el || !el.value.trim() || !dtmCurrentId) return;
+  var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
+  if (!d) return;
+
+  var parsed = dtmParseEmailBody(el.value);
+  var filledAny = false;
+
+  if (parsed.nameRaw) {
+    // "Name:" in this template is actually an email address, not a display name -- capture it
+    // as Employee Email verbatim, and also derive a readable best-guess name from its
+    // local-part (e.g. "ronron.rea@..." -> "Ronron Rea") rather than leaving Employee Name
+    // blank when a reasonable guess is easy to make.
+    d.empEmail = parsed.nameRaw;
+    var localPart = parsed.nameRaw.split('@')[0];
+    var guessedName = localPart.split(/[._]/).filter(Boolean).map(function(s) {
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    }).join(' ');
+    if (guessedName) d.name = guessedName;
+    filledAny = true;
+  }
+  if (parsed.empNo)   { d.empNo = parsed.empNo; filledAny = true; }
+  if (parsed.entity)  { d.entity = parsed.entity; filledAny = true; }
+  if (parsed.manager) { d.manager = parsed.manager; filledAny = true; }
+  if (parsed.nature) {
+    var knownNatures = ['Payroll Dispute', 'Leave Application', 'Missing / Incorrect Logs', 'Others'];
+    d.nature = knownNatures.indexOf(parsed.nature) >= 0 ? parsed.nature : 'Others';
+    filledAny = true;
+  }
+  // Business Unit/Location/Shift have no matching ticket field of their own -- folded into
+  // Full Details as a context line above the actual description, rather than silently dropped.
+  var contextLines = [];
+  if (parsed.businessUnit) contextLines.push('Business Unit: ' + parsed.businessUnit);
+  if (parsed.location)     contextLines.push('Location: ' + parsed.location);
+  if (parsed.shift)        contextLines.push('Shift: ' + parsed.shift);
+  var fullDetails = (contextLines.length ? contextLines.join(' \u00b7 ') + '\n' : '') + (parsed.description || '');
+  if (fullDetails.trim()) { d.fullDetails = fullDetails.trim(); filledAny = true; }
+
+  if (!filledAny) {
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<span style="color:#c0392b;"><i class="ti ti-alert-circle" style="font-size:13px;margin-right:4px;"></i>Couldn\'t find any matching fields in that text \u2014 please fill fields manually.</span>';
+    return;
+  }
+
+  var cu = window.currentUser || currentUser;
+  dtmAddLog(dtmCurrentId, {
+    time: new Date().toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}),
+    author: cu ? cu.name.split(' ')[0] : 'You',
+    note: 'Fields auto-filled from pasted email',
+    type: 'ai'
+  });
+  statusEl.style.display = 'none';
+  openDisputeTicket(dtmCurrentId);
+  if (typeof showToast === 'function') showToast('Fields auto-filled from pasted email!');
 }
 
 // \u2500\u2500 Summary table \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
