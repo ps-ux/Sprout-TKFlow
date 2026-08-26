@@ -23543,11 +23543,22 @@ if (_origSwitchPage2) {
 
       <div id="dtm-unrecognized-client-banner" style="display:none;background:#fff4e6;border:1px solid #FDBA74;border-radius:14px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#9A3412;"></div>
 
-      <!-- Employee name — kept outside every collapsible section so it stays visible no matter
-           which one is open. Only editable copy of this field now (removed from the Ticket
-           Info fields grid below to avoid two places drifting out of sync). -->
-      <div style="margin-bottom:14px;">
-        <input id="dtm-employee-name" type="text" placeholder="Employee name" oninput="dtmSaveField('name',this.value)" style="width:100%;border:none;background:transparent;padding:0;font-size:17px;font-weight:700;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;">
+      <!-- Employee name + status/Save — kept outside every collapsible section so they stay
+           visible no matter which one is open. Employee name is the only editable copy of that
+           field now (removed from the Ticket Info fields grid below to avoid two places
+           drifting out of sync); styled like a real input (background/border/padding) rather
+           than plain text, so it reads as editable at a glance. -->
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px;">
+        <input id="dtm-employee-name" type="text" placeholder="Employee name" oninput="dtmSaveField('name',this.value)" style="flex:1;min-width:200px;border:1px solid var(--border,#EBEBEF);background:var(--bg-secondary,#F4F4F8);padding:9px 12px;border-radius:12px;font-size:16px;font-weight:700;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;box-sizing:border-box;">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <button onclick="dtmUpdateStatus('dst-open')" data-status="dst-open" class="dtm-st-btn" style="padding:7px 14px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Open</button>
+          <button onclick="dtmUpdateStatus('dst-rev')" data-status="dst-rev" class="dtm-st-btn" style="padding:7px 14px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">In Progress</button>
+          <button onclick="dtmUpdateStatus('dst-resolved')" data-status="dst-resolved" class="dtm-st-btn" style="padding:7px 14px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Resolved</button>
+          <button onclick="dtmUpdateStatus('dst-closed')" data-status="dst-closed" class="dtm-st-btn" style="padding:7px 14px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Closed</button>
+          <button onclick="dtmSaveAll()" style="padding:7px 18px;border-radius:12px;border:none;background:var(--ub-500);color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;">
+            <i class="ti ti-device-floppy" style="font-size:14px;"></i> Save
+          </button>
+        </div>
       </div>
 
       <!-- Section 1: Ticket Info — open by default; openDisputeTicket() switches the default
@@ -23558,21 +23569,7 @@ if (_origSwitchPage2) {
         <summary style="padding:10px 14px;cursor:pointer;font-size:11px;font-weight:700;color:#1a1a2e;text-transform:uppercase;letter-spacing:.5px;list-style:none;">Ticket Info</summary>
         <div style="padding:0 14px 14px;">
 
-          <!-- Status buttons + Save — top of Ticket Info, not buried under the fields -->
-          <div style="margin-bottom:16px;">
-            <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;">Update status</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
-              <button onclick="dtmUpdateStatus('dst-open')" data-status="dst-open" class="dtm-st-btn" style="padding:7px 16px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Open</button>
-              <button onclick="dtmUpdateStatus('dst-rev')" data-status="dst-rev" class="dtm-st-btn" style="padding:7px 16px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">In Progress</button>
-              <button onclick="dtmUpdateStatus('dst-resolved')" data-status="dst-resolved" class="dtm-st-btn" style="padding:7px 16px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Resolved</button>
-              <button onclick="dtmUpdateStatus('dst-closed')" data-status="dst-closed" class="dtm-st-btn" style="padding:7px 16px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Closed</button>
-              <button onclick="dtmSaveAll()" style="margin-left:auto;padding:7px 18px;border-radius:12px;border:none;background:var(--ub-500);color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;">
-                <i class="ti ti-device-floppy" style="font-size:14px;"></i> Save
-              </button>
-            </div>
-          </div>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;" id="dtm-fields-grid"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;margin-top:14px;" id="dtm-fields-grid"></div>
 
       <div style="margin-bottom:14px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
@@ -23588,8 +23585,13 @@ if (_origSwitchPage2) {
       </div>
 
       <!-- Paste email body -> auto-fill (plain text-pattern parser, no AI/upload -- see
-           dtmExtractFromPasteText) -->
-      <div style="background:var(--bg-secondary,#F4F4F8);border-radius:16px;padding:14px 16px;">
+           dtmExtractFromPasteText). Collapsed behind a button by default -- an always-visible
+           textarea sitting under the manually-typed fields read as "yet another field to fill
+           in," rather than an optional shortcut. -->
+      <button id="dtm-paste-toggle-btn" onclick="dtmTogglePasteBox()" style="padding:8px 14px;border:1px dashed var(--border,#EBEBEF);border-radius:12px;background:var(--bg-secondary,#F4F4F8);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;color:var(--text-secondary);display:inline-flex;align-items:center;gap:6px;">
+        <i class="ti ti-mail" style="font-size:14px;color:#32CE13;"></i> Paste email to auto-fill
+      </button>
+      <div id="dtm-paste-box" style="display:none;background:var(--bg-secondary,#F4F4F8);border-radius:16px;padding:14px 16px;margin-top:10px;">
         <div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:4px;display:flex;align-items:center;gap:6px;">
           <i class="ti ti-mail" style="font-size:14px;color:#32CE13;"></i>
           Paste email body
@@ -24209,11 +24211,13 @@ function openDisputeTicket(id, clientContext) {
     btn.style.fontWeight  = active ? '600' : '500';
   });
 
-  // Reset paste-extract area
+  // Reset paste-extract area -- collapsed back behind its button every time the modal opens
   var pasteArea = document.getElementById('dtm-paste-area');
   if (pasteArea) pasteArea.value = '';
   var aiStatusEl = document.getElementById('dtm-ai-status');
   if (aiStatusEl) aiStatusEl.style.display = 'none';
+  var pasteBox = document.getElementById('dtm-paste-box');
+  if (pasteBox) pasteBox.style.display = 'none';
 
   dtmRenderLog(id);
   dtmSwitchTab('details');
@@ -24973,6 +24977,15 @@ var DTM_PASTE_FIELD_LABELS = [
 
 function dtmRegexEscape(str) { return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
+// Builds a "Label:" matcher from a label string -- tolerates curly/smart apostrophes in place
+// of a straight one, since Gmail (or the copy-paste path) substitutes one for the other. Caught
+// live: "Employee's ID number" written with Gmail's curly \u2019 silently failed to match this
+// label's straight ' and the whole field was skipped with no error.
+function dtmLabelToRegex(label) {
+  var escaped = dtmRegexEscape(label).replace(/'/g, "['\u2019\u2018]");
+  return new RegExp('^\\s*' + escaped + '\\s*:\\s*(.*)$', 'i');
+}
+
 function dtmParseEmailBody(text) {
   var lines = String(text || '').split(/\r\n|\r|\n/);
   var out = {};
@@ -24988,8 +25001,7 @@ function dtmParseEmailBody(text) {
     var matched = null;
     for (var i = 0; i < DTM_PASTE_FIELD_LABELS.length; i++) {
       var f = DTM_PASTE_FIELD_LABELS[i];
-      var re = new RegExp('^\\s*' + dtmRegexEscape(f.label) + '\\s*:\\s*(.*)$', 'i');
-      var m = line.match(re);
+      var m = line.match(dtmLabelToRegex(f.label));
       if (m) { matched = { key: f.key, value: m[1].trim() }; break; }
     }
     if (matched) {
@@ -25002,6 +25014,30 @@ function dtmParseEmailBody(text) {
     }
   });
   return out;
+}
+
+// Gmail's own "Aug 25, 2026, 8:56 AM (1 day ago)" header line (shown when the whole message,
+// not just the body, is copied) isn't a labeled field like the others, so it's matched
+// separately by pattern rather than through DTM_PASTE_FIELD_LABELS. Converts to the exact
+// "MMM D, h:mmAM/PM" format every other stored emailTime uses (see dtmSaveEmailTime) -- the
+// year is captured only to build dateSubmitted; emailTime itself never carries one, since
+// parseTATEmailTime always assumes the current year.
+function dtmParseGmailReceivedTimestamp(text) {
+  var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var m = String(text || '').match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),\s*(\d{4}),\s*(\d{1,2}):(\d{2})\s*(AM|PM)\b/i);
+  if (!m) return null;
+  var monthIdx = MONTHS.findIndex(function(mo){ return mo.toLowerCase() === m[1].toLowerCase(); });
+  if (monthIdx < 0) return null;
+  var day = parseInt(m[2], 10), year = m[3], hour = parseInt(m[4], 10), min = m[5], ap = m[6].toUpperCase();
+  return {
+    emailTime: MONTHS[monthIdx] + ' ' + day + ', ' + hour + ':' + min + ap,
+    dateSubmitted: year + '-' + String(monthIdx + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0')
+  };
+}
+
+function dtmTogglePasteBox() {
+  var box = document.getElementById('dtm-paste-box');
+  if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
 }
 
 function dtmExtractFromPasteText() {
@@ -25044,6 +25080,13 @@ function dtmExtractFromPasteText() {
   var fullDetails = (contextLines.length ? contextLines.join(' \u00b7 ') + '\n' : '') + (parsed.description || '');
   if (fullDetails.trim()) { d.fullDetails = fullDetails.trim(); filledAny = true; }
 
+  var gmailTs = dtmParseGmailReceivedTimestamp(el.value);
+  if (gmailTs) {
+    d.emailTime = gmailTs.emailTime;
+    d.dateSubmitted = gmailTs.dateSubmitted;
+    filledAny = true;
+  }
+
   if (!filledAny) {
     statusEl.style.display = 'block';
     statusEl.innerHTML = '<span style="color:#c0392b;"><i class="ti ti-alert-circle" style="font-size:13px;margin-right:4px;"></i>Couldn\'t find any matching fields in that text \u2014 please fill fields manually.</span>';
@@ -25058,6 +25101,7 @@ function dtmExtractFromPasteText() {
     type: 'ai'
   });
   statusEl.style.display = 'none';
+  if (gmailTs && typeof recomputeAllDisputeTAT === 'function') recomputeAllDisputeTAT();
   openDisputeTicket(dtmCurrentId);
   if (typeof showToast === 'function') showToast('Fields auto-filled from pasted email!');
 }
