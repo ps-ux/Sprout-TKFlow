@@ -6251,14 +6251,20 @@ function renderNotifCard() {
 
   el.innerHTML = notifs.map(function(n) {
     var isRead = !!window.readNotifs[n.id];
-    return '<div data-notif-row="true" data-notif-id="' + n.id + '" style="display:flex;align-items:flex-start;gap:10px;padding:12px 16px;border-bottom:1px solid #F4F4F8;cursor:pointer;opacity:' + (isRead ? '0.6' : '1') + ';">'
-      + '<div style="width:8px;height:8px;border-radius:50%;background:' + n.color + ';flex-shrink:0;margin-top:5px;"></div>'
-      + '<div style="flex:1;min-width:0;" data-notif-clickzone="true"><div style="font-size:12.5px;font-weight:600;color:#1a1a2e;">' + n.text
+    // Checkbox replaces the old decorative color dot + separate "mark as read" checkmark
+    // button -- same markNotifRead action, just merged into one checklist-style control
+    // instead of two visual elements doing overlapping jobs. Read = filled/checked in the
+    // notif's own color; unread = an empty outline in that color, clickable.
+    var checkboxHtml = isRead
+      ? '<div style="width:18px;height:18px;border-radius:5px;background:' + n.color + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;"><i class="ti ti-check" style="font-size:12px;color:#fff;"></i></div>'
+      : '<div onclick="event.stopPropagation();markNotifRead(\'' + n.id + '\')" title="Mark as read" style="width:18px;height:18px;border-radius:5px;border:1.5px solid ' + n.color + ';flex-shrink:0;margin-top:1px;cursor:pointer;"></div>';
+    return '<div data-notif-row="true" data-notif-id="' + n.id + '" style="display:flex;align-items:flex-start;gap:10px;padding:12px 16px;border-bottom:1px solid #F4F4F8;cursor:pointer;opacity:' + (isRead ? '0.7' : '1') + ';">'
+      + checkboxHtml
+      + '<div style="flex:1;min-width:0;" data-notif-clickzone="true"><div style="font-size:12.5px;font-weight:600;color:' + (isRead ? '#9898a6' : '#1a1a2e') + ';text-decoration:' + (isRead ? 'line-through' : 'none') + ';">' + n.text
       + (n.timeSensitive ? ' <span style="font-size:9.5px;font-weight:600;padding:2px 8px;border-radius:999px;background:' + n.bg + ';color:' + n.color + ';text-transform:none;">Time-sensitive</span>' : '') + '</div>'
       + '<div style="font-size:11px;color:#9898a6;margin-top:2px;">' + n.sub + '</div></div>'
       + '<div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">'
       + (window._notifDoneActions[n.id] ? '<button onclick="event.stopPropagation();markNotifDone(\'' + n.id + '\')" title="Mark this Leave Monitoring transfer done" style="padding:5px 10px;border:1px solid #EBEBEF;border-radius:7px;background:#fff;cursor:pointer;font-size:11px;font-weight:600;color:#7c3aed;font-family:Rubik,sans-serif;">Mark done</button>' : '')
-      + (isRead ? '' : '<button onclick="event.stopPropagation();markNotifRead(\'' + n.id + '\')" title="Mark as read" style="width:26px;height:26px;border:1px solid #EBEBEF;border-radius:7px;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#9898a6;"><i class="ti ti-check" style="font-size:13px;"></i></button>')
       + ((n.dismissible === false || n.timeSensitive)
           ? '<span title="' + (n.lockTitle || 'Stays until the ticket is closed') + '" style="width:26px;height:26px;display:flex;align-items:center;justify-content:center;color:#d0d0dc;"><i class="ti ti-lock" style="font-size:13px;"></i></span>'
           : '<button onclick="event.stopPropagation();dismissNotif(\'' + n.id + '\')" title="Remove" style="width:26px;height:26px;border:1px solid #EBEBEF;border-radius:7px;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#9898a6;"><i class="ti ti-x" style="font-size:13px;"></i></button>')
