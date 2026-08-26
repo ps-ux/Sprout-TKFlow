@@ -25098,6 +25098,22 @@ function dtmExtractFromPasteText() {
     d.emailTime = gmailTs.emailTime;
     d.dateSubmitted = gmailTs.dateSubmitted;
     filledAny = true;
+    // Auto-select Included In Cut-off from the parsed Email Received date -- same computation
+    // ticket creation and dtmSaveCutoff's manual-transfer path already use
+    // (ticketApplicableCutoffKey), just driven by the parsed date instead of "right now" or a
+    // manual dropdown pick. Without this the dropdown stayed blank even though the email
+    // itself carries everything needed to fill it in.
+    var clientObj = clients[d.client];
+    if (clientObj && typeof ticketApplicableCutoffKey === 'function' && typeof parseTATEmailTime === 'function') {
+      var receivedDt = parseTATEmailTime(gmailTs.emailTime);
+      var cutoffVal = receivedDt ? ticketApplicableCutoffKey(clientObj, receivedDt) : null;
+      if (cutoffVal) {
+        d.cutoff = cutoffVal;
+        d.payoutCutoff = cutoffVal;
+        var realCurrentCutoff = ticketApplicableCutoffKey(clientObj);
+        d.attendancePeriod = (cutoffVal === realCurrentCutoff) ? 'current' : 'previous';
+      }
+    }
   }
 
   if (!filledAny) {
