@@ -51,6 +51,21 @@ function nowAsPhFields() {
   return new Date(Date.now() + PH_OFFSET_MS);
 }
 
+// isoStr is a serialized-Date string (JSON.stringify -> toISOString()) of a Date the client
+// originally built in PH-local time, e.g. Sept 17 00:00 PH becomes "2026-09-16T16:00:00Z" --
+// taking the raw string's date prefix reads the UTC calendar day (the 16th), landing one day
+// early. Shifting +8h before reading date fields correctly recovers the intended PH calendar
+// day whether the stored instant is PH-midnight-as-UTC (the common case) or already
+// UTC-midnight of the intended date (shifting a UTC-midnight value +8h keeps it on the same
+// calendar day, so this is safe either way). Returns null for an unparseable/missing value.
+function phDatePartsFromIso(isoStr) {
+  if (!isoStr) return null;
+  const instant = new Date(isoStr);
+  if (isNaN(instant.getTime())) return null;
+  const phFields = new Date(instant.getTime() + PH_OFFSET_MS);
+  return { year: phFields.getUTCFullYear(), month: phFields.getUTCMonth() + 1, day: phFields.getUTCDate() };
+}
+
 // Mirrors TKFlow_Hub.html:8235 exactly, just re-anchored to PH-fields-as-UTC throughout.
 function parseTATEmailTime(timeStr) {
   if (!timeStr) return null;
@@ -235,13 +250,8 @@ async function buildEventsForUser(userId) {
     ['oneYear', 'fiveYear'].forEach(function (category) {
       (row.data && row.data[category] || []).forEach(function (r) {
         if (r.done) return;
-        // Anniversary dates are read as a plain "YYYY-MM-DD" string prefix, never round-tripped
-        // through a Date object -- avoids re-triggering the exact class of PH-timezone-shift bug
-        // already fixed elsewhere in this app for calendar/leave dates (see PH-local comment
-        // block above): a naive `new Date(iso)` read with UTC getters on a value that was
-        // originally serialized as PH-local midnight can land on the wrong calendar day.
-        const m = String(r.anniversary || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
-        if (!m) return;
+        const annivPh = phDatePartsFromIso(r.anniversary);
+        if (!annivPh) return;
         const label = category === 'fiveYear'
           ? (r.lastName + ', ' + r.firstName + ' — Transfer to ' + r.yearsOfService + ' Years Tenure')
           : (r.lastName + ', ' + r.firstName + ' — 1yr transfer');
@@ -249,7 +259,7 @@ async function buildEventsForUser(userId) {
           kind: 'allday',
           uid: 'lm-' + row.scope_id + '-' + r.empId + '-' + row.year + '-' + category,
           summary: label,
-          year: parseInt(m[1], 10), month: parseInt(m[2], 10), day: parseInt(m[3], 10)
+          year: annivPh.year, month: annivPh.month, day: annivPh.day
         });
       });
     });
@@ -284,4 +294,4 @@ module.exports = async function handler(req, res) {
   }
 };
 
-module.exports._internal = { buildICS, getTATDeadline, parseTATEmailTime, parseLegacyDateActionEOD, hasBeenRepliedTo, icsEscape, phToRealUTC };
+module.exports._internal = { buildICS, getTATDeadline, parseTATEmailTime, parseLegacyDateActionEOD, hasBeenRepliedTo, icsEscape, phToRealUTC, phDatePartsFromIso };
