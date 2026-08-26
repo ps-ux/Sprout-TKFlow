@@ -14817,6 +14817,14 @@ function runValidation(opts) {
       if (bioEntries && bioEntries.length > 0) {
         var inLogs  = bioEntries.filter(function(b){ return b.mode.toLowerCase() === 'in'; });
         var outLogs = bioEntries.filter(function(b){ return b.mode.toLowerCase() === 'out'; });
+        // Report says No Logs, but the Biologs file actually has a full IN+OUT pair for this
+        // exact date -- a real discrepancy between the two sources, not a partial-punch case.
+        // Kept flagged as absent (not auto-resolved to present) since the Summary sheet may
+        // have its own reason for the absence that isn't visible from Biologs alone; this just
+        // makes the discrepancy visible instead of silently reading identical to a true no-show.
+        if (inLogs.length > 0 && outLogs.length > 0) {
+          return 'Logs Found in Biologs File — Report Shows No Logs; ' + (hasApp ? 'has ' + appType : 'no application submitted');
+        }
         if (inLogs.length > 0 && outLogs.length === 0) {
           return 'Missing OUT Log; ' + (hasApp ? 'has ' + appType : 'no application submitted');
         }
