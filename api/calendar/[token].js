@@ -259,7 +259,12 @@ async function buildEventsForUser(userId) {
 }
 
 module.exports = async function handler(req, res) {
-  const token = req.query && req.query.token;
+  // The URL is .../api/calendar/<token>.ics -- the .ics suffix is there so calendar apps
+  // recognize it as a calendar resource, but Vercel's [token] dynamic segment captures the
+  // WHOLE path piece between slashes, .ics included. Strip it before using the value as the
+  // actual lookup key, or every request 404s (real token + literal ".ics" never matches).
+  let token = req.query && req.query.token;
+  if (token && token.slice(-4) === '.ics') token = token.slice(0, -4);
   if (!token) { res.status(404).send('Not found'); return; }
 
   try {
