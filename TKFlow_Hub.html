@@ -23543,14 +23543,13 @@ if (_origSwitchPage2) {
 
       <div id="dtm-unrecognized-client-banner" style="display:none;background:#fff4e6;border:1px solid #FDBA74;border-radius:14px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#9A3412;"></div>
 
-      <!-- Employee name + status/Save — kept outside every collapsible section so they stay
-           visible no matter which one is open. Employee name is the only editable copy of that
-           field now (removed from the Ticket Info fields grid below to avoid two places
-           drifting out of sync); styled like a real input (background/border/padding) rather
-           than plain text, so it reads as editable at a glance. -->
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px;">
-        <input id="dtm-employee-name" type="text" placeholder="Employee name" oninput="dtmSaveField('name',this.value)" style="flex:1;min-width:200px;border:1px solid var(--border,#EBEBEF);background:var(--bg-secondary,#F4F4F8);padding:9px 12px;border-radius:12px;font-size:16px;font-weight:700;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;box-sizing:border-box;">
-        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+      <!-- Paste-email button + status/Save — kept outside every collapsible section so they
+           stay visible no matter which one is open. -->
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px;">
+        <button id="dtm-paste-toggle-btn" onclick="dtmOpenPasteModal()" style="padding:9px 14px;border:1px dashed var(--border,#EBEBEF);border-radius:12px;background:var(--bg-secondary,#F4F4F8);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;color:var(--text-secondary);display:inline-flex;align-items:center;gap:6px;">
+          <i class="ti ti-mail" style="font-size:14px;color:#32CE13;"></i> Paste email to auto-fill
+        </button>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-left:auto;">
           <button onclick="dtmUpdateStatus('dst-open')" data-status="dst-open" class="dtm-st-btn" style="padding:7px 14px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Open</button>
           <button onclick="dtmUpdateStatus('dst-rev')" data-status="dst-rev" class="dtm-st-btn" style="padding:7px 14px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">In Progress</button>
           <button onclick="dtmUpdateStatus('dst-resolved')" data-status="dst-resolved" class="dtm-st-btn" style="padding:7px 14px;border-radius:12px;border:1.5px solid var(--border,#EBEBEF);background:var(--bg-card,#fff);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;transition:all .12s;">Resolved</button>
@@ -23559,6 +23558,14 @@ if (_origSwitchPage2) {
             <i class="ti ti-device-floppy" style="font-size:14px;"></i> Save
           </button>
         </div>
+      </div>
+
+      <!-- Employee name — its own full-width line. Only editable copy of this field now
+           (removed from the Ticket Info fields grid below to avoid two places drifting out of
+           sync); styled like a real input (background/border/padding) rather than plain text,
+           so it reads as editable at a glance. -->
+      <div style="margin-bottom:14px;">
+        <input id="dtm-employee-name" type="text" placeholder="Employee name" oninput="dtmSaveField('name',this.value)" style="width:100%;border:1px solid var(--border,#EBEBEF);background:var(--bg-secondary,#F4F4F8);padding:9px 12px;border-radius:12px;font-size:16px;font-weight:700;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;box-sizing:border-box;">
       </div>
 
       <!-- Section 1: Ticket Info — open by default; openDisputeTicket() switches the default
@@ -23582,27 +23589,6 @@ if (_origSwitchPage2) {
       <div style="margin-bottom:20px;">
         <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Full details of dispute / inquiry</div>
         <textarea id="dtm-full-details" rows="3" placeholder="Description of the concern..." oninput="dtmSaveField('fullDetails',this.value)" style="width:100%;font-size:13px;color:var(--text-primary);background:var(--bg-secondary,#F4F4F8);border:none;border-radius:14px;padding:12px 14px;line-height:1.6;min-height:50px;resize:vertical;outline:none;font-family:Rubik,sans-serif;box-sizing:border-box;"></textarea>
-      </div>
-
-      <!-- Paste email body -> auto-fill (plain text-pattern parser, no AI/upload -- see
-           dtmExtractFromPasteText). Collapsed behind a button by default -- an always-visible
-           textarea sitting under the manually-typed fields read as "yet another field to fill
-           in," rather than an optional shortcut. -->
-      <button id="dtm-paste-toggle-btn" onclick="dtmTogglePasteBox()" style="padding:8px 14px;border:1px dashed var(--border,#EBEBEF);border-radius:12px;background:var(--bg-secondary,#F4F4F8);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;color:var(--text-secondary);display:inline-flex;align-items:center;gap:6px;">
-        <i class="ti ti-mail" style="font-size:14px;color:#32CE13;"></i> Paste email to auto-fill
-      </button>
-      <div id="dtm-paste-box" style="display:none;background:var(--bg-secondary,#F4F4F8);border-radius:16px;padding:14px 16px;margin-top:10px;">
-        <div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:4px;display:flex;align-items:center;gap:6px;">
-          <i class="ti ti-mail" style="font-size:14px;color:#32CE13;"></i>
-          Paste email body
-          <span style="font-size:10px;background:#DCFCE7;color:#32CE13;padding:2px 8px;border-radius:20px;font-weight:600;">Auto-fill</span>
-        </div>
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">Paste the request email's body below and matching fields will fill in automatically.</div>
-        <textarea id="dtm-paste-area" rows="6" placeholder="Paste email content here..." style="width:100%;padding:10px 12px;border:1px solid var(--border,#EBEBEF);border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;resize:vertical;outline:none;box-sizing:border-box;background:var(--bg-card,#fff);color:var(--text-primary);"></textarea>
-        <div id="dtm-ai-status" style="display:none;margin-top:10px;padding:10px 12px;background:#DCFCE7;border-radius:12px;font-size:12px;color:#32CE13;"></div>
-        <button onclick="dtmExtractFromPasteText()" style="margin-top:10px;padding:8px 18px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;">
-          <i class="ti ti-wand" style="font-size:13px;"></i> Extract &amp; auto-fill
-        </button>
       </div>
 
         </div>
@@ -23709,6 +23695,27 @@ if (_origSwitchPage2) {
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- Paste-email popup -- small modal opened by the "Paste email to auto-fill" button, instead
+     of an inline expanding box that pushed the rest of Ticket Info down. -->
+<div id="dtm-paste-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:4500;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(2px);">
+  <div style="background:var(--bg-card,#fff);border-radius:16px;width:100%;max-width:520px;box-shadow:0 20px 60px rgba(0,0,0,0.3);padding:18px 20px;">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px;">
+      <div style="font-size:13px;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:6px;">
+        <i class="ti ti-mail" style="font-size:14px;color:#32CE13;"></i>
+        Paste email body
+        <span style="font-size:10px;background:#DCFCE7;color:#32CE13;padding:2px 8px;border-radius:20px;font-weight:600;">Auto-fill</span>
+      </div>
+      <div onclick="dtmClosePasteModal()" style="width:26px;height:26px;border-radius:10px;border:1px solid var(--border,#EBEBEF);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text-muted);font-size:16px;flex-shrink:0;">&times;</div>
+    </div>
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">Paste the request email's body below and matching fields will fill in automatically.</div>
+    <textarea id="dtm-paste-area" rows="8" placeholder="Paste email content here..." style="width:100%;padding:10px 12px;border:1px solid var(--border,#EBEBEF);border-radius:12px;font-size:12px;font-family:Rubik,sans-serif;resize:vertical;outline:none;box-sizing:border-box;background:var(--bg-secondary,#F4F4F8);color:var(--text-primary);"></textarea>
+    <div id="dtm-ai-status" style="display:none;margin-top:10px;padding:10px 12px;background:#DCFCE7;border-radius:12px;font-size:12px;color:#32CE13;"></div>
+    <button onclick="dtmExtractFromPasteText()" style="margin-top:10px;padding:8px 18px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;">
+      <i class="ti ti-wand" style="font-size:13px;"></i> Extract &amp; auto-fill
+    </button>
   </div>
 </div>
 
@@ -24211,13 +24218,13 @@ function openDisputeTicket(id, clientContext) {
     btn.style.fontWeight  = active ? '600' : '500';
   });
 
-  // Reset paste-extract area -- collapsed back behind its button every time the modal opens
+  // Reset paste-extract popup -- closed every time the modal opens
   var pasteArea = document.getElementById('dtm-paste-area');
   if (pasteArea) pasteArea.value = '';
   var aiStatusEl = document.getElementById('dtm-ai-status');
   if (aiStatusEl) aiStatusEl.style.display = 'none';
-  var pasteBox = document.getElementById('dtm-paste-box');
-  if (pasteBox) pasteBox.style.display = 'none';
+  var pasteModalEl = document.getElementById('dtm-paste-modal');
+  if (pasteModalEl) pasteModalEl.style.display = 'none';
 
   dtmRenderLog(id);
   dtmSwitchTab('details');
@@ -24441,6 +24448,10 @@ function _reallyCloseDisputeTicket() {
 
 document.getElementById('dispute-ticket-modal').addEventListener('click', function(e) {
   if (e.target === this) closeDisputeTicket();
+});
+
+document.getElementById('dtm-paste-modal').addEventListener('click', function(e) {
+  if (e.target === this) dtmClosePasteModal();
 });
 
 function dtmSwitchTab(tab) {
@@ -24965,12 +24976,9 @@ function dtmRenderLog(id) {
 // stays in the browser; nothing is sent anywhere.
 var DTM_PASTE_FIELD_LABELS = [
   { label: 'Name', key: 'nameRaw' },
-  { label: 'Business Unit / Functional Unit', key: 'businessUnit' },
   { label: "Employee's ID number (PDM ID)", key: 'empNo' },
   { label: 'Business Group', key: 'entity' },
   { label: 'Manager', key: 'manager' },
-  { label: 'Location', key: 'location' },
-  { label: 'Shift', key: 'shift' },
   { label: 'Type of Request', key: 'nature' },
   { label: 'Description', key: 'description' }
 ];
@@ -25007,10 +25015,12 @@ function dtmParseEmailBody(text) {
     if (matched) {
       out[matched.key] = matched.value;
       currentKey = matched.key;
-    } else if (currentKey) {
-      // Continuation line of a multi-line value (realistically only Description).
+    } else if (currentKey === 'description') {
+      // Continuation line of a multi-line Description -- the only field expected to ever span
+      // more than one line. Restricted to just this key (not "any last-matched field"): an
+      // unrecognized line after e.g. Manager must never get silently appended onto Manager.
       var trimmed = line.trim();
-      if (trimmed) out[currentKey] = (out[currentKey] ? out[currentKey] + ' ' : '') + trimmed;
+      if (trimmed) out.description = (out.description ? out.description + ' ' : '') + trimmed;
     }
   });
   return out;
@@ -25035,9 +25045,17 @@ function dtmParseGmailReceivedTimestamp(text) {
   };
 }
 
-function dtmTogglePasteBox() {
-  var box = document.getElementById('dtm-paste-box');
-  if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
+function dtmOpenPasteModal() {
+  var modal = document.getElementById('dtm-paste-modal');
+  if (modal) modal.style.display = 'flex';
+  setTimeout(function() {
+    var el = document.getElementById('dtm-paste-area');
+    if (el) el.focus();
+  }, 30);
+}
+function dtmClosePasteModal() {
+  var modal = document.getElementById('dtm-paste-modal');
+  if (modal) modal.style.display = 'none';
 }
 
 function dtmExtractFromPasteText() {
@@ -25071,14 +25089,9 @@ function dtmExtractFromPasteText() {
     d.nature = knownNatures.indexOf(parsed.nature) >= 0 ? parsed.nature : 'Others';
     filledAny = true;
   }
-  // Business Unit/Location/Shift have no matching ticket field of their own -- folded into
-  // Full Details as a context line above the actual description, rather than silently dropped.
-  var contextLines = [];
-  if (parsed.businessUnit) contextLines.push('Business Unit: ' + parsed.businessUnit);
-  if (parsed.location)     contextLines.push('Location: ' + parsed.location);
-  if (parsed.shift)        contextLines.push('Shift: ' + parsed.shift);
-  var fullDetails = (contextLines.length ? contextLines.join(' \u00b7 ') + '\n' : '') + (parsed.description || '');
-  if (fullDetails.trim()) { d.fullDetails = fullDetails.trim(); filledAny = true; }
+  // Full Details holds only the actual Description text -- nothing else from the email gets
+  // prepended to it.
+  if (parsed.description && parsed.description.trim()) { d.fullDetails = parsed.description.trim(); filledAny = true; }
 
   var gmailTs = dtmParseGmailReceivedTimestamp(el.value);
   if (gmailTs) {
