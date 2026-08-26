@@ -857,7 +857,8 @@ function assignAvClass(shortKey, siblingClasses) {
         canAssign: profile.can_assign,
         canArchive: profile.can_archive,
         assignedClients: byType.assigned,
-        processClients: byType.processing
+        processClients: byType.processing,
+        calendarFeedToken: profile.calendar_feed_token || null
       };
       await loadCompaniesFromSupabase();
       await loadUserRelationsFromSupabase();
@@ -2097,6 +2098,14 @@ function signInWithGoogle() {
           <div class="settings-row"><div><div class="settings-label">Full name</div><div class="settings-sub">From your Google account</div></div><div class="settings-val" id="settings-fullname">Zona Rocelle Merto</div></div>
           <div class="settings-row"><div><div class="settings-label">Email</div></div><div class="settings-val" id="settings-email">zmerto@sprout.ph</div></div>
           <div class="settings-row"><div><div class="settings-label">Role</div></div><div class="settings-val" id="settings-role">Admin</div></div>
+        </div>
+        <!-- Your To-Do Calendar -->
+        <div class="settings-section" id="calendar-feed-section">
+          <div class="settings-title">Your To-Do Calendar</div>
+          <div style="font-size:12px;color:var(--text-muted,#9898a6);margin-bottom:16px;">Subscribe once in Google Calendar and it stays current on its own — a live feed of your open tickets' TAT deadlines and upcoming work anniversaries. Google typically refreshes an external calendar subscription every few hours, not instantly.</div>
+          <div id="calendar-feed-body">
+            <!-- Rendered by renderCalendarFeedSection() -->
+          </div>
         </div>
         <!-- Member Permissions -->
         <div class="settings-section" id="permissions-section">
@@ -4695,6 +4704,7 @@ function refreshUserUI() {
   var sfn = document.getElementById('settings-fullname'); if (sfn) sfn.textContent = currentUser.name;
   var sem = document.getElementById('settings-email'); if (sem) sem.textContent = currentUser.email || '\u2014';
   var srl = document.getElementById('settings-role'); if (srl) srl.textContent = currentUser.roleType === 'admin' ? 'Admin' : 'Member';
+  if (typeof renderCalendarFeedSection === 'function') renderCalendarFeedSection();
   // Show/hide Admin nav item — members must not have access to it at all
   const adminNav = document.getElementById('nav-admin');
   if (adminNav) {
@@ -4723,6 +4733,59 @@ function refreshUserUI() {
   if (currentPage === 'workspace' && currentWsClient && !currentUser.assignedClients.includes(currentWsClient)) {
     closeWorkspace();
   }
+}
+
+// Settings > "Your To-Do Calendar" -- surfaces the per-user live ICS feed URL
+// (api/calendar/[token].js) backed by users.calendar_feed_token. webcal:// (not https://) so
+// clicking/pasting it hands off straight to whatever calendar app is registered for that
+// scheme instead of just downloading the file once.
+function calendarFeedUrl(token) {
+  return 'webcal://' + window.location.host + '/api/calendar/' + token + '.ics';
+}
+
+function renderCalendarFeedSection() {
+  var el = document.getElementById('calendar-feed-body');
+  if (!el) return;
+  var token = currentUser && currentUser.calendarFeedToken;
+  if (!token) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-muted,#9898a6);">Calendar link not available yet — ask an admin to run the latest database migration.</div>';
+    return;
+  }
+  var url = calendarFeedUrl(token);
+  el.innerHTML =
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+    + '<input type="text" readonly value="' + url + '" id="calendar-feed-url-input" style="flex:1;min-width:220px;padding:8px 10px;border:1px solid var(--border,#EBEBEF);border-radius:10px;font-size:12px;font-family:Rubik,sans-serif;color:var(--text-primary);background:var(--bg-card,#fff);">'
+    + '<button onclick="copyCalendarFeedLink()" style="padding:8px 12px;border:1px solid var(--border,#EBEBEF);border-radius:10px;background:var(--bg-card,#fff);font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;color:#32CE13;"><i class="ti ti-copy" style="font-size:12px;"></i> Copy link</button>'
+    + '<button onclick="regenerateCalendarFeedLink()" style="padding:8px 12px;border:1px solid var(--border,#EBEBEF);border-radius:10px;background:none;font-size:12px;cursor:pointer;font-family:Rubik,sans-serif;color:#9898a6;"><i class="ti ti-refresh" style="font-size:12px;"></i> Regenerate link</button>'
+    + '</div>';
+}
+
+function copyCalendarFeedLink() {
+  var input = document.getElementById('calendar-feed-url-input');
+  if (!input) return;
+  var url = input.value;
+  function done() { if (typeof showToast === 'function') showToast('Calendar link copied to clipboard!'); }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(done).catch(function() {
+      input.select(); document.execCommand('copy'); done();
+    });
+  } else {
+    input.select(); document.execCommand('copy'); done();
+  }
+}
+
+// Rotates the token server-side -- the old URL stops resolving immediately (api/calendar's
+// lookup is a plain equality match), for the case a link ever leaks.
+function regenerateCalendarFeedLink() {
+  appConfirm('Regenerate calendar link', 'Your old calendar link will stop working immediately — you’ll need to re-subscribe in Google Calendar with the new one. Continue?', function() {
+    var newToken = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+    supabaseClient.from('users').update({ calendar_feed_token: newToken }).eq('id', currentUser.id).then(function(res) {
+      if (res.error) { if (typeof showToast === 'function') showToast('Could not regenerate calendar link: ' + res.error.message, '#c0392b'); return; }
+      currentUser.calendarFeedToken = newToken;
+      renderCalendarFeedSection();
+      if (typeof showToast === 'function') showToast('Calendar link regenerated');
+    });
+  }, { okLabel: 'Regenerate' });
 }
 
 // NOTE: renderClientCards is overridden further down (search "Override renderClientCards")
