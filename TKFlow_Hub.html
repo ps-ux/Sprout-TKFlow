@@ -23784,10 +23784,13 @@ function dtmSaveDateAction(inputValue) {
 // Date/s of Dispute supports multiple dates — stored as a comma-separated list of
 // "YYYY-MM-DD" values in d.disputeDates, same shape the ticketing tool's own
 // datesOfDispute array gets joined into on the way in.
-function dtmRenderDisputeDates(d) {
+// datesOverride lets a caller (dtmAddDisputeDate) render an in-memory array that still has a
+// trailing blank slot -- re-deriving from d.disputeDates here would filter(Boolean) that blank
+// right back out, since a blank entry can't survive being joined into the saved comma string.
+function dtmRenderDisputeDates(d, datesOverride) {
   var container = document.getElementById('dtm-dispute-dates');
   if (!container) return;
-  var dates = (d.disputeDates || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+  var dates = datesOverride || (d.disputeDates || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
   if (!dates.length) dates = [''];
   container.innerHTML = dates.map(function(dt, i) {
     return '<div style="display:flex;align-items:center;gap:4px;">'
@@ -23816,7 +23819,7 @@ function dtmAddDisputeDate() {
   dates.push('');
   dtmSaveField('disputeDates', dates.join(', '));
   var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
-  if (d) dtmRenderDisputeDates(d);
+  if (d) dtmRenderDisputeDates(d, dates);
 }
 
 function dtmRemoveDisputeDate(idx) {
