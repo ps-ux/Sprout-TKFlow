@@ -15275,7 +15275,13 @@ function runValidation(opts) {
         return sameDay(sd, dateObj);
       });
 
-      var isHolidayLabel = shiftU.includes('HOLIDAY');
+      // "UNPAID HOLIDAY" is excluded here on purpose -- unlike a (implicitly paid) holiday,
+      // an unpaid holiday is meant to behave exactly like a normal workday (present/absent
+      // depends purely on whether biologs were actually logged), so it must NOT get the
+      // Holiday exemption below. Confirmed by the user against a real case (E1824, Aug 19,
+      // Paid Holiday flagged absent despite Summary showing 0) -- Paid Holiday should always
+      // read as present; Unpaid Holiday should not get any special treatment at all.
+      var isHolidayLabel = shiftU.includes('HOLIDAY') && !shiftU.includes('UNPAID');
       var isRestLabel    = shiftU.includes('REST DAY');
       var isLeaveLabel   = shiftU.includes('LEAVE'); // catches ON LEAVE, UNPAID LEAVE, HALF DAY LEAVE, (LEAVE)
       // A date before the employee's actual start -- the source file marks this directly in
@@ -15299,9 +15305,18 @@ function runValidation(opts) {
         } else {
           // Has an actual time range attached despite the special label — attendance
           // WAS expected (e.g. "10:00 PM to 07:00 AM (HOLIDAY)", "...(UNPAID LEAVE)").
-          if (isHolidayLabel || isRestLabel) {
-            // Holiday/Rest Day worked at all (any logs) is just OT — never penalized.
-            // Only a true no-show against the defined schedule counts as absence.
+          if (isHolidayLabel) {
+            // Paid Holiday is never treated as an absence off Detailed-tab NO LOGS alone, even
+            // with a schedule attached and zero logs -- the schedule here is often just
+            // descriptive (e.g. "(PAID HOLIDAY)" carrying the employee's regular hours), not a
+            // mandatory-attendance day. Only counts as absent if Summary explicitly says so
+            // (isMarkedAbsentInSummary, checked above this whole block). Confirmed by the user
+            // against a real case: E1824 flagged Absent on a Paid Holiday with 0 in the Summary.
+            continue;
+          } else if (isRestLabel) {
+            // Rest Day keeps the original rule (unlike Holiday above): excused only if there
+            // are real logs (treated as OT); zero logs against a defined schedule still falls
+            // through as an absence. User explicitly asked to keep this as-is.
             if (bioU !== 'NO LOGS') continue;
           } else if (isLeaveLabel) {
             // Leave with a schedule + real logs: the leave is invalidated by attendance,
