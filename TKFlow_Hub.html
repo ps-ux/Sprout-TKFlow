@@ -19730,6 +19730,7 @@ function searchInDoc() {
     <div class="sp-footer">
       <span id="sp-zoom-timestamp"></span>
       <div class="sp-footer-actions">
+        <button class="sp-icon-btn" id="sp-zoom-delete-btn" title="Delete permanently" style="display:none;color:#c0392b;" onclick="spDeleteNote(window._spZoomId)"><i class="ti ti-trash"></i></button>
         <button class="sp-icon-btn" id="sp-zoom-archive-btn" onclick="spZoomToggleArchive()"><i class="ti ti-archive"></i></button>
       </div>
     </div>
@@ -20199,7 +20200,9 @@ function spAddNote() {
   var actor = window.currentUser || currentUser;
   var note = { id: 'sp' + Date.now() + Math.random().toString(36).slice(2, 7), title: '', body: '', archived: false, createdAt: new Date().toISOString(), createdBy: actor ? actor.name : '' };
   notes.unshift(note);
-  spPersist();
+  // Not persisted yet -- see spUpdateNote's blank-content gate. An untouched "New note" that
+  // never gets typed into just quietly never exists in the saved data, instead of cluttering
+  // it with an empty card.
   renderScratchpadTab();
   setTimeout(function() {
     var el = document.getElementById('sp-title-' + note.id);
@@ -20212,6 +20215,11 @@ function spUpdateNote(id, field, value) {
   var note = notes.filter(function(n){ return n.id === id; })[0];
   if (!note) return;
   note[field] = value;
+  // Never persist a fully-blank note (no title, no body) -- covers both an untouched "New
+  // note" and an existing note edited back down to nothing. The in-memory object is still
+  // updated either way, so typing itself is never blocked mid-edit -- this only gates the
+  // actual save.
+  if (!(note.title || '').trim() && !(note.body || '').trim()) return;
   spPersist();
 }
 
@@ -20222,6 +20230,21 @@ function spArchiveNote(id, archived) {
   note.archived = archived;
   spPersist();
   renderScratchpadTab();
+}
+
+// Permanent delete -- only ever offered for already-archived notes (see the grid/zoom
+// templates), a deliberate second step past archive rather than a one-click destructive action
+// sitting next to every active note.
+function spDeleteNote(id) {
+  appConfirm('Delete note', 'This permanently deletes the note. This can\'t be undone.', function() {
+    var notes = spGetNotes();
+    var idx = notes.findIndex(function(n){ return n.id === id; });
+    if (idx < 0) return;
+    notes.splice(idx, 1);
+    spPersist();
+    if (window._spZoomId === id && typeof spCloseZoom === 'function') spCloseZoom();
+    renderScratchpadTab();
+  }, { okLabel: 'Delete' });
 }
 
 function spFormatTimestamp(iso) {
@@ -20286,6 +20309,7 @@ function renderScratchpadTab() {
           '<span title="' + spEscapeHtml(n.createdBy || '') + '">' + (n.createdBy ? spEscapeHtml(n.createdBy.split(' ')[0]) + ' · ' : '') + spFormatTimestamp(n.createdAt) + '</span>' +
           '<div class="sp-footer-actions">' +
             '<button class="sp-icon-btn" title="Expand" onclick="spOpenZoom(\'' + n.id + '\')"><i class="ti ti-arrows-diagonal"></i></button>' +
+            (n.archived ? '<button class="sp-icon-btn" title="Delete permanently" style="color:#c0392b;" onclick="spDeleteNote(\'' + n.id + '\')"><i class="ti ti-trash"></i></button>' : '') +
             '<button class="sp-icon-btn" title="' + (n.archived ? 'Unarchive' : 'Archive') + '" onclick="spArchiveNote(\'' + n.id + '\', ' + (!n.archived) + ')">' +
               '<i class="ti ' + (n.archived ? 'ti-arrow-back-up' : 'ti-archive') + '"></i>' +
             '</button>' +
@@ -20322,6 +20346,11 @@ function spOpenZoom(id) {
     archiveBtn.title = note.archived ? 'Unarchive' : 'Archive';
     archiveBtn.innerHTML = '<i class="ti ' + (note.archived ? 'ti-arrow-back-up' : 'ti-archive') + '"></i>';
   }
+  // Permanent delete only offered once a note is already archived -- matches the grid card's
+  // own gating (spArchiveNote first, spDeleteNote from there), keeps the destructive action out
+  // of the way for notes still in active use.
+  var deleteBtn = document.getElementById('sp-zoom-delete-btn');
+  if (deleteBtn) deleteBtn.style.display = note.archived ? 'inline-block' : 'none';
   var card = document.getElementById('sp-zoom-card');
   var sourceEl = document.getElementById('sp-note-' + id);
   var colorClass = (sourceEl && SP_COLORS.filter(function(c){ return sourceEl.classList.contains(c); })[0]) || SP_COLORS[0];
