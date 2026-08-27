@@ -21794,7 +21794,7 @@ function toggleStartMenu(){var m=document.getElementById('start-menu'),c=documen
 document.addEventListener('click',function(e){var m=document.getElementById('start-menu'),t=document.getElementById('sidebar-user-block');if(m&&m.style.display!=='none'&&!m.contains(e.target)&&t&&!t.contains(e.target)){m.style.display='none';var c=document.getElementById('start-chevron');if(c)c.style.transform='rotate(0deg)';}});
 function openSearch(){var m=document.getElementById('search-modal');if(m){m.style.display='flex';setTimeout(function(){var i=document.getElementById('search-input');if(i)i.focus();},50);}}
 function closeSearch(){var m=document.getElementById('search-modal');if(m){m.style.display='none';var i=document.getElementById('search-input');if(i)i.value='';var r=document.getElementById('search-results');if(r)r.innerHTML='<div style="padding:24px;text-align:center;color:#9898a6;font-size:13px;">Start typing to search...</div>';}}
-document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeSearch();closeNotifications();}if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();openSearch();}});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeSearch();}if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();openSearch();}});
 document.getElementById('search-modal').addEventListener('click',function(e){if(e.target===this)closeSearch();});
 function runSearch(q){var results=document.getElementById('search-results');if(!q.trim()){results.innerHTML='<div style="padding:24px;text-align:center;color:#9898a6;font-size:13px;">Start typing...</div>';return;}q=q.toLowerCase();var hits=[];Object.entries(clients).forEach(function(e){var k=e[0],c=e[1];if(c.name.toLowerCase().includes(q))hits.push({icon:'ti-building',label:c.name,sub:c.hc+' employees',color:'#32CE13',action:"openWorkspace('"+k+"');closeSearch();"});});if(typeof allDisputes!=='undefined')allDisputes.forEach(function(d){if(d.name.toLowerCase().includes(q)||d.id.toLowerCase().includes(q))hits.push({icon:'ti-ticket',label:d.name,sub:d.id+' - '+d.client,color:'#c0392b',action:"openWorkspace('"+d.client+"');setTimeout(function(){switchTab('ws-disputes');},80);closeSearch();"});});[['dashboard','Dashboard','ti-layout-dashboard'],['admin','Admin','ti-shield-check'],['settings','Settings','ti-settings']].forEach(function(p){if(p[1].toLowerCase().includes(q))hits.push({icon:p[2],label:p[1],sub:'Page',color:'#1679FA',action:"switchPage('"+p[0]+"');closeSearch();"});});if('team members'.includes(q)||'org chart'.includes(q))hits.push({icon:'ti-users',label:'Team & Org Chart',sub:'Admin',color:'#1679FA',action:"switchPage('admin');setTimeout(function(){switchAdminTab('orgchart');},50);closeSearch();"});if(!hits.length){results.innerHTML='<div style="padding:24px;text-align:center;color:#9898a6;font-size:13px;">No results for "'+q+'"</div>';return;}results.innerHTML=hits.map(function(h){return '<div onclick="'+h.action+'" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:12px;cursor:pointer;" onmouseover="this.style.background=\'#F4F4F8\'" onmouseout="this.style.background=\'transparent\'"><i class="ti '+h.icon+'" style="font-size:16px;color:'+h.color+';width:20px;"></i><div style="flex:1;"><div style="font-size:13px;font-weight:500;color:#1a1a2e;">'+h.label+'</div><div style="font-size:11px;color:#9898a6;">'+h.sub+'</div></div></div>';}).join('');}
 var notifications=[];
@@ -24520,6 +24520,16 @@ async function _dtmGraduateDraft(d) {
   if (Array.isArray(d.piLines) && d.piLines.some(function(l){ return l.code; })) dtmSyncPiLines(newId);
   var insRes = await supabaseClient.from('disputes').insert(Object.assign({ id: newId, source: 'manual' }, dtmBuildDisputeRow(d)));
   if (insRes.error) dtmReportSaveError('Could not save new ticket ' + newId, insRes.error);
+  // Any activity-log entries added while this was still a draft (dtmAddLog skips their
+  // Supabase insert for exactly this reason -- see there) only exist in dtmLogs[oldId] until
+  // now -- move them under the real id and push them for real.
+  if (dtmLogs[oldId] && dtmLogs[oldId].length) {
+    dtmLogs[newId] = dtmLogs[oldId];
+    delete dtmLogs[oldId];
+    supabaseClient.from('dispute_logs').insert(dtmLogs[newId].map(function(entry) {
+      return { dispute_id: newId, author: entry.author || '', message: entry.note || '', type: entry.type || null };
+    })).then(function(res) { if (res.error) dtmReportSaveError('Could not save logs for ' + newId, res.error); });
+  }
   return newId;
 }
 
@@ -24941,6 +24951,13 @@ window.receiveTicketUpdate = receiveTicketUpdate;
 function dtmAddLog(id, entry) {
   if (!dtmLogs[id]) dtmLogs[id] = [];
   dtmLogs[id].push(entry);
+  // A still-draft ticket has no disputes row yet (see dtmSaveField) -- inserting into
+  // dispute_logs with a dispute_id that doesn't exist would fail its FK constraint (this was
+  // the "dispute_logs FK-constraint error on draft tickets" bug, hit via the paste-email
+  // parser's auto-log call on a fresh draft). The entry above still renders locally; it gets
+  // synced for real once the draft graduates (see _dtmGraduateDraft).
+  var d = allDisputes.find(function(x) { return x.id === id; });
+  if (d && d._isDraft) return;
   supabaseClient.from('dispute_logs').insert({
     dispute_id: id, author: entry.author || '', message: entry.note || '', type: entry.type || null
   }).then(function(res) { if (res.error) dtmReportSaveError('Could not save log for ' + id, res.error); });
