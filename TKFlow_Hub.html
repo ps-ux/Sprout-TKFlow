@@ -687,7 +687,7 @@ function assignAvClass(shortKey, siblingClasses) {
   // assignment was silently dropped. `users.short_key` exists specifically to map a Supabase
   // Auth account back to its USERS[] key for this reconciliation.
   async function loadUserRelationsFromSupabase() {
-    var usersRes = await supabaseClient.from('users').select('id, short_key, name, role, role_type, org_role, email, initials, phone, sprout_started, hr_started, certifications, can_service_view, can_manage_access, can_archive, can_assign, reports_to').not('short_key', 'is', null);
+    var usersRes = await supabaseClient.from('users').select('id, short_key, name, role, role_type, org_role, email, initials, phone, sprout_started, hr_started, certifications, can_service_view, can_manage_access, can_archive, can_assign, reports_to, is_org_lead, show_in_org_chart, avatar_bg, avatar_text').not('short_key', 'is', null);
     var relsRes = await supabaseClient
       .from('user_company_relations')
       .select('user_id, relation_type, companies(short_key)');
@@ -727,15 +727,16 @@ function assignAvClass(shortKey, siblingClasses) {
           avBg: '#DCFCE7', avTxt: '#32CE13', avClass: assignAvClass(u.short_key)
         };
       }
-      if (typeof orgStructure !== 'undefined' && !orgStructure[u.short_key]) {
-        orgStructure[u.short_key] = {
-          isLead: false,
-          reportsTo: (u.reports_to && shortKeyByUid[u.reports_to])
-            || Object.keys(orgStructure).find(function(k){ return orgStructure[k].isLead; })
-            || null,
-          showInChart: true,
-          order: 99
-        };
+      // Unconditionally overwritten (not just initialized once) from the real DB values below --
+      // saveOrgChart() now persists is_org_lead/show_in_org_chart/reports_to (see
+      // 20260827100000_org_chart_columns.sql), so a hardcoded seed entry's org-chart edits need
+      // to actually win on reload instead of the literal in this file staying authoritative
+      // forever, the same silent-revert bug this migration was written to fix.
+      if (typeof orgStructure !== 'undefined') {
+        if (!orgStructure[u.short_key]) orgStructure[u.short_key] = { isLead: false, reportsTo: null, showInChart: true, order: 99 };
+        orgStructure[u.short_key].isLead = !!u.is_org_lead;
+        orgStructure[u.short_key].showInChart = u.show_in_org_chart !== false;
+        orgStructure[u.short_key].reportsTo = u.reports_to ? (shortKeyByUid[u.reports_to] || null) : null;
       }
       // Needed so toggleUserPermission() can write permission changes back to this person's
       // real users row -- absent for anyone without a Supabase Auth account yet.
@@ -764,6 +765,11 @@ function assignAvClass(shortKey, siblingClasses) {
         if (u.sprout_started) tp.sproutStarted = u.sprout_started;
         if (u.hr_started) tp.hrStarted = u.hr_started;
         if (u.certifications && u.certifications.length) tp.certifications = u.certifications;
+        // setMemberAvatarColor() now persists these (users.avatar_bg/avatar_text, real columns
+        // since the first migration) -- previously only mutated teamProfiles in memory, so a
+        // chosen color reverted to the hardcoded seed on reload.
+        if (u.avatar_bg) tp.avBg = u.avatar_bg;
+        if (u.avatar_text) tp.avTxt = u.avatar_text;
         tp.initials = tp.name.split(' ').filter(Boolean).map(function(w){ return w[0]; }).join('').slice(0,2).toUpperCase();
       }
     });
@@ -1222,7 +1228,7 @@ function signInWithGoogle() {
           <div id="atab-orgchart" onclick="switchAdminTab('orgchart')" style="padding:10px 18px;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;color:#9898a6;margin-bottom:-1px;">Org Chart</div>
           <div id="atab-passoff" onclick="switchAdminTab('passoff')" style="padding:10px 18px;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;color:#9898a6;margin-bottom:-1px;">Coverage Pass-Off</div>
           <div id="atab-assignments" onclick="switchAdminTab('assignments')" style="padding:10px 18px;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;color:#9898a6;margin-bottom:-1px;">Client Assignments</div>
-          <div id="atab-archives" onclick="switchAdminTab('archives')" style="padding:10px 18px;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;color:#9898a6;margin-bottom:-1px;">Archives</div>
+          <div id="atab-archives" onclick="switchAdminTab('archives')" style="padding:10px 18px;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;color:#9898a6;margin-bottom:-1px;">Archives <span id="archives-badge" style="display:none;font-size:10px;font-weight:600;background:#F4F4F8;color:#6b6b80;padding:1px 7px;border-radius:999px;margin-left:2px;"></span></div>
           <div id="atab-calendar" onclick="switchAdminTab('calendar')" style="padding:10px 18px;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;color:#9898a6;margin-bottom:-1px;">Calendar</div>
         </div>
 
@@ -6789,9 +6795,23 @@ function renderAdminCalendar() {
     if (!eventsByDay[key]) eventsByDay[key] = [];
     eventsByDay[key].push({ clientName: clientName, text: text, color: color });
   }
+  // storeKey can be a real multi-entity group key or a standalone client's own key (synthetic
+  // self-group convention) -- a group only counts as churned once every one of its subs is,
+  // matching the exclusion rule already used at ~17 other "list this client's data" call sites
+  // elsewhere in the app (see the 08-07 churned-subcompany fix). This view predates that fix
+  // and never got it, so churned clients' calendar events used to linger here indefinitely.
+  function isStoreKeyChurned(storeKey) {
+    var grp = (typeof clientGroups !== 'undefined') ? clientGroups[storeKey] : null;
+    if (grp) {
+      var subs = grp.subs || [storeKey];
+      return subs.every(function(sk){ return !clients[sk] || clients[sk]._churned; });
+    }
+    var c = (typeof clients !== 'undefined') ? clients[storeKey] : null;
+    return !!(c && c._churned);
+  }
   Object.keys(window._calStore || {}).forEach(function(storeKey) {
     var store = window._calStore[storeKey];
-    if (!store || !store.calPeriods) return;
+    if (!store || !store.calPeriods || isStoreKeyChurned(storeKey)) return;
     var clientName = (typeof clientGroups !== 'undefined' && clientGroups[storeKey]) ? clientGroups[storeKey].name
       : (typeof clients !== 'undefined' && clients[storeKey]) ? clients[storeKey].name : storeKey;
     // Colored by client (not event type) -- this view aggregates every client's calendar
@@ -6811,7 +6831,7 @@ function renderAdminCalendar() {
   // year's prepped-ahead roster, so it isn't pinned to just the real current year).
   Object.keys(window.leaveMonitoringStore || {}).forEach(function(lk) {
     var yearBuckets = window.leaveMonitoringStore[lk];
-    if (!yearBuckets) return;
+    if (!yearBuckets || isStoreKeyChurned(lk)) return;
     var lmClientName = (typeof clientGroups !== 'undefined' && clientGroups[lk]) ? clientGroups[lk].name
       : ((typeof clients !== 'undefined' && clients[lk]) ? clients[lk].name : lk);
     var lmColor = avClassAccentColor(avClassForStoreKey(lk));
@@ -6943,6 +6963,12 @@ async function saveClientAssignment(groupKey) {
   var container = document.querySelector('[data-assign-group="' + groupKey + '"]');
   if (!container) return;
   var rows = container.querySelectorAll('.assign-row');
+  // Collected across every write below so the final toast (see bottom of this function)
+  // honestly reflects whether everything actually saved -- previously each write's error was
+  // either only console.warn'd or shown in a toast that got immediately overwritten by the
+  // unconditional "Assignments updated" success toast at the end, so a failed save still
+  // looked like it worked.
+  var saveErrors = [];
 
   // Capture who's Specialist right now, before anything changes, so we can tell afterward
   // whether it actually changed and log it to processor history.
@@ -7000,6 +7026,13 @@ async function saveClientAssignment(groupKey) {
     queueRelation(uk, 'assigned');
   });
 
+  // Tracks who's actually checked as Specialist in THIS save, so the Main/Second processor
+  // dropdowns below can be cross-validated against it -- otherwise unchecking someone's
+  // Specialist box while leaving a stale Main/Second pick pointing at them (from before
+  // processorOptionsFor's option list catches up) would silently persist a processor id that
+  // no longer belongs to any specialist, permanently locking every real current specialist
+  // out of the Tasks tab with no obvious cause (canProcessCurrentCutoff has no fallback).
+  var checkedSpecialistIds = {};
   rows.forEach(function(row) {
     var mk = row.getAttribute('data-user-key');
     if (!mk || !USERS[mk]) return;
@@ -7013,7 +7046,10 @@ async function saveClientAssignment(groupKey) {
         syncCurrentUser(mk, 'assignedClients', sk, true);
       }
     });
-    if (isSpec) { queueRelation(mk, 'assigned'); queueRelation(mk, 'processing'); }
+    if (isSpec) {
+      queueRelation(mk, 'assigned'); queueRelation(mk, 'processing');
+      if (USERS[mk].id) checkedSpecialistIds[USERS[mk].id] = true;
+    }
   });
 
   if (relationRows.length) {
@@ -7026,7 +7062,7 @@ async function saveClientAssignment(groupKey) {
       return true;
     });
     var insRes = await supabaseClient.from('user_company_relations').insert(relationRows);
-    if (insRes.error) { console.warn('Could not save assignment changes', insRes.error); if (typeof showToast === 'function') showToast('Could not save assignment changes: ' + insRes.error.message, '#c0392b'); }
+    if (insRes.error) { console.warn('Could not save assignment changes', insRes.error); saveErrors.push('specialist assignments'); }
   }
 
   // Main/Second processor designations -- persisted to whichever row _procScope resolves to
@@ -7037,6 +7073,9 @@ async function saveClientAssignment(groupKey) {
   var secondSel = document.getElementById('second-proc-' + groupKey);
   var mainId = (mainSel && mainSel.value) || null;
   var secondId = (secondSel && secondSel.value) || null;
+  var clearedProcessors = [];
+  if (mainId && !checkedSpecialistIds[mainId]) { mainId = null; if (mainSel) mainSel.value = ''; clearedProcessors.push('Main'); }
+  if (secondId && !checkedSpecialistIds[secondId]) { secondId = null; if (secondSel) secondSel.value = ''; clearedProcessors.push('Second'); }
   var procScopeForSave = (typeof _procScope === 'function') ? _procScope(groupKey) : null;
   if (procScopeForSave) {
     procScopeForSave.obj.mainProcessorUserId = mainId;
@@ -7044,7 +7083,7 @@ async function saveClientAssignment(groupKey) {
     var procUpdateRes = procScopeForSave.type === 'group'
       ? await supabaseClient.from('company_groups').update({ main_processor_user_id: mainId, second_processor_user_id: secondId }).eq('id', procScopeForSave.id)
       : await supabaseClient.from('companies').update({ main_processor_user_id: mainId, second_processor_user_id: secondId }).eq('id', procScopeForSave.id);
-    if (procUpdateRes.error) console.warn('Could not save Main/Second processor', procUpdateRes.error);
+    if (procUpdateRes.error) { console.warn('Could not save Main/Second processor', procUpdateRes.error); saveErrors.push('Main/Second processor'); }
   }
 
   // Log the change to processor history if the Specialist actually changed — closes out
@@ -7073,7 +7112,15 @@ async function saveClientAssignment(groupKey) {
   if (typeof updateDashboardMetrics === 'function') updateDashboardMetrics();
   if (typeof updateAdminOverviewMetrics === 'function') updateAdminOverviewMetrics();
   if (typeof renderTeamCapacity === 'function') renderTeamCapacity();
-  if (typeof showToast === 'function') showToast('Assignments updated for ' + grp.name);
+  if (typeof showToast === 'function') {
+    if (saveErrors.length) {
+      showToast('Could not save ' + saveErrors.join(' or ') + ' for ' + grp.name + ' -- try again', '#c0392b');
+    } else if (clearedProcessors.length) {
+      showToast('Assignments updated for ' + grp.name + ' -- ' + clearedProcessors.join('/') + ' processor cleared (no longer a specialist)', '#e67e00');
+    } else {
+      showToast('Assignments updated for ' + grp.name);
+    }
+  }
 
   // Refresh just this card's summary line, keeping its expanded state instead of collapsing
   // the whole list back (which would be disruptive if working through several clients).
@@ -9073,6 +9120,15 @@ function setMemberAvatarColor(key, bg, txt) {
   if (picker) picker.style.display = 'none';
   if (typeof renderTeamMembers === 'function') renderTeamMembers();
   if (typeof showToast === 'function') showToast('Avatar color updated');
+
+  // Persist -- without this it reverted to the hardcoded teamProfiles[] seed on reload
+  // (users.avatar_bg/avatar_text are real columns, just never written to before now).
+  var uid = (typeof USERS !== 'undefined') && USERS[key] && USERS[key].id;
+  if (!uid) { console.warn('No Supabase user id for ' + key + ' -- avatar color is in-memory only for this session'); return; }
+  supabaseClient.from('users').update({ avatar_bg: bg, avatar_text: txt }).eq('id', uid).select().then(function(res) {
+    if (res.error) { console.warn('Could not save avatar color', res.error); if (typeof showToast === 'function') showToast('Avatar color did not save: ' + res.error.message, '#c0392b'); return; }
+    if (!res.data || !res.data.length) { console.warn('Avatar color did not persist -- 0 rows affected (RLS?)', uid); if (typeof showToast === 'function') showToast('Avatar color did not save -- please tell Zona/engineering', '#c0392b'); }
+  });
 }
 document.addEventListener('click', function(e) {
   if (!e.target.closest('[id^="avatar-picker-"]') && !e.target.closest('[title="Change color"]')) {
@@ -21762,14 +21818,19 @@ function closeOrgEditModal() {
   if (m) { m.style.display = 'none'; m.style.pointerEvents = 'none'; }
 }
 
-function saveOrgChart() {
+async function saveOrgChart() {
   // Update lead name/role display
   const leadName = document.getElementById('org-lead-name-inp')?.value.trim();
   const leadRole = document.getElementById('org-lead-role-inp')?.value.trim();
   if (leadName) { const el = document.getElementById('org-lead-name'); if (el) el.textContent = leadName; }
   if (leadRole) { const el = document.getElementById('org-lead-role'); if (el) el.textContent = leadRole; }
 
-  // Save each member's show/lead/reportsTo settings
+  // Save each member's show/lead/reportsTo settings -- previously only mutated the in-memory
+  // orgStructure object (silently reverted on reload). Now also persists to users.is_org_lead/
+  // show_in_org_chart/reports_to (see 20260827100000_org_chart_columns.sql) for anyone with a
+  // real Supabase Auth account (USERS[key].id); a key with no real account yet stays
+  // in-memory-only for this session, same limitation every other in-app-only user has elsewhere.
+  var writes = [];
   Object.keys(teamProfiles).filter(k => k !== 'zona').forEach(key => {
     const os = getOrInitOrgEntry(key);
     const showCb    = document.getElementById('org-show-' + key);
@@ -21778,11 +21839,22 @@ function saveOrgChart() {
     if (showCb)     os.showInChart = showCb.checked;
     if (leadCb)     os.isLead      = leadCb.checked;
     if (reportsSel && !os.isLead) os.reportsTo = reportsSel.value;
+
+    var uid = USERS[key] && USERS[key].id;
+    if (!uid) return;
+    var reportsToUid = (!os.isLead && os.reportsTo && USERS[os.reportsTo]) ? (USERS[os.reportsTo].id || null) : null;
+    writes.push(supabaseClient.from('users').update({
+      is_org_lead: !!os.isLead, show_in_org_chart: os.showInChart !== false, reports_to: reportsToUid
+    }).eq('id', uid));
   });
+
+  var results = await Promise.all(writes);
+  var hadError = results.some(function(r) { return r.error; });
+  if (hadError) results.forEach(function(r) { if (r.error) console.warn('Could not save org chart entry', r.error); });
 
   renderOrgChart();
   closeOrgEditModal();
-  showToast('Org chart updated!');
+  showToast(hadError ? 'Org chart updated, but some changes could not be saved' : 'Org chart updated!', hadError ? '#e67e00' : undefined);
 }
 </script>
 
@@ -21934,8 +22006,11 @@ function updateAdminOverviewMetrics(){
 // the middle; a client showing 0 is flagged in red since that likely means it's never been
 // synced from an actual Attendance Report run (see _persistCompanyHeadcount).
 function openHeadcountBreakdown() {
+  // Excludes _isTest the same way the overview card's own headline total does (updateAdminOverviewMetrics) --
+  // without this, per-member test clients leaked into this breakdown even though the card's number
+  // that opens it already excludes them, so the two disagreed.
   var rows = Object.keys(clients)
-    .filter(function(k){ return clients[k] && !clients[k]._churned; })
+    .filter(function(k){ return clients[k] && !clients[k]._churned && !clients[k]._isTest; })
     .map(function(k){ return { key: k, name: clients[k].name || k, hc: clients[k].hc || 0 }; })
     .sort(function(a,b){ return b.hc - a.hc; });
   var total = rows.reduce(function(s,r){ return s + r.hc; }, 0);
