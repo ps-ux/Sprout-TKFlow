@@ -25126,15 +25126,35 @@ function dtmParseEmailBody(text) {
 // parseTATEmailTime always assumes the current year.
 function dtmParseGmailReceivedTimestamp(text) {
   var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  var m = String(text || '').match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),\s*(\d{4}),\s*(\d{1,2}):(\d{2})\s*(AM|PM)\b/i);
-  if (!m) return null;
-  var monthIdx = MONTHS.findIndex(function(mo){ return mo.toLowerCase() === m[1].toLowerCase(); });
-  if (monthIdx < 0) return null;
-  var day = parseInt(m[2], 10), year = m[3], hour = parseInt(m[4], 10), min = m[5], ap = m[6].toUpperCase();
-  return {
-    emailTime: MONTHS[monthIdx] + ' ' + day + ', ' + hour + ':' + min + ap,
-    dateSubmitted: year + '-' + String(monthIdx + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0')
-  };
+  var str = String(text || '');
+  var m = str.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),\s*(\d{4}),\s*(\d{1,2}):(\d{2})\s*(AM|PM)\b/i);
+  if (m) {
+    var monthIdx = MONTHS.findIndex(function(mo){ return mo.toLowerCase() === m[1].toLowerCase(); });
+    if (monthIdx < 0) return null;
+    var day = parseInt(m[2], 10), year = m[3], hour = parseInt(m[4], 10), min = m[5], ap = m[6].toUpperCase();
+    return {
+      emailTime: MONTHS[monthIdx] + ' ' + day + ', ' + hour + ':' + min + ap,
+      dateSubmitted: year + '-' + String(monthIdx + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0')
+    };
+  }
+  // Gmail shows a same-day message's header as just a bare time -- e.g. "2:39 PM (50 minutes
+  // ago)" -- with no date at all, only switching to the full "Mon D, YYYY, H:MM AM" form once
+  // the message is more than a day old. Since a ticket is normally logged the same day the
+  // email arrives, this bare-time form is actually the common case, not an edge case,  and
+  // going unhandled meant Email Received silently kept whatever "now" it defaulted to at ticket
+  // creation instead of the real received time. Anchored on the trailing "(N ago)" annotation
+  // Gmail always appends to this exact header line, so a coincidental time elsewhere in the
+  // pasted body (e.g. a "Shift: 8:30AM - 05:30PM" field) is never mistaken for it.
+  var m2 = str.match(/\b(\d{1,2}):(\d{2})\s*(AM|PM)\s*\(\d+\s*(?:minutes?|hours?)\s+ago\)/i);
+  if (m2) {
+    var today = new Date();
+    var hour2 = parseInt(m2[1], 10), min2 = m2[2], ap2 = m2[3].toUpperCase();
+    return {
+      emailTime: MONTHS[today.getMonth()] + ' ' + today.getDate() + ', ' + hour2 + ':' + min2 + ap2,
+      dateSubmitted: today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0')
+    };
+  }
+  return null;
 }
 
 function dtmOpenPasteModal() {
