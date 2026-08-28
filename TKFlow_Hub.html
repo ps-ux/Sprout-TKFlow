@@ -24201,6 +24201,7 @@ function openDisputeTicket(id, clientContext) {
   if (!d) return;
   dtmCurrentId = id;
   dtmCurrentClient = clientContext || d.client || null;
+  window._dtmPiOverrideOpen = {}; // a line index from the previous ticket must never carry over
 
   // Draft tickets haven't claimed a real number yet (see dtmSaveField) -- show that plainly
   // rather than the internal placeholder id, which would look like a broken/garbage number.
@@ -24707,6 +24708,20 @@ var DISPUTE_CODES = ['Absent','Undertime','Ord-OT','Ord-ND','Ord-ND-OT','RD','RD
   'SH-RD','SH-RD-OT','SH-RD-ND','SH-RD-ND-OT','LH-RD','LH-RD-OT','LH-RD-ND','LH-RD-ND-OT',
   'DH','DH-OT','DH-ND','DH-ND-OT','DH-RD','DH-RD-OT','DH-RD-ND','DH-RD-ND-OT'];
 
+// Which PI lines currently have their cut-off-override panel expanded -- keyed by line index,
+// reset per ticket in openDisputeTicket so a stale index never carries over between tickets.
+// Mirrors the same collapsed-by-default / expand-on-demand pattern the Cutoff Schedule and
+// Half-Day Shortfall Threshold per-subcompany overrides already use (window._cutoffEditMode /
+// window._halfDayPerSubMode) -- most lines never need this, so it stays out of the way until
+// asked for instead of showing on every single line.
+window._dtmPiOverrideOpen = window._dtmPiOverrideOpen || {};
+
+function dtmTogglePiOverride(i) {
+  window._dtmPiOverrideOpen[i] = !window._dtmPiOverrideOpen[i];
+  var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
+  if (d) dtmRenderPiLines(d);
+}
+
 function dtmRenderPiLines(d) {
   var el = document.getElementById('dtm-pi-lines');
   if (!el) return;
@@ -24715,6 +24730,7 @@ function dtmRenderPiLines(d) {
     el.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:8px 0;">No payroll-impact lines yet. Click "+ Add line" if this dispute affects payroll.</div>';
     return;
   }
+  var ticketPayout = (d.piPayout || d.cutoff || '').toString().replace(/"/g,'&quot;') || '\u2014';
   el.innerHTML = d.piLines.map(function(l, i) {
     var unit = codeUnit(l.code, l.number);
     var codeOptions = ['<option value="">\u2014 select \u2014</option>'].concat(DISPUTE_CODES.map(function(c) {
@@ -24722,10 +24738,8 @@ function dtmRenderPiLines(d) {
     })).join('');
     var period = l.attendancePeriod || '';
     var payoutVal = (l.piPayout || '').toString().replace(/"/g,'&quot;');
-    // Which Payroll Instructions / Dispute Summary table this one line lands in. Blank (the
-    // default for every new line) inherits the ticket's own Attendance Period above -- only
-    // needs setting explicitly when a ticket has several disputed dates and this particular
-    // line's date got resolved in a different cut-off than the rest. See dsLinePeriod.
+    var hasOverride = !!(l.piPayout || period);
+    var isOpen = hasOverride || !!window._dtmPiOverrideOpen[i];
     var periodOptions = '<option value=""' + (period === '' ? ' selected' : '') + '>Same as ticket</option>'
       + '<option value="current"' + (period === 'current' ? ' selected' : '') + '>Current Attendance</option>'
       + '<option value="previous"' + (period === 'previous' ? ' selected' : '') + '>Previous Attendance</option>';
@@ -24741,16 +24755,20 @@ function dtmRenderPiLines(d) {
       + '<input value="' + (l.remarks||'').toString().replace(/"/g,'&quot;') + '" oninput="dtmUpdatePiLine(' + i + ',\'remarks\',this.value,true)" placeholder="Remarks\u2026" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;">'
       + '<div onclick="dtmRemovePiLine(' + i + ')" style="cursor:pointer;color:#c0392b;font-size:16px;padding:2px 6px;" title="Remove line">&times;</div>'
       + '</div>'
-      // Which cut-off's report run this line is pulled into (dsLinePayout) + which table it
-      // lands in once pulled (dsLinePeriod) -- both blank by default, inheriting the ticket's
-      // own Payout Inclusion / Attendance Period fields above. Only need setting per-line when
-      // this dispute has several dates resolved across different cut-offs.
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:5px;">'
-      + '<div><div style="font-size:9px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px;">Payout inclusion</div>'
-      + '<input value="' + payoutVal + '" oninput="dtmUpdatePiLine(' + i + ',\'piPayout\',this.value,true)" placeholder="Same as ticket (' + ((d && (d.piPayout || d.cutoff)) ? (d.piPayout || d.cutoff).toString().replace(/"/g,'&quot;') : '\u2014') + ')" style="width:100%;padding:5px 7px;border:1px solid var(--border,#EBEBEF);border-radius:6px;font-size:10px;font-family:Rubik,sans-serif;box-sizing:border-box;"></div>'
-      + '<div><div style="font-size:9px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px;">Table</div>'
-      + '<select onchange="dtmUpdatePiLine(' + i + ',\'attendancePeriod\',this.value,true)" style="width:100%;padding:5px 7px;border:1px solid var(--border,#EBEBEF);border-radius:6px;font-size:10px;font-family:Rubik,sans-serif;background:#fff;box-sizing:border-box;">' + periodOptions + '</select></div>'
-      + '</div>'
+      // Collapsed by default -- only expands when this line already has an override set, or
+      // the toggle below is clicked. Most lines never touch this at all.
+      + (isOpen
+        ? '<div style="margin-top:6px;padding:8px;background:var(--bg-secondary,#F4F4F8);border-radius:8px;">'
+          + '<div style="font-size:10px;color:var(--text-muted);margin-bottom:6px;">By default this line follows the ticket\u2019s own settings above. Only fill these in if <em>this specific line</em> needs to be pulled into a different cut-off\u2019s report, or belongs to a different attendance table, than the rest of the ticket.</div>'
+          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
+          + '<div><div style="font-size:9px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px;">Which cut-off report pulls this line in?</div>'
+          + '<input value="' + payoutVal + '" oninput="dtmUpdatePiLine(' + i + ',\'piPayout\',this.value,true)" placeholder="Same as ticket (' + ticketPayout + ')" style="width:100%;padding:5px 7px;border:1px solid var(--border,#EBEBEF);border-radius:6px;font-size:11px;font-family:Rubik,sans-serif;background:#fff;box-sizing:border-box;"></div>'
+          + '<div><div style="font-size:9px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px;">Which attendance table does it belong to?</div>'
+          + '<select onchange="dtmUpdatePiLine(' + i + ',\'attendancePeriod\',this.value,true)" style="width:100%;padding:5px 7px;border:1px solid var(--border,#EBEBEF);border-radius:6px;font-size:11px;font-family:Rubik,sans-serif;background:#fff;box-sizing:border-box;">' + periodOptions + '</select></div>'
+          + '</div>'
+          + (hasOverride ? '' : '<div onclick="dtmTogglePiOverride(' + i + ')" style="margin-top:6px;font-size:10px;color:var(--text-muted);cursor:pointer;text-decoration:underline;">Hide</div>')
+          + '</div>'
+        : '<div onclick="dtmTogglePiOverride(' + i + ')" style="margin-top:4px;font-size:10px;color:#1679FA;cursor:pointer;text-decoration:underline;display:inline-block;">Different cut-off for this line?</div>')
       + '</div>';
   }).join('');
 }
