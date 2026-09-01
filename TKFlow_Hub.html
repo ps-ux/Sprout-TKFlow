@@ -18002,6 +18002,7 @@ function dtmPiLineRemarkTemplate(d, l) {
   var period = dtmPiLineEffectivePeriod(d, l);
   if (period === 'current') {
     if (l.code === 'Absent') return 'Kindly treat ' + date + ' as Present.';
+    if (l.code === 'Undertime') return 'Kindly cancel Undertime for ' + date + '.';
     return 'Kindly credit the ' + type + ' premium for ' + date + '.';
   }
   return 'Payroll deduction due to ' + type + ' on ' + date + '. Requesting for necessary addback on basic and allowances (if applicable).';
