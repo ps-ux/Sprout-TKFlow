@@ -23947,6 +23947,14 @@ function _disputeScopeKeyFor(clientKey) {
 // dispute_ticket_counters, scoped per client group and per year (see claimNextTicketNumber),
 // so KN's sequence (seeded to start at 119, continuing its prior external tracker) is
 // independent of every other client's, and genuinely resets to 1 each new year.
+// Turns "#2026-093" into a single comparable number (year weighted above the sequence) so
+// sorting tickets by "latest first" works correctly across a year boundary too, not just
+// within one year. Returns -1 for anything that doesn't match the real ticket-id format.
+function dtmTicketNumFromId(id) {
+  var m = String(id||'').match(/#(\d{4})-(\d+)/);
+  return m ? (parseInt(m[1], 10) * 100000 + parseInt(m[2], 10)) : -1;
+}
+
 async function nextDisputeTicketId(clientKey) {
   var scopeKey = _disputeScopeKeyFor(clientKey);
   var year = new Date().getFullYear();
@@ -25529,6 +25537,10 @@ function dtmRenderSummary(filterClient, filterStatus, lockGroupKeys) {
       }).join('');
   }
 
+  // Latest ticket number first -- #YYYY-NNN sorts correctly across a year boundary too
+  // (year weighted higher than the sequence number), not just within one year.
+  items = items.slice().sort(function(a, b) { return dtmTicketNumFromId(b.id) - dtmTicketNumFromId(a.id); });
+
   if (!items.length) {
     tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">No disputes found</td></tr>';
     return;
@@ -25582,6 +25594,8 @@ function dtmExport() {
   if (filterStatus && filterStatus !== 'all') {
     items = items.filter(function(d) { return d.status === filterStatus; });
   }
+  // Same latest-first ordering as the on-screen table.
+  items = items.slice().sort(function(a, b) { return dtmTicketNumFromId(b.id) - dtmTicketNumFromId(a.id); });
   if (!items.length) { if (typeof showToast === 'function') showToast('No tickets to export', '#e67e00'); return; }
   var rows = items.map(function(d) {
     return {
