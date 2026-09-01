@@ -17992,18 +17992,32 @@ function dtmPiLineEffectivePeriod(d, l) {
   var realCurrent = (clientObj && typeof ticketApplicableCutoffKey === 'function') ? ticketApplicableCutoffKey(clientObj) : '';
   return (payout && payout === realCurrent) ? 'current' : 'previous';
 }
+// Same read-only-fallback idea as the two helpers above, but for Date: only auto-fills when
+// there's exactly one dispute date on the ticket to begin with (unambiguous) -- with 2+ dates
+// there's no way to guess which one a line is for, so it's left for the user to actually pick.
+function dtmPiLineEffectiveDate(d, l) {
+  if (l.date) return l.date;
+  var dates = dtmPiLineDateOptions(d);
+  return dates.length === 1 ? dates[0] : '';
+}
 
 // Takes the ticket (d) too now, so it can resolve Attendance Period through the same
 // ticket-level fallback dtmPiLineEffectivePeriod uses -- a pre-existing line with no
 // per-line Attendance Period of its own still gets the right Remarks branch.
 function dtmPiLineRemarkTemplate(d, l) {
   var type = l.code || '\u2014';
-  var date = l.date || '\u2014';
+  var date = dtmPiLineEffectiveDate(d, l) || '\u2014';
   var period = dtmPiLineEffectivePeriod(d, l);
+  // Absent/Undertime are the only two types that ever get auto-deducted from payroll -- every
+  // other type is a premium that either wasn't credited yet (Current) or was missed in an
+  // already-processed payroll (Previous), so both periods share the same "credit premium"
+  // wording for those; only Absent/Undertime differ by period below.
+  if (l.code !== 'Absent' && l.code !== 'Undertime') {
+    return 'Kindly credit the ' + type + ' premium for ' + date + '.';
+  }
   if (period === 'current') {
     if (l.code === 'Absent') return 'Kindly treat ' + date + ' as Present.';
-    if (l.code === 'Undertime') return 'Kindly cancel Undertime for ' + date + '.';
-    return 'Kindly credit the ' + type + ' premium for ' + date + '.';
+    return 'Kindly cancel Undertime for ' + date + '.';
   }
   return 'Payroll deduction due to ' + type + ' on ' + date + '. Requesting for necessary addback on basic and allowances (if applicable).';
 }
@@ -18291,8 +18305,9 @@ function renderDsResult(g) {
         var codeOptions = ['<option value="">\u2014</option>'].concat(DISPUTE_CODES.map(function(c) {
           return '<option value="' + c + '"' + (l.code === c ? ' selected' : '') + '>' + c + '</option>';
         })).join('');
+        var dsEffDate = dtmPiLineEffectiveDate(d, l);
         var dsDateOptsHtml = ['<option value="">\u2014</option>'].concat(dsDateOptions.map(function(dt) {
-          return '<option value="' + dt.replace(/"/g,'&quot;') + '"' + (l.date === dt ? ' selected' : '') + '>' + dt + '</option>';
+          return '<option value="' + dt.replace(/"/g,'&quot;') + '"' + (dsEffDate === dt ? ' selected' : '') + '>' + dt + '</option>';
         })).join('');
         var dsHasPayoutMatch = dsPayoutOptions.some(function(o){ return o.value === effPayout; });
         var dsPayoutOptsHtml = ['<option value="">\u2014</option>']
@@ -18521,7 +18536,7 @@ function dsPiRowsForTicket(d, useEdited, applicableCutoff) {
   }
   return lines.map(function(l) {
     var remarks = (useEdited && l.remarks) ? l.remarks : (d.recommendedResolution || d.otherRemarks || l.remarks || '');
-    return { id: d.id||'', empNo: d.empNo||'', name: d.name||'', detail: l.code||d.nature||'', number: l.number, unit: codeUnit(l.code, l.number), kind: l.addDed||'Addition', remarks: remarks, isCurrent: dtmPiLineEffectivePeriod(d, l) === 'current', date: l.date||'' };
+    return { id: d.id||'', empNo: d.empNo||'', name: d.name||'', detail: l.code||d.nature||'', number: l.number, unit: codeUnit(l.code, l.number), kind: l.addDed||'Addition', remarks: remarks, isCurrent: dtmPiLineEffectivePeriod(d, l) === 'current', date: dtmPiLineEffectiveDate(d, l) };
   });
 }
 
@@ -21210,6 +21225,12 @@ async function saveTicket() {
 
 
 <script>
+// Persisted across re-renders (keyed by client short_key) so opening a ticket from the Closed
+// section and closing it doesn't collapse the section again -- refreshWsDisputesBadgesAndList
+// rebuilds this whole list's HTML from scratch on every ticket close (to reflect a possible
+// status change), and without this the section's open/closed state had nowhere to survive that.
+window._wsClosedDisputesOpen = window._wsClosedDisputesOpen || {};
+
 function toggleWsClosedDisputes(suffix) {
   var rowsId = suffix ? ('ws-closed-rows-' + suffix) : 'ws-closed-rows';
   var chevId = suffix ? ('ws-closed-chev-' + suffix) : 'ws-closed-chev';
@@ -21219,6 +21240,7 @@ function toggleWsClosedDisputes(suffix) {
   const isOpen = rows.style.display !== 'none';
   rows.style.display = isOpen ? 'none' : 'block';
   if (chev) chev.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
+  window._wsClosedDisputesOpen[suffix || ''] = !isOpen;
 }
 </script>
 
@@ -24493,14 +24515,15 @@ function refreshWsDisputesBadgesAndList(key) {
         + openDisp.map(rowHtml).join('')
         + '</div>'
       : '<div style="padding:20px 16px;text-align:center;color:var(--text-muted);font-size:13px;">No open disputes — all clear! \u2713</div>';
+    var closedIsOpen = !!window._wsClosedDisputesOpen[idSuffix];
     var closedSection = closedDisp.length
       ? '<div style="background:var(--bg-card,#fff);border:1px solid var(--border,#EBEBEF);border-radius:16px;overflow:hidden;">'
         + '<div onclick="toggleWsClosedDisputes(\'' + idSuffix + '\')" style="display:flex;align-items:center;gap:8px;padding:10px 16px;cursor:pointer;user-select:none;">'
-        + '<i class="ti ti-chevron-right" id="ws-closed-chev-' + idSuffix + '" style="font-size:13px;color:var(--text-muted);transition:transform 0.2s;"></i>'
+        + '<i class="ti ti-chevron-right" id="ws-closed-chev-' + idSuffix + '" style="font-size:13px;color:var(--text-muted);transition:transform 0.2s;' + (closedIsOpen ? 'transform:rotate(90deg);' : '') + '"></i>'
         + '<span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Closed disputes</span>'
         + '<span style="font-size:11px;color:var(--text-muted);margin-left:auto;">' + closedDisp.length + ' ticket' + (closedDisp.length > 1 ? 's' : '') + '</span>'
         + '</div>'
-        + '<div id="ws-closed-rows-' + idSuffix + '" style="display:none;">' + closedDisp.map(rowHtml).join('') + '</div>'
+        + '<div id="ws-closed-rows-' + idSuffix + '" style="display:' + (closedIsOpen ? 'block' : 'none') + ';">' + closedDisp.map(rowHtml).join('') + '</div>'
         + '</div>'
       : '';
     return openSection + closedSection;
@@ -24764,8 +24787,9 @@ function dtmRenderPiLines(d) {
     var codeOptions = ['<option value="">\u2014 select \u2014</option>'].concat(DISPUTE_CODES.map(function(c) {
       return '<option value="' + c + '"' + (l.code === c ? ' selected' : '') + '>' + c + '</option>';
     })).join('');
+    var effDate = dtmPiLineEffectiveDate(d, l);
     var dateOptsHtml = ['<option value="">\u2014</option>'].concat(dateOptions.map(function(dt) {
-      return '<option value="' + dt.replace(/"/g,'&quot;') + '"' + (l.date === dt ? ' selected' : '') + '>' + dt + '</option>';
+      return '<option value="' + dt.replace(/"/g,'&quot;') + '"' + (effDate === dt ? ' selected' : '') + '>' + dt + '</option>';
     })).join('');
     var effPayout = dtmPiLineEffectivePayout(d, l);
     var effPeriod = dtmPiLineEffectivePeriod(d, l);
@@ -24803,11 +24827,13 @@ function dtmAddPiLine() {
   var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
   if (!d) return;
   if (!Array.isArray(d.piLines)) d.piLines = [];
-  // Left blank -- dtmPiLineEffectivePayout/dtmPiLineEffectivePeriod resolve a display default
-  // (ticket's old Payout Inclusion/Attendance Period -> Included-in-Cut-off -> live "what's
-  // applicable now") without writing anything until the user actually picks a value, same
-  // fallback used for showing a pre-existing line's original cut-off again.
-  var line = { code: '', number: '', addDed: 'Addition', remarks: '', date: dtmPiLineDateOptions(d)[0] || '', piPayout: '', attendancePeriod: '', _remarksAuto: true };
+  // Left blank -- dtmPiLineEffectivePayout/dtmPiLineEffectivePeriod/dtmPiLineEffectiveDate all
+  // resolve a display default (ticket's old Payout Inclusion/Attendance Period ->
+  // Included-in-Cut-off -> live "what's applicable now"; Date auto-fills only when the ticket
+  // has exactly one dispute date, otherwise stays blank for the user to pick) without writing
+  // anything until the user actually picks a value -- same fallback used for showing a
+  // pre-existing line's original cut-off again.
+  var line = { code: '', number: '', addDed: 'Addition', remarks: '', date: '', piPayout: '', attendancePeriod: '', _remarksAuto: true };
   line.remarks = dtmPiLineRemarkTemplate(d, line);
   d.piLines.push(line);
   dtmRenderPiLines(d);
