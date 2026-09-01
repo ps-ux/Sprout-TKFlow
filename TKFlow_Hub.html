@@ -17987,10 +17987,11 @@ function dtmPiLineEffectivePayout(d, l) {
 function dtmPiLineEffectivePeriod(d, l) {
   if (l.attendancePeriod) return l.attendancePeriod;
   if (d.attendancePeriod) return d.attendancePeriod;
-  var payout = dtmPiLineEffectivePayout(d, l);
-  var clientObj = clients[d.client];
-  var realCurrent = (clientObj && typeof ticketApplicableCutoffKey === 'function') ? ticketApplicableCutoffKey(clientObj) : '';
-  return (payout && payout === realCurrent) ? 'current' : 'previous';
+  // Previous is the default for a brand-new line with nothing set anywhere -- it's the far
+  // more common case (most disputes affect an already-processed payroll), so a new line
+  // shouldn't have to guess "current" just because its Payout Inclusion happens to match
+  // today's real current cut-off.
+  return 'previous';
 }
 // Same read-only-fallback idea as the two helpers above, but for Date: only auto-fills when
 // there's exactly one dispute date on the ticket to begin with (unambiguous) -- with 2+ dates
