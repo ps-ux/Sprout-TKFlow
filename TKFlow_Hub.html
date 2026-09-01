@@ -24180,6 +24180,25 @@ function dtmSubcompanyOptions(clientKey) {
   return subs.filter(function(sk){ return clients[sk]; }).map(function(sk){ return clients[sk].name; });
 }
 
+// Resolves a raw "Business Group" value parsed from a pasted email into a real subcompany
+// name when the email just writes the short internal code (e.g. "KNI"/"KNLSI") instead of the
+// full display name -- otherwise dtmSelectWithOtherHtml can't match it against any preset
+// option and the Subcompany dropdown falls through to "Others" with that short code as free
+// text. Matches against the live sub short_keys for this ticket's own group (not a hardcoded
+// name), so it stays correct if a company is ever renamed and generalizes to any client group,
+// not just KN. Leaves the raw value untouched if it already matches a real name, or matches
+// nothing at all (falls through to "Others" exactly as before).
+function dtmResolveEntityName(clientKey, raw) {
+  if (!raw) return raw;
+  var trimmed = raw.trim();
+  var options = dtmSubcompanyOptions(clientKey);
+  if (options.indexOf(trimmed) >= 0) return trimmed;
+  var gk = Object.keys(clientGroups).find(function(g){ return (clientGroups[g].subs || [g]).indexOf(clientKey) >= 0; });
+  var subs = gk ? (clientGroups[gk].subs || [clientKey]) : [clientKey];
+  var matchKey = subs.find(function(sk){ return sk.toLowerCase() === trimmed.toLowerCase(); });
+  return (matchKey && clients[matchKey]) ? clients[matchKey].name : raw;
+}
+
 function dtmSelectOtherToggle(selectEl, otherId) {
   var other = document.getElementById(otherId);
   if (other) other.style.display = selectEl.value === 'Others' ? 'block' : 'none';
@@ -24512,10 +24531,8 @@ function refreshWsDisputesBadgesAndList(key) {
     + '</div></div>';
   };
 
-  function sectionsFor(disp, idSuffix) {
-    var openDisp   = disp.filter(function(d){ return d.status !== 'dst-closed'; });
-    var closedDisp = disp.filter(function(d){ return d.status === 'dst-closed'; });
-    var openSection = openDisp.length
+  function openSectionHtml(openDisp) {
+    return openDisp.length
       ? '<div style="background:var(--bg-card,#fff);border:1px solid var(--border,#EBEBEF);border-radius:16px;overflow:hidden;margin-bottom:14px;">'
         + '<div style="padding:9px 16px;background:var(--bg-secondary,#F4F4F8);border-bottom:1px solid var(--border,#EBEBEF);display:flex;align-items:center;justify-content:space-between;">'
         + '<div style="font-size:11px;font-weight:600;color:var(--text-primary);text-transform:uppercase;letter-spacing:0.5px;">Open disputes</div>'
@@ -24523,19 +24540,25 @@ function refreshWsDisputesBadgesAndList(key) {
         + '</div>'
         + openDisp.map(rowHtml).join('')
         + '</div>'
-      : '<div style="padding:20px 16px;text-align:center;color:var(--text-muted);font-size:13px;">No open disputes — all clear! \u2713</div>';
+      : '<div style="padding:20px 16px;text-align:center;color:var(--text-muted);font-size:13px;">No open disputes \u2014 all clear! \u2713</div>';
+  }
+  function closedSectionHtml(closedDisp, idSuffix) {
+    if (!closedDisp.length) return '';
     var closedIsOpen = !!window._wsClosedDisputesOpen[idSuffix];
-    var closedSection = closedDisp.length
-      ? '<div style="background:var(--bg-card,#fff);border:1px solid var(--border,#EBEBEF);border-radius:16px;overflow:hidden;">'
-        + '<div onclick="toggleWsClosedDisputes(\'' + idSuffix + '\')" style="display:flex;align-items:center;gap:8px;padding:10px 16px;cursor:pointer;user-select:none;">'
-        + '<i class="ti ti-chevron-right" id="ws-closed-chev-' + idSuffix + '" style="font-size:13px;color:var(--text-muted);transition:transform 0.2s;' + (closedIsOpen ? 'transform:rotate(90deg);' : '') + '"></i>'
-        + '<span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Closed disputes</span>'
-        + '<span style="font-size:11px;color:var(--text-muted);margin-left:auto;">' + closedDisp.length + ' ticket' + (closedDisp.length > 1 ? 's' : '') + '</span>'
-        + '</div>'
-        + '<div id="ws-closed-rows-' + idSuffix + '" style="display:' + (closedIsOpen ? 'block' : 'none') + ';">' + closedDisp.map(rowHtml).join('') + '</div>'
-        + '</div>'
-      : '';
-    return openSection + closedSection;
+    return '<div style="background:var(--bg-card,#fff);border:1px solid var(--border,#EBEBEF);border-radius:16px;overflow:hidden;margin-bottom:14px;">'
+      + '<div onclick="toggleWsClosedDisputes(\'' + idSuffix + '\')" style="display:flex;align-items:center;gap:8px;padding:10px 16px;cursor:pointer;user-select:none;">'
+      + '<i class="ti ti-chevron-right" id="ws-closed-chev-' + idSuffix + '" style="font-size:13px;color:var(--text-muted);transition:transform 0.2s;' + (closedIsOpen ? 'transform:rotate(90deg);' : '') + '"></i>'
+      + '<span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Closed disputes</span>'
+      + '<span style="font-size:11px;color:var(--text-muted);margin-left:auto;">' + closedDisp.length + ' ticket' + (closedDisp.length > 1 ? 's' : '') + '</span>'
+      + '</div>'
+      + '<div id="ws-closed-rows-' + idSuffix + '" style="display:' + (closedIsOpen ? 'block' : 'none') + ';">' + closedDisp.map(rowHtml).join('') + '</div>'
+      + '</div>';
+  }
+  // Kept for the single-client (non-group) path, which has no cross-sub reordering to do.
+  function sectionsFor(disp, idSuffix) {
+    var openDisp   = disp.filter(function(d){ return d.status !== 'dst-closed'; });
+    var closedDisp = disp.filter(function(d){ return d.status === 'dst-closed'; });
+    return openSectionHtml(openDisp) + closedSectionHtml(closedDisp, idSuffix);
   }
 
   function isOtkMode(k) { return ((clients[k] && clients[k].ticketingMode) || 'otk') === 'otk'; }
@@ -24545,17 +24568,35 @@ function refreshWsDisputesBadgesAndList(key) {
     var isGroup = grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey];
     if (isGroup) {
       var subs = clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; });
-      wsDispEl.innerHTML = subs.map(function(k) {
-        var subDisp = allDisputes.filter(function(d){ return d.client === k; });
-        return '<div style="margin-bottom:18px;">'
-          + '<div style="font-size:12px;font-weight:700;color:#1a1a2e;margin-bottom:8px;display:flex;align-items:center;gap:8px;">' + (clients[k].name||k)
+      // Open disputes for every manual (non-OTK) sub render together first, then Closed
+      // disputes for every sub render together below -- previously each sub got its own
+      // fully self-contained block (Open then Closed), so e.g. KNI's Open/Closed pair sat
+      // above KNLSI's Open/Closed pair instead of both subs' Open sections being adjacent.
+      var subHeaderHtml = function(k, subDisp) {
+        return '<div style="font-size:12px;font-weight:700;color:#1a1a2e;margin-bottom:8px;display:flex;align-items:center;gap:8px;">' + (clients[k].name||k)
           + (isOtkMode(k)
               ? '<span style="font-size:10px;font-weight:600;background:#e8f0fe;color:#1679FA;padding:2px 8px;border-radius:20px;">Sprout OTK Support Portal</span>'
               : '<span style="font-size:10px;font-weight:600;background:#F4F4F8;color:#9898a6;padding:2px 8px;border-radius:20px;">' + subDisp.filter(function(d){return d.status!=='dst-closed';}).length + ' open</span>')
-          + '</div>'
-          + (isOtkMode(k) ? dsMetricsViewHtml(k) : sectionsFor(subDisp, k))
           + '</div>';
+      };
+      var otkSubs = subs.filter(isOtkMode);
+      var manualSubs = subs.filter(function(k){ return !isOtkMode(k); });
+      var otkHtml = otkSubs.map(function(k) {
+        var subDisp = allDisputes.filter(function(d){ return d.client === k; });
+        return '<div style="margin-bottom:18px;">' + subHeaderHtml(k, subDisp) + dsMetricsViewHtml(k) + '</div>';
       }).join('');
+      var openHtml = manualSubs.map(function(k) {
+        var subDisp = allDisputes.filter(function(d){ return d.client === k; });
+        var openDisp = subDisp.filter(function(d){ return d.status !== 'dst-closed'; });
+        return '<div style="margin-bottom:18px;">' + subHeaderHtml(k, subDisp) + openSectionHtml(openDisp) + '</div>';
+      }).join('');
+      var closedHtml = manualSubs.map(function(k) {
+        var subDisp = allDisputes.filter(function(d){ return d.client === k; });
+        var closedDisp = subDisp.filter(function(d){ return d.status === 'dst-closed'; });
+        if (!closedDisp.length) return '';
+        return '<div style="margin-bottom:18px;">' + subHeaderHtml(k, subDisp) + closedSectionHtml(closedDisp, k) + '</div>';
+      }).join('');
+      wsDispEl.innerHTML = otkHtml + openHtml + closedHtml;
     } else {
       var clientDisp = allDisputes.filter(function(d){ return d.client === key; });
       wsDispEl.innerHTML = isOtkMode(key) ? dsMetricsViewHtml(key) : sectionsFor(clientDisp, key);
@@ -25412,7 +25453,7 @@ function dtmExtractFromPasteText() {
     filledAny = true;
   }
   if (parsed.empNo)   { d.empNo = parsed.empNo; filledAny = true; }
-  if (parsed.entity)  { d.entity = parsed.entity; filledAny = true; }
+  if (parsed.entity)  { d.entity = dtmResolveEntityName(d.client, parsed.entity); filledAny = true; }
   if (parsed.manager) { d.manager = parsed.manager; filledAny = true; }
   if (parsed.nature) {
     var knownNatures = ['Payroll Dispute', 'Leave Application', 'Missing / Incorrect Logs', 'Others'];
