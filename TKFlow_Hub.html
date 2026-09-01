@@ -2896,7 +2896,7 @@ async function _renderHistorySnapshotBody(e, idx) {
     var dsShortLabel = String(e.cutoffLabel || '').split(' Payout')[0];
     var dsRes = await supabaseClient.from('task_cutoff_review_state').select('*')
       .eq('company_id', companyId).eq('task_key', 'disputes_summary').eq('cutoff_label', dsShortLabel).maybeSingle();
-    sectionsHtml += _histDisputesSectionHtml(dsRes.error ? null : dsRes.data, e.subKey);
+    sectionsHtml += _histDisputesSectionHtml(dsRes.error ? null : dsRes.data);
   } catch (err) {
     sectionsHtml += _histSectionWrap('Dispute Summary', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
   }
@@ -3012,34 +3012,29 @@ function _histVarianceSectionHtml(allRows, win) {
   return _histSectionWrap('Variance', body);
 }
 
-// Unlike Validation/Variance, Dispute Summary has no frozen data of its own to redisplay --
-// allDisputes/dispute_payroll_instructions are the real source of truth and are always live,
-// so instead of storing a snapshot, this recomputes the exact same two on-screen tables
-// (Dispute summary report + Payroll instructions Previous/Current) live via
-// computeDisputeFindings/dsPiRowsForTicket, using the row's own saved cutoff_label -- not
-// necessarily today's live-current one, so a since-rolled-over cut-off still shows what it
-// actually included rather than drifting. This means the table reflects tickets' CURRENT state
-// (e.g. a since-added log entry), not a frozen moment-of-generation copy -- acceptable since
-// the tickets themselves are the durable record, not this view.
-function archiveBuildDisputesSnapshotHtml(subKey, cutoffLabel) {
-  if (typeof computeDisputeFindings !== 'function') return '<div style="font-size:12px;color:#9898a6;">Could not recompute.</div>';
-  var findings = computeDisputeFindings(subKey, cutoffLabel);
-  var included = findings.included || [];
-  var payroll = findings.payroll || [];
+// Renders the EXACT rows that were actually generated into the downloaded file, per the
+// user's explicit ask: "what was generated at the time", not a live recompute (a live
+// recompute would drift from the real file the moment a ticket changes afterward). data comes
+// straight from dsSaveCutoffSnapshot's data.summary/data.piPrev/data.piCurr, captured by
+// dsGenerateAll/dsExportXLSX right as they built the file -- same "store the real output, not
+// a recipe for rebuilding it" approach Variance's own attData snapshot already uses.
+function archiveBuildDisputesSnapshotHtml(data) {
+  if (!data.summary) {
+    return '<div style="font-size:12px;color:#9898a6;">Finalized, but no report has been generated yet for this cut-off.</div>';
+  }
+  var included = data.summary || [];
+  var prevRows = data.piPrev || [];
+  var currRows = data.piCurr || [];
 
   function th(label) { return '<th style="padding:6px 8px;text-align:left;font-weight:700;color:#1a1a2e;border-bottom:1px solid #EBEBEF;white-space:nowrap;background:#F4F4F8;font-size:10px;">' + label + '</th>'; }
   function td(val, extra) { return '<td style="padding:5px 8px;border-bottom:1px solid #EBEBEF;font-size:11px;' + (extra||'') + '">' + (val||'—') + '</td>'; }
 
   var summaryRows = included.length ? included.map(function(d) {
-    return '<tr>' + td(d.id, 'font-weight:600;color:#32CE13;white-space:nowrap;') + td(d.name) + td(d.nature||d.sub)
+    return '<tr>' + td(d.id, 'font-weight:600;color:#32CE13;white-space:nowrap;') + td(d.name) + td(d.nature)
       + td(d.disputeDates) + '<td style="padding:5px 8px;border-bottom:1px solid #EBEBEF;font-size:11px;"><span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:20px;background:' + dtmStBgs[d.status] + ';color:' + dtmStColors[d.status] + ';">' + d.statusLabel + '</span></td>'
       + td(d.cutoff) + '</tr>';
-  }).join('') : '<tr><td colspan="6" style="padding:12px;text-align:center;color:#9898a6;font-size:12px;">No disputes found for this cut-off</td></tr>';
+  }).join('') : '<tr><td colspan="6" style="padding:12px;text-align:center;color:#9898a6;font-size:12px;">No disputes were included</td></tr>';
 
-  var prevRows = [], currRows = [];
-  payroll.forEach(function(d) {
-    dsPiRowsForTicket(d, true, cutoffLabel).forEach(function(r) { (r.isCurrent ? currRows : prevRows).push(r); });
-  });
   function piRowsHtml(rows) {
     if (!rows.length) return '<tr><td colspan="6" style="padding:10px;text-align:center;color:#9898a6;font-size:11px;">None</td></tr>';
     return rows.map(function(r) {
@@ -3065,7 +3060,7 @@ function archiveBuildDisputesSnapshotHtml(subKey, cutoffLabel) {
     + '</div>';
 }
 
-function _histDisputesSectionHtml(row, subKey) {
+function _histDisputesSectionHtml(row) {
   if (!row) return _histSectionWrap('Dispute Summary', '<div style="font-size:12px;color:#9898a6;">Not run for this cutoff.</div>');
   var data = row.data || {};
   var body = '<div style="border:1px solid #EBEBEF;border-radius:10px;padding:10px 12px;background:#fff;">'
@@ -3074,7 +3069,7 @@ function _histDisputesSectionHtml(row, subKey) {
         ? ' <span style="font-size:10px;color:#32CE13;font-weight:600;">(Finalized)</span>'
         : ' <span style="font-size:10px;color:#e67e00;font-weight:600;">(Pulled, not finalized)</span>')
     + '</div>'
-    + archiveBuildDisputesSnapshotHtml(subKey, row.cutoff_label)
+    + archiveBuildDisputesSnapshotHtml(data)
     + '</div>';
   return _histSectionWrap('Dispute Summary', body);
 }
@@ -18154,9 +18149,19 @@ function dsUpdatePiLine(ticketId, lineIdx, field, value) {
 function dsSaveCutoffSnapshot(clientKey, g) {
   var companyId = clients[clientKey] && clients[clientKey].companyId;
   if (!companyId || !g.applicableCutoff) return;
+  var data = { finalized: !!g.finalized, includedCount: (g.included||[]).length, payrollCount: (g.payroll||[]).length, thisCutoffCount: g.thisCutoffCount||0, priorOpenCount: g.priorOpenCount||0 };
+  // Set only by dsGenerateAll/dsExportXLSX right after actually building the file -- captures
+  // the exact rows that went into that download (per the user's explicit ask: "what was
+  // generated at the time", not a live recompute that would drift as tickets change later).
+  if (g._lastGeneratedSummary) {
+    data.generatedAt = new Date().toISOString();
+    data.summary = g._lastGeneratedSummary;
+    data.piPrev = g._lastGeneratedPrevRows || [];
+    data.piCurr = g._lastGeneratedCurrRows || [];
+  }
   supabaseClient.from('task_cutoff_review_state').upsert({
     company_id: companyId, task_key: 'disputes_summary', cutoff_label: g.applicableCutoff,
-    data: { finalized: !!g.finalized, includedCount: (g.included||[]).length, payrollCount: (g.payroll||[]).length, thisCutoffCount: g.thisCutoffCount||0, priorOpenCount: g.priorOpenCount||0 },
+    data: data,
     updated_at: new Date().toISOString()
   }, { onConflict: 'company_id,task_key,cutoff_label' }).then(function(res) {
     if (res.error) console.warn('Could not save Dispute Summary review state for ' + clientKey + ' / ' + g.applicableCutoff, res.error);
@@ -18818,6 +18823,12 @@ function dsGenerateAll() {
             (r.isCurrent ? currRows : prevRows).push(r);
           });
         });
+        // Captured for dsSaveCutoffSnapshot below -- the exact rows that went into THIS file.
+        g._lastGeneratedPrevRows = prevRows;
+        g._lastGeneratedCurrRows = currRows;
+        g._lastGeneratedSummary = (g.included || []).map(function(d) {
+          return { id: d.id, name: d.name, nature: d.nature || d.sub, disputeDates: d.disputeDates, status: d.status, statusLabel: d.statusLabel, cutoff: d.cutoff };
+        });
         var filledXml = dsFillDisputesTemplateSheet(baseSheetXml, prevRows, currRows);
         var sheetName = ((g.clientKey || g.name || 'Sub') + ' Disputes').replace(/[:\\\/\?\*\[\]]/g,'-').slice(0,31);
 
@@ -18855,6 +18866,7 @@ function dsGenerateAll() {
     // pulling/finalizing/downloading never touched task_runs/task_run_history at all, so
     // reopening later (or Processing History) always showed "Not run" despite a real run.
     if (typeof finalizeBatchTaskIfApplicable === 'function') finalizeBatchTaskIfApplicable('disputes_summary', 'done', '');
+    finalizedGroups.forEach(function(x) { dsSaveCutoffSnapshot(x.g.clientKey, x.g); });
   }).catch(function(err) {
     console.error('Dispute report build error:', err);
     if (typeof showToast === 'function') showToast('Error building report: ' + (err.message || err), '#e67e00');
@@ -18883,6 +18895,11 @@ function dsExportXLSX() {
     // ticket-level field.
     dsPiRowsForTicket(d, useEdited, activeGroup.applicableCutoff).forEach(function(r) { (r.isCurrent ? currRows : prevRows).push(r); });
   });
+  activeGroup._lastGeneratedPrevRows = prevRows;
+  activeGroup._lastGeneratedCurrRows = currRows;
+  activeGroup._lastGeneratedSummary = (activeGroup.included || []).map(function(d) {
+    return { id: d.id, name: d.name, nature: d.nature || d.sub, disputeDates: d.disputeDates, status: d.status, statusLabel: d.statusLabel, cutoff: d.cutoff };
+  });
 
   JSZip.loadAsync(dsB64ToUint8Array(DISPUTES_TEMPLATE_B64)).then(function(zip) {
     return Promise.all([
@@ -18904,6 +18921,7 @@ function dsExportXLSX() {
     dsDownloadArrayBuffer(arrBuf, filename);
     if (typeof showToast === 'function') showToast('Downloaded: ' + filename);
     if (typeof finalizeBatchTaskIfApplicable === 'function') finalizeBatchTaskIfApplicable('disputes_summary', 'done', '');
+    dsSaveCutoffSnapshot(activeGroup.clientKey, activeGroup);
   }).catch(function(err) {
     console.error('Dispute report build error:', err);
     if (typeof showToast === 'function') showToast('Error building report: ' + (err.message || err), '#e67e00');
