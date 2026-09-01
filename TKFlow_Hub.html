@@ -2896,7 +2896,7 @@ async function _renderHistorySnapshotBody(e, idx) {
     var dsShortLabel = String(e.cutoffLabel || '').split(' Payout')[0];
     var dsRes = await supabaseClient.from('task_cutoff_review_state').select('*')
       .eq('company_id', companyId).eq('task_key', 'disputes_summary').eq('cutoff_label', dsShortLabel).maybeSingle();
-    sectionsHtml += _histDisputesSectionHtml(dsRes.error ? null : dsRes.data);
+    sectionsHtml += _histDisputesSectionHtml(dsRes.error ? null : dsRes.data, e.subKey);
   } catch (err) {
     sectionsHtml += _histSectionWrap('Dispute Summary', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
   }
@@ -3012,10 +3012,60 @@ function _histVarianceSectionHtml(allRows, win) {
   return _histSectionWrap('Variance', body);
 }
 
-// Dispute Summary has no real content to redisplay (allDisputes/dispute_payroll_instructions
-// are the actual source of truth, always live) -- just a summary of what was pulled and
-// whether it was finalized, saved by dsSaveCutoffSnapshot.
-function _histDisputesSectionHtml(row) {
+// Unlike Validation/Variance, Dispute Summary has no frozen data of its own to redisplay --
+// allDisputes/dispute_payroll_instructions are the real source of truth and are always live,
+// so instead of storing a snapshot, this recomputes the exact same two on-screen tables
+// (Dispute summary report + Payroll instructions Previous/Current) live via
+// computeDisputeFindings/dsPiRowsForTicket, using the row's own saved cutoff_label -- not
+// necessarily today's live-current one, so a since-rolled-over cut-off still shows what it
+// actually included rather than drifting. This means the table reflects tickets' CURRENT state
+// (e.g. a since-added log entry), not a frozen moment-of-generation copy -- acceptable since
+// the tickets themselves are the durable record, not this view.
+function archiveBuildDisputesSnapshotHtml(subKey, cutoffLabel) {
+  if (typeof computeDisputeFindings !== 'function') return '<div style="font-size:12px;color:#9898a6;">Could not recompute.</div>';
+  var findings = computeDisputeFindings(subKey, cutoffLabel);
+  var included = findings.included || [];
+  var payroll = findings.payroll || [];
+
+  function th(label) { return '<th style="padding:6px 8px;text-align:left;font-weight:700;color:#1a1a2e;border-bottom:1px solid #EBEBEF;white-space:nowrap;background:#F4F4F8;font-size:10px;">' + label + '</th>'; }
+  function td(val, extra) { return '<td style="padding:5px 8px;border-bottom:1px solid #EBEBEF;font-size:11px;' + (extra||'') + '">' + (val||'—') + '</td>'; }
+
+  var summaryRows = included.length ? included.map(function(d) {
+    return '<tr>' + td(d.id, 'font-weight:600;color:#32CE13;white-space:nowrap;') + td(d.name) + td(d.nature||d.sub)
+      + td(d.disputeDates) + '<td style="padding:5px 8px;border-bottom:1px solid #EBEBEF;font-size:11px;"><span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:20px;background:' + dtmStBgs[d.status] + ';color:' + dtmStColors[d.status] + ';">' + d.statusLabel + '</span></td>'
+      + td(d.cutoff) + '</tr>';
+  }).join('') : '<tr><td colspan="6" style="padding:12px;text-align:center;color:#9898a6;font-size:12px;">No disputes found for this cut-off</td></tr>';
+
+  var prevRows = [], currRows = [];
+  payroll.forEach(function(d) {
+    dsPiRowsForTicket(d, true, cutoffLabel).forEach(function(r) { (r.isCurrent ? currRows : prevRows).push(r); });
+  });
+  function piRowsHtml(rows) {
+    if (!rows.length) return '<tr><td colspan="6" style="padding:10px;text-align:center;color:#9898a6;font-size:11px;">None</td></tr>';
+    return rows.map(function(r) {
+      return '<tr>' + td(r.id,'white-space:nowrap;') + td(r.name) + td(r.detail) + td((r.number!=null?r.number:'') + ' ' + r.unit) + td(r.kind) + td(r.remarks) + '</tr>';
+    }).join('');
+  }
+
+  return '<div style="margin-bottom:10px;">'
+    + '<div style="font-size:11px;font-weight:600;color:#1a1a2e;margin-bottom:4px;">Dispute summary (' + included.length + ')</div>'
+    + '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-radius:10px;"><table style="width:100%;border-collapse:collapse;">'
+    + '<thead><tr>' + th('Ticket#') + th('Name') + th('Nature') + th('Date/s') + th('Status') + th('Cut-off') + '</tr></thead>'
+    + '<tbody>' + summaryRows + '</tbody></table></div>'
+    + '</div>'
+    + '<div>'
+    + '<div style="font-size:11px;font-weight:600;color:#1a1a2e;margin-bottom:4px;">Payroll instructions — Previous Attendance (' + prevRows.length + ')</div>'
+    + '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-radius:10px;margin-bottom:8px;"><table style="width:100%;border-collapse:collapse;">'
+    + '<thead><tr>' + th('Ticket#') + th('Name') + th('Detail') + th('Number') + th('Add/Ded') + th('Remarks') + '</tr></thead>'
+    + '<tbody>' + piRowsHtml(prevRows) + '</tbody></table></div>'
+    + '<div style="font-size:11px;font-weight:600;color:#1a1a2e;margin-bottom:4px;">Payroll instructions — Current Attendance (' + currRows.length + ')</div>'
+    + '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-radius:10px;"><table style="width:100%;border-collapse:collapse;">'
+    + '<thead><tr>' + th('Ticket#') + th('Name') + th('Detail') + th('Number') + th('Add/Ded') + th('Remarks') + '</tr></thead>'
+    + '<tbody>' + piRowsHtml(currRows) + '</tbody></table></div>'
+    + '</div>';
+}
+
+function _histDisputesSectionHtml(row, subKey) {
   if (!row) return _histSectionWrap('Dispute Summary', '<div style="font-size:12px;color:#9898a6;">Not run for this cutoff.</div>');
   var data = row.data || {};
   var body = '<div style="border:1px solid #EBEBEF;border-radius:10px;padding:10px 12px;background:#fff;">'
@@ -3024,7 +3074,7 @@ function _histDisputesSectionHtml(row) {
         ? ' <span style="font-size:10px;color:#32CE13;font-weight:600;">(Finalized)</span>'
         : ' <span style="font-size:10px;color:#e67e00;font-weight:600;">(Pulled, not finalized)</span>')
     + '</div>'
-    + '<div style="font-size:12px;color:#6b6b80;">' + (data.includedCount||0) + ' ticket' + (data.includedCount===1?'':'s') + ' included · ' + (data.payrollCount||0) + ' with payroll impact</div>'
+    + archiveBuildDisputesSnapshotHtml(subKey, row.cutoff_label)
     + '</div>';
   return _histSectionWrap('Dispute Summary', body);
 }
