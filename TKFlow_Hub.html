@@ -11416,20 +11416,6 @@ function runPayrollInstructions() {
   });
   var openWithAmount = disputes.filter(function(d){ return hasPiLines(d); });
 
-  // Split tickets into Current Attendance vs Previous Attendance — driven by the ticket's
-  // explicit "Attendance Period" field (set in the ticket detail modal) rather than guessing
-  // from the dispute's filed date, which was misclassifying tickets. Defaults to Previous
-  // Attendance (the common case) unless a ticket is explicitly marked Current.
-  var currentAttTickets  = [];
-  var previousAttTickets = [];
-  openWithAmount.forEach(function(d) {
-    if (d.attendancePeriod === 'current') {
-      currentAttTickets.push(d);
-    } else {
-      previousAttTickets.push(d);
-    }
-  });
-
   // Build variance rows (Previous Attendance only — already processed)
   var varRows = [];
   if (window.varResults && Object.keys(window.varResults).length) {
@@ -11553,8 +11539,13 @@ function runPayrollInstructions() {
   // (async) using the SAME colored template as Variance's "Download Disputes Tab", instead
   // of a plain custom color scheme, so both look identical.
   var piPrevRows = [], piCurrRows = [];
-  previousAttTickets.forEach(function(d){ dsPiRowsForTicket(d, true).forEach(function(r){ piPrevRows.push(r); }); });
-  currentAttTickets.forEach(function(d){ dsPiRowsForTicket(d, true).forEach(function(r){ piCurrRows.push(r); }); });
+  // Split per PI LINE now, not per ticket -- each line carries its own Attendance Period, so a
+  // single ticket can contribute rows to both tables. No applicableCutoff filter here (unlike
+  // Dispute Summary's report) -- Payroll Instructions has always pulled every open ticket with
+  // any payroll-impact line, regardless of which cut-off it's tagged for.
+  openWithAmount.forEach(function(d){
+    dsPiRowsForTicket(d, true).forEach(function(r){ (r.isCurrent ? piCurrRows : piPrevRows).push(r); });
+  });
   // Variance findings are already-processed differences from a resolved prior period, so they
   // bucket with Previous Attendance, matching the same convention used elsewhere in the app.
   varRows.forEach(function(vr) {
@@ -11768,8 +11759,8 @@ function runPayrollInstructions() {
       + '<div class="result-row"><span class="result-label">Resigned/ON HOLD</span><span class="result-val">' + (pd.resigned||[]).length + '</span></div>'
       + '<div class="result-row"><span class="result-label">Personal info changes</span><span class="result-val">' + (pd.changes||[]).length + '</span></div>'
       + '<div class="result-row"><span class="result-label">Salary increases</span><span class="result-val">' + (pd.salaryIncrease||[]).length + '</span></div>'
-      + '<div class="result-row"><span class="result-label">Previous Att. tickets</span><span class="result-val">' + previousAttTickets.length + '</span></div>'
-      + '<div class="result-row"><span class="result-label">Current Att. tickets</span><span class="result-val">' + currentAttTickets.length + '</span></div>'
+      + '<div class="result-row"><span class="result-label">Previous Att. lines</span><span class="result-val">' + piPrevRows.length + '</span></div>'
+      + '<div class="result-row"><span class="result-label">Current Att. lines</span><span class="result-val">' + piCurrRows.length + '</span></div>'
       + '<div class="result-row"><span class="result-label">Variance rows</span><span class="result-val">' + varRows.length + '</span></div>'
       + '</div>'
       + '<div style="margin-top:14px;">'
@@ -17951,6 +17942,42 @@ function codeUnit(code, number) {
   return 'Hrs';
 }
 
+var DTM_MONTH_SHORT = {January:'Jan',February:'Feb',March:'Mar',April:'Apr',May:'May',June:'Jun',July:'Jul',August:'Aug',September:'Sep',October:'Oct',November:'Nov',December:'Dec'};
+// "September 1st" -> "Sep 1st", for a narrow display column. Falls back to the original
+// string unchanged if it doesn't match the "<Month> 1st/2nd" convention (e.g. an old
+// free-typed value) -- purely a display shortener, the stored/compared value never changes.
+function dtmShortPayoutLabel(fullLabel) {
+  if (!fullLabel) return '';
+  var m = fullLabel.match(/^([A-Za-z]+)\s+(1st|2nd)$/);
+  if (!m) return fullLabel;
+  return (DTM_MONTH_SHORT[m[1]] || m[1]) + ' ' + m[2];
+}
+// Payout Inclusion options for a PI line -- value stays the exact canonical string
+// (dsApplicableCutoffKey/ticketApplicableCutoffKey/dtmCutoffOptions' own format, e.g.
+// "September 1st") so equality checks against a batch's applicableCutoff keep working
+// unchanged; only the visible label is shortened, per the user's ask for a narrow field.
+function dtmPiPayoutOptions() {
+  var periods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
+  return periods.map(function(p) {
+    var value = p.monthName + ' ' + (p.period === 1 ? '1st' : '2nd');
+    return { value: value, label: dtmShortPayoutLabel(value) };
+  });
+}
+
+// A PI line's Remarks auto-generates from a fixed template keyed off its own Attendance
+// Period + Type (dispute code) + Date. Only called when the line hasn't been manually
+// edited (l._remarksAuto !== false) -- dtmUpdatePiLine/dsUpdatePiLine flip that flag off the
+// moment someone types into Remarks directly, so this never clobbers a manual edit again.
+function dtmPiLineRemarkTemplate(l) {
+  var type = l.code || '—';
+  var date = l.date || '—';
+  if (l.attendancePeriod === 'current') {
+    if (l.code === 'Absent') return 'Kindly treat ' + date + ' as Present.';
+    return 'Kindly credit the ' + type + ' premium for ' + date + '.';
+  }
+  return 'Payroll deduction due to ' + type + ' on ' + date + '. Requesting for necessary addback on basic and allowances (if applicable).';
+}
+
 // Returns the structured payroll-instruction lines for a dispute.
 // Prefers d.piLines (array of {code, number, addDed, remarks}); falls back
 // to legacy single d.amount string (old records) as a single unlabeled line.
@@ -17973,12 +18000,26 @@ function hasPiLines(d) {
 function dsUpdatePiLine(ticketId, lineIdx, field, value) {
   var d = allDisputes.find(function(x) { return x.id === ticketId; });
   if (!d || !Array.isArray(d.piLines) || !d.piLines[lineIdx]) return;
-  d.piLines[lineIdx][field] = value;
-  d.piLines[lineIdx]._edited = true;
+  var l = d.piLines[lineIdx];
+  l[field] = value;
+  l._edited = true;
+  if (field === 'remarks') {
+    l._remarksAuto = false;
+  } else if (DTM_PI_TEMPLATE_FIELDS.indexOf(field) >= 0 && l._remarksAuto !== false) {
+    l.remarks = dtmPiLineRemarkTemplate(l);
+  }
   if (field === 'code' || field === 'number') {
     var rowId = ticketId.replace(/[^a-zA-Z0-9]/g, '') + '_' + lineIdx;
     var unitEl = document.getElementById('ds-pi-unit-' + rowId);
-    if (unitEl) unitEl.textContent = codeUnit(d.piLines[lineIdx].code, d.piLines[lineIdx].number);
+    if (unitEl) unitEl.textContent = codeUnit(l.code, l.number);
+  }
+  // Payout Inclusion/Attendance Period/Date/Type can move this line into a different table (or
+  // out of this report entirely, if Payout Inclusion no longer matches this batch's applicable
+  // cut-off) or regenerate its auto Remarks -- re-render the whole result so what's shown here
+  // always matches what would actually be generated, rather than patching just this one cell.
+  if (['piPayout', 'attendancePeriod', 'date', 'code'].indexOf(field) >= 0) {
+    var g = dsBatchGroups[dsActiveGroupIdx];
+    if (g) renderDsResult(g);
   }
 }
 
@@ -17991,18 +18032,24 @@ function computeDisputeFindings(clientKey, applicableCutoff) {
   var thisCutoff = disputes.filter(function(d) { return d.cutoff === applicableCutoff; });
   var priorOpen  = disputes.filter(function(d) { return d.cutoff !== applicableCutoff && d.status !== 'dst-closed'; });
   var included   = thisCutoff.concat(priorOpen);
-  // Also surface any ticket explicitly tagged (via Payout Inclusion) for this payout, even if it
+  // Payroll inclusion is driven per PAYROLL-INSTRUCTION LINE now (l.piPayout), not one
+  // ticket-level field -- a ticket with several disputed dates can have one date's line
+  // pulled into this cut-off's summary while another date's line waits for a later one, with
+  // the ticket itself staying open until every line is resolved. Falls back to the ticket's
+  // own Cut-off (d.cutoff) for any line that predates this per-line field.
+  function ticketHasLineForCutoff(d) {
+    return getPiLines(d).some(function(l) { return (l.piPayout || d.cutoff) === applicableCutoff; });
+  }
+  // Also surface any ticket with a line explicitly tagged for this payout, even if it
   // originated in an earlier cutoff and is already closed — so it isn't orphaned from the summary.
   disputes.forEach(function(d) {
-    if (hasPiLines(d) && (d.piPayout || d.cutoff) === applicableCutoff && included.indexOf(d) === -1) included.push(d);
+    if (ticketHasLineForCutoff(d) && included.indexOf(d) === -1) included.push(d);
   });
-  // Payroll inclusion is driven by the ticket's explicit "Payout Inclusion" field (d.piPayout),
-  // not by open/closed status or which cutoff the ticket originated from. This lets a ticket
-  // opened (and even closed) in an earlier cutoff still land in payroll once it's tagged for
-  // this payout — e.g. resolving/closing a dispute is often exactly when its add-back applies.
-  var payroll = included.filter(function(d) {
-    return hasPiLines(d) && (d.piPayout || d.cutoff) === applicableCutoff;
-  });
+  // Not by open/closed status or which cutoff the ticket originated from. This lets a ticket
+  // opened (and even closed) in an earlier cutoff still land in payroll once one of its lines
+  // is tagged for this payout — e.g. resolving/closing a dispute is often exactly when its
+  // add-back applies.
+  var payroll = included.filter(ticketHasLineForCutoff);
   return { included: included, payroll: payroll, thisCutoffCount: thisCutoff.length, priorOpenCount: priorOpen.length };
 }
 
@@ -18193,26 +18240,53 @@ function renderDsResult(g) {
     });
   }
 
-  // Payroll instruction rows — one row per payroll-instruction line (a ticket can have several)
+  // Payroll instruction rows — one row per payroll-instruction line (a ticket can have several).
+  // Only lines whose own Payout Inclusion matches this batch's applicable cut-off are shown --
+  // a ticket's other lines (destined for a different cut-off) are left out of this report,
+  // matching exactly what dsGenerateAll/dsExportXLSX will actually pull.
   var payrollRows = '';
   var payrollRowCount = 0;
   if (!payroll.length) {
-    payrollRows = '<tr><td colspan="8" style="padding:12px;text-align:center;color:#9898a6;font-size:12px;">No open tickets with payroll impact</td></tr>';
+    payrollRows = '<tr><td colspan="11" style="padding:12px;text-align:center;color:#9898a6;font-size:12px;">No open tickets with payroll impact</td></tr>';
   } else {
+    var dsPayoutOptions = dtmPiPayoutOptions();
     payroll.forEach(function(d) {
       // Materialize piLines onto the record itself so edits persist
       if (!Array.isArray(d.piLines)) d.piLines = getPiLines(d);
+      var dsDateOptions = dtmPiLineDateOptions(d);
       d.piLines.forEach(function(l, li) {
+        if ((l.piPayout || d.cutoff) !== g.applicableCutoff) return;
         var isAdd = (l.addDed || 'Addition') !== 'Deduction';
         var remarkVal = (l.remarks || '').toString().replace(/"/g, '&quot;');
         var rowId = d.id.replace(/[^a-zA-Z0-9]/g, '') + '_' + li;
         var codeOptions = ['<option value="">\u2014</option>'].concat(DISPUTE_CODES.map(function(c) {
           return '<option value="' + c + '"' + (l.code === c ? ' selected' : '') + '>' + c + '</option>';
         })).join('');
+        var dsDateOptsHtml = ['<option value="">\u2014</option>'].concat(dsDateOptions.map(function(dt) {
+          return '<option value="' + dt.replace(/"/g,'&quot;') + '"' + (l.date === dt ? ' selected' : '') + '>' + dt + '</option>';
+        })).join('');
+        var dsHasPayoutMatch = dsPayoutOptions.some(function(o){ return o.value === l.piPayout; });
+        var dsPayoutOptsHtml = ['<option value="">\u2014</option>']
+          .concat(!dsHasPayoutMatch && l.piPayout ? ['<option value="' + l.piPayout.replace(/"/g,'&quot;') + '" selected>' + dtmShortPayoutLabel(l.piPayout) + '</option>'] : [])
+          .concat(dsPayoutOptions.map(function(o) {
+            return '<option value="' + o.value.replace(/"/g,'&quot;') + '"' + (o.value === l.piPayout ? ' selected' : '') + '>' + o.label + '</option>';
+          })).join('');
         payrollRows += '<tr>'
           + td(d.id, 'font-weight:600;color:#32CE13;white-space:nowrap;')
           + td(d.empNo, 'font-family:monospace;font-size:11px;color:#9898a6;')
           + td(d.name)
+          + '<td style="padding:4px 6px;border-bottom:1px solid #EBEBEF;">'
+          + '<select onchange="dsUpdatePiLine(\'' + d.id + '\',' + li + ',\'piPayout\',this.value)" style="width:100%;min-width:90px;border:1px solid #EBEBEF;border-radius:6px;background:#fff;padding:4px 6px;font-size:11px;font-family:Rubik,sans-serif;">' + dsPayoutOptsHtml + '</select>'
+          + '</td>'
+          + '<td style="padding:4px 6px;border-bottom:1px solid #EBEBEF;">'
+          + '<select onchange="dsUpdatePiLine(\'' + d.id + '\',' + li + ',\'attendancePeriod\',this.value)" style="width:100%;min-width:90px;border:1px solid #EBEBEF;border-radius:6px;background:#fff;padding:4px 6px;font-size:11px;font-family:Rubik,sans-serif;">'
+          + '<option value="previous"' + (l.attendancePeriod !== 'current' ? ' selected' : '') + '>Previous</option>'
+          + '<option value="current"' + (l.attendancePeriod === 'current' ? ' selected' : '') + '>Current</option>'
+          + '</select>'
+          + '</td>'
+          + '<td style="padding:4px 6px;border-bottom:1px solid #EBEBEF;">'
+          + '<select onchange="dsUpdatePiLine(\'' + d.id + '\',' + li + ',\'date\',this.value)" style="width:100%;min-width:90px;border:1px solid #EBEBEF;border-radius:6px;background:#fff;padding:4px 6px;font-size:11px;font-family:Rubik,sans-serif;">' + dsDateOptsHtml + '</select>'
+          + '</td>'
           + '<td style="padding:4px 6px;border-bottom:1px solid #EBEBEF;">'
           + '<select onchange="dsUpdatePiLine(\'' + d.id + '\',' + li + ',\'code\',this.value)" style="width:100%;min-width:100px;border:1px solid #EBEBEF;border-radius:6px;background:#fff;padding:4px 6px;font-size:11px;font-family:Rubik,sans-serif;">' + codeOptions + '</select>'
           + '</td>'
@@ -18235,7 +18309,7 @@ function renderDsResult(g) {
       });
     });
     if (!payrollRowCount) {
-      payrollRows = '<tr><td colspan="8" style="padding:12px;text-align:center;color:#9898a6;font-size:12px;">No open tickets with payroll impact</td></tr>';
+      payrollRows = '<tr><td colspan="11" style="padding:12px;text-align:center;color:#9898a6;font-size:12px;">No lines tagged for this cut-off (' + (g.applicableCutoff || '—') + ')</td></tr>';
     }
   }
 
@@ -18271,10 +18345,11 @@ function renderDsResult(g) {
     + '<div style="border:1px solid #EBEBEF;border-radius:14px;overflow:hidden;margin-bottom:14px;"><div style="overflow-x:auto;">'
     + '<table style="width:100%;border-collapse:collapse;font-size:11px;">'
     + '<thead>'
-    + '<tr style="background:#32CE13;"><th colspan="8" style="padding:6px 10px;text-align:left;font-weight:600;color:#fff;letter-spacing:.5px;">DISPUTE</th></tr>'
+    + '<tr style="background:#32CE13;"><th colspan="11" style="padding:6px 10px;text-align:left;font-weight:600;color:#fff;letter-spacing:.5px;">DISPUTE</th></tr>'
     + '<tr style="background:#F4F4F8;">'
-    + th('Dispute Ticket#') + th('Employee No.') + th('Full Name') + th('Dispute Details')
-    + th('Number') + th('Unit (Days/Hrs/Mins)') + th('Addition/Deduction') + th('Remarks')
+    + th('Dispute Ticket#') + th('Employee No.') + th('Full Name')
+    + th('Payout Inclusion') + th('Attendance Period') + th('Date')
+    + th('Dispute Details') + th('Number') + th('Unit (Days/Hrs/Mins)') + th('Addition/Deduction') + th('Remarks')
     + '</tr></thead>'
     + '<tbody>' + payrollRows + '</tbody>'
     + '</table></div></div>'
@@ -18404,12 +18479,20 @@ function dsFillDisputesTemplateSheet(baseSheetXml, prevRows, currRows) {
   return sheetXml;
 }
 
-// Converts a dispute's payroll-instruction lines into the flat {id,name,detail,number,unit,kind,remarks} rows
-function dsPiRowsForTicket(d, useEdited) {
+// Converts a dispute's payroll-instruction lines into the flat
+// {id,name,detail,number,unit,kind,remarks,isCurrent,date} rows. When applicableCutoff is
+// given, only lines tagged (via their own l.piPayout) for that specific payout are returned --
+// a ticket can have some lines destined for this cut-off's report and others held back for a
+// later one. isCurrent (from the line's own l.attendancePeriod) is what callers now bucket
+// current-vs-previous-attendance tables on, replacing the old ticket-level d.attendancePeriod.
+function dsPiRowsForTicket(d, useEdited, applicableCutoff) {
   var lines = Array.isArray(d.piLines) ? d.piLines : getPiLines(d);
+  if (applicableCutoff != null) {
+    lines = lines.filter(function(l) { return (l.piPayout || d.cutoff) === applicableCutoff; });
+  }
   return lines.map(function(l) {
     var remarks = (useEdited && l.remarks) ? l.remarks : (d.recommendedResolution || d.otherRemarks || l.remarks || '');
-    return { id: d.id||'', empNo: d.empNo||'', name: d.name||'', detail: l.code||d.nature||'', number: l.number, unit: codeUnit(l.code, l.number), kind: l.addDed||'Addition', remarks: remarks };
+    return { id: d.id||'', empNo: d.empNo||'', name: d.name||'', detail: l.code||d.nature||'', number: l.number, unit: codeUnit(l.code, l.number), kind: l.addDed||'Addition', remarks: remarks, isCurrent: l.attendancePeriod === 'current', date: l.date||'' };
   });
 }
 
@@ -18551,14 +18634,11 @@ function dsGenerateAll() {
         var payroll = g.payroll || [];
         var prevRows = [], currRows = [];
         payroll.forEach(function(d) {
-          // Was d.cutoff === g.applicableCutoff -- completely ignored the ticket's own
-          // "Attendance Period" field (the one actually labeled "...Payroll Instructions
-          // table" and shown to the user for exactly this purpose), so setting it had no
-          // effect on this report at all. Now the one real switch for both this export and
-          // runPayrollInstructions' own table, same default-to-previous convention.
-          var isCurrent = d.attendancePeriod === 'current';
-          dsPiRowsForTicket(d, useEdited).forEach(function(r) {
-            (isCurrent ? currRows : prevRows).push(r);
+          // Per-line now: each line carries its own Attendance Period, and only lines whose
+          // own Payout Inclusion matches this batch's applicableCutoff are pulled in -- a
+          // ticket's other lines (destined for a different cut-off) are left out of this report.
+          dsPiRowsForTicket(d, useEdited, g.applicableCutoff).forEach(function(r) {
+            (r.isCurrent ? currRows : prevRows).push(r);
           });
         });
         var filledXml = dsFillDisputesTemplateSheet(baseSheetXml, prevRows, currRows);
@@ -18618,9 +18698,9 @@ function dsExportXLSX() {
   var useEdited = window._dsUseEditedRemarks !== false;
   var prevRows = [], currRows = [];
   (activeGroup.payroll || []).forEach(function(d) {
-    // Same fix as dsGenerateAll -- attendancePeriod, not d.cutoff vs applicableCutoff.
-    var isCurrent = d.attendancePeriod === 'current';
-    dsPiRowsForTicket(d, useEdited).forEach(function(r) { (isCurrent ? currRows : prevRows).push(r); });
+    // Same as dsGenerateAll -- per-line Attendance Period + Payout Inclusion, not any
+    // ticket-level field.
+    dsPiRowsForTicket(d, useEdited, activeGroup.applicableCutoff).forEach(function(r) { (r.isCurrent ? currRows : prevRows).push(r); });
   });
 
   JSZip.loadAsync(dsB64ToUint8Array(DISPUTES_TEMPLATE_B64)).then(function(zip) {
@@ -23704,24 +23784,13 @@ if (_origSwitchPage2) {
       <details name="dtm-section" id="dtm-section-pi" style="margin-bottom:16px;border:1px solid var(--border,#EBEBEF);border-radius:14px;padding:0;">
         <summary style="padding:10px 14px;cursor:pointer;font-size:11px;font-weight:700;color:#1a1a2e;text-transform:uppercase;letter-spacing:.5px;list-style:none;">Payroll Instructions</summary>
         <div style="padding:0 14px 14px;">
-          <div style="margin-bottom:10px;">
-            <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;">Payout Inclusion (e.g. May 1st / May 2nd)</div>
-            <input id="dtm-pi-payout" oninput="dtmSaveField('piPayout',this.value)" placeholder="—" style="width:100%;padding:9px 11px;border:1px solid var(--border,#EBEBEF);border-radius:12px;font-size:13px;font-weight:500;font-family:Rubik,sans-serif;color:var(--text-primary);background:var(--bg-secondary,#F4F4F8);outline:none;box-sizing:border-box;">
-          </div>
-          <div style="margin-bottom:10px;">
-            <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;">Attendance Period (Payroll Instructions table)</div>
-            <select id="dtm-attendance-period" onchange="dtmSaveField('attendancePeriod',this.value)" style="width:100%;padding:9px 11px;border:1px solid var(--border,#EBEBEF);border-radius:12px;font-size:13px;font-weight:500;font-family:Rubik,sans-serif;color:var(--text-primary);background:var(--bg-secondary,#F4F4F8);outline:none;box-sizing:border-box;">
-              <option value="previous">Previous Attendance (default)</option>
-              <option value="current">Current Attendance</option>
-            </select>
-          </div>
           <div>
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
               <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">Payroll instruction line(s)</div>
               <button onclick="dtmAddPiLine()" style="padding:4px 10px;border:1px solid var(--border,#EBEBEF);border-radius:7px;background:var(--bg-card,#fff);font-size:11px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;color:#32CE13;">+ Add line</button>
             </div>
             <div id="dtm-pi-lines"></div>
-            <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">Unit is auto-set from the code (Absent → Day/Days, Undertime → Minutes, everything else → Hrs).</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">Each line sets its own Payout Inclusion + Attendance Period — which cut-off and table (Previous/Current) it lands in on the Dispute Summary report. Unit is auto-set from the code (Absent → Day/Days, Undertime → Minutes, everything else → Hrs). Remarks auto-fill from a template; edit freely, it won't be overwritten once you do.</div>
           </div>
         </div>
       </details>
@@ -24082,26 +24151,14 @@ function dtmCutoffOptions() {
 // feature can still independently set d.payoutCutoff from source-ticket text (see the
 // ext.payoutCutoff handling elsewhere) -- that's unaffected, this only runs when someone
 // actually picks a cut-off from this dropdown.
-// Found via a real reported bug: a ticket transferred here to a previous cut-off still showed
-// under "Current Attendance" in Payroll Instructions, because that table is driven by a THIRD,
-// completely separate field -- d.attendancePeriod (the "Attendance Period" dropdown in the
-// Payroll Instructions section below, defaults to 'previous', manually set otherwise) -- which
-// this dropdown never touched. Now keeps it in sync: transferring to whatever cut-off is
-// genuinely current right now flips it to 'current', anything else flips it to 'previous',
-// matching the same "is this THE real current cut-off" definition d.cutoff itself is stamped
-// from at ticket creation (ticketApplicableCutoffKey with no receivedDate = right now).
+// Attendance Period/Payout Inclusion used to live at the ticket level here too (a THIRD field,
+// separate from this dropdown, that this function had to keep manually in sync -- see git
+// history if that old bug report is ever needed again). Both are per PI-line now, set directly
+// on each line in the Payroll Instructions section, so this dropdown no longer has any
+// downstream field left to sync -- it only ever set d.cutoff/d.payoutCutoff itself.
 function dtmSaveCutoff(value) {
   dtmSaveField('cutoff', value);
   dtmSaveField('payoutCutoff', value);
-  var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
-  var clientObj = d && clients[d.client];
-  if (clientObj && typeof ticketApplicableCutoffKey === 'function') {
-    var realCurrentCutoff = ticketApplicableCutoffKey(clientObj);
-    var newPeriod = (value && value === realCurrentCutoff) ? 'current' : 'previous';
-    dtmSaveField('attendancePeriod', newPeriod);
-    var attSelect = document.getElementById('dtm-attendance-period');
-    if (attSelect) attSelect.value = newPeriod;
-  }
 }
 
 // What cut-off was actually current/applicable at the moment this ticket's email came in --
@@ -24251,12 +24308,6 @@ function openDisputeTicket(id, clientContext) {
       unrecBanner.style.display = 'none';
     }
   }
-
-  var piPayoutEl = document.getElementById('dtm-pi-payout');
-  if (piPayoutEl) piPayoutEl.value = d.piPayout || d.cutoff || '';
-
-  var attPeriodEl = document.getElementById('dtm-attendance-period');
-  if (attPeriodEl) attPeriodEl.value = d.attendancePeriod === 'current' ? 'current' : 'previous';
 
   dtmRenderPiLines(d);
 
@@ -24653,6 +24704,13 @@ var DISPUTE_CODES = ['Absent','Undertime','Ord-OT','Ord-ND','Ord-ND-OT','RD','RD
   'SH-RD','SH-RD-OT','SH-RD-ND','SH-RD-ND-OT','LH-RD','LH-RD-OT','LH-RD-ND','LH-RD-ND-OT',
   'DH','DH-OT','DH-ND','DH-ND-OT','DH-RD','DH-RD-OT','DH-RD-ND','DH-RD-ND-OT'];
 
+// A PI line's own list of Date options -- pulled from the ticket's "Date/s of Dispute" field
+// (see dtmRenderDisputeDates), not a free date picker, since a dispute's dates are already
+// entered once at the ticket level and every line should be tied to one of those.
+function dtmPiLineDateOptions(d) {
+  return (d.disputeDates || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+}
+
 function dtmRenderPiLines(d) {
   var el = document.getElementById('dtm-pi-lines');
   if (!el) return;
@@ -24661,12 +24719,33 @@ function dtmRenderPiLines(d) {
     el.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:8px 0;">No payroll-impact lines yet. Click "+ Add line" if this dispute affects payroll.</div>';
     return;
   }
+  var dateOptions = dtmPiLineDateOptions(d);
+  var payoutOptions = dtmPiPayoutOptions();
   el.innerHTML = d.piLines.map(function(l, i) {
     var unit = codeUnit(l.code, l.number);
     var codeOptions = ['<option value="">\u2014 select \u2014</option>'].concat(DISPUTE_CODES.map(function(c) {
       return '<option value="' + c + '"' + (l.code === c ? ' selected' : '') + '>' + c + '</option>';
     })).join('');
-    return '<div style="display:grid;grid-template-columns:1.3fr 0.8fr 0.7fr 1fr 1.6fr auto;gap:6px;align-items:center;margin-bottom:6px;">'
+    var dateOptsHtml = ['<option value="">\u2014</option>'].concat(dateOptions.map(function(dt) {
+      return '<option value="' + dt.replace(/"/g,'&quot;') + '"' + (l.date === dt ? ' selected' : '') + '>' + dt + '</option>';
+    })).join('');
+    var hasPayoutMatch = payoutOptions.some(function(o){ return o.value === l.piPayout; });
+    var payoutOptsHtml = ['<option value="">\u2014</option>']
+      .concat(!hasPayoutMatch && l.piPayout ? ['<option value="' + l.piPayout.replace(/"/g,'&quot;') + '" selected>' + dtmShortPayoutLabel(l.piPayout) + '</option>'] : [])
+      .concat(payoutOptions.map(function(o) {
+        return '<option value="' + o.value.replace(/"/g,'&quot;') + '"' + (o.value === l.piPayout ? ' selected' : '') + '>' + o.label + '</option>';
+      })).join('');
+    return '<div style="border:1px solid var(--border,#EBEBEF);border-radius:10px;padding:8px;margin-bottom:8px;">'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:6px;align-items:center;margin-bottom:6px;">'
+      + '<select onchange="dtmUpdatePiLine(' + i + ',\'piPayout\',this.value)" title="Payout Inclusion" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;background:#fff;color:var(--text-primary);">' + payoutOptsHtml + '</select>'
+      + '<select onchange="dtmUpdatePiLine(' + i + ',\'attendancePeriod\',this.value)" title="Attendance Period" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;background:#fff;color:var(--text-primary);">'
+      + '<option value="previous"' + (l.attendancePeriod !== 'current' ? ' selected' : '') + '>Previous</option>'
+      + '<option value="current"' + (l.attendancePeriod === 'current' ? ' selected' : '') + '>Current</option>'
+      + '</select>'
+      + '<select onchange="dtmUpdatePiLine(' + i + ',\'date\',this.value)" title="Date of Dispute" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;background:#fff;color:var(--text-primary);">' + dateOptsHtml + '</select>'
+      + '<div onclick="dtmRemovePiLine(' + i + ')" style="cursor:pointer;color:#c0392b;font-size:16px;padding:2px 6px;" title="Remove line">&times;</div>'
+      + '</div>'
+      + '<div style="display:grid;grid-template-columns:1.3fr 0.8fr 0.7fr 1fr 1.6fr;gap:6px;align-items:center;">'
       + '<select onchange="dtmUpdatePiLine(' + i + ',\'code\',this.value)" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;background:#fff;color:var(--text-primary);">' + codeOptions + '</select>'
       + '<input type="number" step="any" value="' + (l.number != null ? l.number : '') + '" oninput="dtmUpdatePiLine(' + i + ',\'number\',this.value,true)" placeholder="Number" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;">'
       + '<div id="dtm-pi-unit-' + i + '" style="font-size:11px;color:var(--text-muted);padding:6px 4px;">' + unit + '</div>'
@@ -24675,7 +24754,7 @@ function dtmRenderPiLines(d) {
       + '<option value="Deduction"' + (l.addDed === 'Deduction' ? ' selected' : '') + '>Deduction</option>'
       + '</select>'
       + '<input value="' + (l.remarks||'').toString().replace(/"/g,'&quot;') + '" oninput="dtmUpdatePiLine(' + i + ',\'remarks\',this.value,true)" placeholder="Remarks\u2026" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;">'
-      + '<div onclick="dtmRemovePiLine(' + i + ')" style="cursor:pointer;color:#c0392b;font-size:16px;padding:2px 6px;" title="Remove line">&times;</div>'
+      + '</div>'
       + '</div>';
   }).join('');
 }
@@ -24684,20 +24763,40 @@ function dtmAddPiLine() {
   var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
   if (!d) return;
   if (!Array.isArray(d.piLines)) d.piLines = [];
-  d.piLines.push({ code: '', number: '', addDed: 'Addition', remarks: '' });
+  // Seed Payout Inclusion/Attendance Period from the same "what's applicable right now"
+  // logic the old ticket-level fields used to auto-default from, and Date from the ticket's
+  // first entered dispute date -- all still fully editable per line afterward.
+  var clientObj = clients[d.client];
+  var realCurrent = (clientObj && typeof ticketApplicableCutoffKey === 'function') ? ticketApplicableCutoffKey(clientObj) : '';
+  var payoutDefault = d.cutoff || realCurrent || '';
+  var periodDefault = (payoutDefault && payoutDefault === realCurrent) ? 'current' : 'previous';
+  var line = { code: '', number: '', addDed: 'Addition', remarks: '', date: dtmPiLineDateOptions(d)[0] || '', piPayout: payoutDefault, attendancePeriod: periodDefault, _remarksAuto: true };
+  line.remarks = dtmPiLineRemarkTemplate(line);
+  d.piLines.push(line);
   dtmRenderPiLines(d);
   dtmSyncPiLines(dtmCurrentId);
 }
 
+// Fields that feed the Remarks template -- changing any of these regenerates Remarks, unless
+// the line's Remarks have already been manually edited (_remarksAuto flipped false the moment
+// someone types into that field directly, see below).
+var DTM_PI_TEMPLATE_FIELDS = ['code', 'date', 'attendancePeriod'];
+
 function dtmUpdatePiLine(idx, field, value, skipRerender) {
   var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
   if (!d || !Array.isArray(d.piLines) || !d.piLines[idx]) return;
-  d.piLines[idx][field] = value;
+  var l = d.piLines[idx];
+  l[field] = value;
+  if (field === 'remarks') {
+    l._remarksAuto = false;
+  } else if (DTM_PI_TEMPLATE_FIELDS.indexOf(field) >= 0 && l._remarksAuto !== false) {
+    l.remarks = dtmPiLineRemarkTemplate(l);
+  }
   if (skipRerender) {
     // Avoid rebuilding the whole list (would drop input focus mid-keystroke) —
     // just refresh the Unit cell, which is the only thing derived from code/number.
     var unitEl = document.getElementById('dtm-pi-unit-' + idx);
-    if (unitEl) unitEl.textContent = codeUnit(d.piLines[idx].code, d.piLines[idx].number);
+    if (unitEl) unitEl.textContent = codeUnit(l.code, l.number);
   } else {
     dtmRenderPiLines(d);
   }
@@ -24846,7 +24945,9 @@ function dtmMapRowToDispute(row, companyIdToKey) {
   var clientKey = row.company_id ? (companyIdToKey[row.company_id] || '') : '';
   var disputeDates = Array.isArray(row.dispute_dates) ? row.dispute_dates.join(', ') : '';
   var piLines = (row.dispute_payroll_instructions || []).map(function(l) {
-    return { code: l.code || '', number: l.number, addDed: l.add_ded || 'Addition', remarks: l.remarks || '' };
+    return { code: l.code || '', number: l.number, addDed: l.add_ded || 'Addition', remarks: l.remarks || '',
+      date: l.date_of_dispute || '', piPayout: l.pi_payout || '', attendancePeriod: l.attendance_period || 'previous',
+      _remarksAuto: false };
   });
   (row.dispute_logs || []).slice().sort(function(a, b) { return new Date(a.created_at) - new Date(b.created_at); }).forEach(function(l) {
     if (!dtmLogs[row.id]) dtmLogs[row.id] = [];
@@ -24941,7 +25042,8 @@ function dtmSyncPiLines(id) {
       var lines = (d.piLines || []).filter(function(l) { return l.code; });
       if (!lines.length) return;
       supabaseClient.from('dispute_payroll_instructions').insert(lines.map(function(l) {
-        return { dispute_id: id, code: l.code, number: l.number, unit: codeUnit(l.code, l.number), add_ded: l.addDed, remarks: l.remarks || '' };
+        return { dispute_id: id, code: l.code, number: l.number, unit: codeUnit(l.code, l.number), add_ded: l.addDed, remarks: l.remarks || '',
+          date_of_dispute: l.date || null, pi_payout: l.piPayout || null, attendance_period: l.attendancePeriod || null };
       })).then(function(insRes) {
         if (insRes.error) dtmReportSaveError('Could not save payroll-instruction lines for ' + id, insRes.error);
       });
