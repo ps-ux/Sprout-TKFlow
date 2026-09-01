@@ -10031,7 +10031,12 @@ function findMostRecentlyCompletedPeriodIdx(periods) {
     var r = parseAttCov(periods[i].attCov, periods[i].yr);
     if (r && r.end <= now) idx = i;
   }
-  return idx >= 0 ? idx : periods.length - 1;
+  // Same bug findCurrentCalendarPeriodIdx above was already fixed for -- falling back to
+  // periods.length-1 (the LAST, i.e. most future, period) when literally nothing has completed
+  // yet meant Variance could default to a payout whose attendance coverage hadn't even happened
+  // yet (confirmed live: today Sep 1, nothing completed yet in this calendar, defaulted to a
+  // Sep 15 payout). Falls back to the FIRST period instead -- never suggests a future one.
+  return idx >= 0 ? idx : 0;
 }
 
 // A new cutoff doesn't actually start the moment today's date rolls into its raw attendance-
