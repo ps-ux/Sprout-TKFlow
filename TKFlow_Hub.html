@@ -18168,37 +18168,6 @@ function dsSaveCutoffSnapshot(clientKey, g) {
   });
 }
 
-// Runs once when the task is opened fresh (first time this session, or after Reset) --
-// checks whether each sub already has a saved snapshot for its OWN currently-applicable
-// cut-off (not any older one -- a rollover means a genuinely new pull is expected) and
-// restores it, so "I already ran this cut-off" survives a reload instead of looking blank.
-async function dsRestoreFromSupabase() {
-  var restoredAny = false;
-  for (var i = 0; i < dsBatchGroups.length; i++) {
-    var g = dsBatchGroups[i];
-    if (g.status === 'done') continue;
-    var clientObj = clients[g.clientKey];
-    var companyId = clientObj && clientObj.companyId;
-    var applicableCutoff = dsApplicableCutoffKey(clientObj);
-    if (!companyId || !applicableCutoff) continue;
-    try {
-      var res = await supabaseClient.from('task_cutoff_review_state').select('*')
-        .eq('company_id', companyId).eq('task_key', 'disputes_summary').eq('cutoff_label', applicableCutoff).maybeSingle();
-      if (res.error || !res.data) continue;
-      var findings = computeDisputeFindings(g.clientKey, applicableCutoff);
-      g.applicableCutoff = applicableCutoff;
-      g.included = findings.included;
-      g.payroll = findings.payroll;
-      g.thisCutoffCount = findings.thisCutoffCount;
-      g.priorOpenCount = findings.priorOpenCount;
-      g.status = 'done';
-      g.finalized = !!(res.data.data && res.data.data.finalized);
-      restoredAny = true;
-    } catch (e) { console.warn('Could not restore Dispute Summary state for ' + g.clientKey, e); }
-  }
-  if (restoredAny) renderDsBatchList();
-}
-
 function computeDisputeFindings(clientKey, applicableCutoff) {
   var cu = window.currentUser || currentUser;
   var disputes = allDisputes.filter(function(d) {
@@ -18260,7 +18229,6 @@ function buildDisputeSummaryRunner(body) {
     + '<button class="task-run-btn green" id="ds-run-btn" onclick="runDisputeSummaryBatch()"><i class="ti ti-file-description"></i> Run</button>'
     + '<div id="ds-batch-list"></div>'
     + '<button onclick="dsResetAll()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:12px;background:none;color:#9898a6;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;margin-top:14px;"><i class="ti ti-refresh" style="font-size:12px;"></i> Reset and start over</button>';
-  dsRestoreFromSupabase();
 }
 
 // Explicit reset — clears pulled results for this task and starts a blank run
@@ -18268,6 +18236,19 @@ function dsResetAll() {
     appConfirm('Reset Dispute Summary', 'This clears all pulled tickets and findings for this workspace.', function() {
   var ck = window.currentWsClient || window._wsClient || '';
   if (window._taskBodyCache) window._taskBodyCache['disputes_summary_' + ck] = null;
+  // Also clear any saved snapshot for each sub's CURRENT cut-off (older cut-offs' snapshots
+  // stay intact in Processing History) -- matches this dialog's own promise that Reset
+  // "clears all pulled tickets and findings", so Processing History correctly goes back to
+  // "Not run" for this cut-off too rather than still showing the discarded run.
+  dsBatchGroups.forEach(function(g) {
+    var clientObj = clients[g.clientKey];
+    var companyId = clientObj && clientObj.companyId;
+    var applicableCutoff = (typeof dsApplicableCutoffKey === 'function') ? dsApplicableCutoffKey(clientObj) : g.applicableCutoff;
+    if (!companyId || !applicableCutoff) return;
+    supabaseClient.from('task_cutoff_review_state').delete()
+      .eq('company_id', companyId).eq('task_key', 'disputes_summary').eq('cutoff_label', applicableCutoff)
+      .then(function(res) { if (res.error) console.warn('Could not clear saved Dispute Summary state for ' + g.clientKey, res.error); });
+  });
   if (typeof openTaskRunner === 'function') openTaskRunner('disputes_summary', 'Dispute Summary');
   if (typeof showToast === 'function') showToast('Dispute Summary reset');
   }, { okLabel: 'Reset' });
