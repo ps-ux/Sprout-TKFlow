@@ -2889,6 +2889,18 @@ async function _renderHistorySnapshotBody(e, idx) {
     sectionsHtml += _histSectionWrap('Variance', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
   }
 
+  try {
+    // dsSaveCutoffSnapshot saves cutoff_label in dsApplicableCutoffKey's short form
+    // ("May 2nd"), not the long getCurrentCutoffLabel form Processing History rows carry --
+    // same short/long mismatch _histStatusOnlySectionsHtml already strips off below.
+    var dsShortLabel = String(e.cutoffLabel || '').split(' Payout')[0];
+    var dsRes = await supabaseClient.from('task_cutoff_review_state').select('*')
+      .eq('company_id', companyId).eq('task_key', 'disputes_summary').eq('cutoff_label', dsShortLabel).maybeSingle();
+    sectionsHtml += _histDisputesSectionHtml(dsRes.error ? null : dsRes.data);
+  } catch (err) {
+    sectionsHtml += _histSectionWrap('Dispute Summary', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
+  }
+
   sectionsHtml += _histStatusOnlySectionsHtml(e.subKey, e.cutoffLabel);
 
   // Re-fetch the element rather than reusing the one captured above -- this row could have
@@ -3000,9 +3012,28 @@ function _histVarianceSectionHtml(allRows, win) {
   return _histSectionWrap('Variance', body);
 }
 
-var HIST_OTHER_TASK_LABELS = { newhires: 'New Hires', disputes_summary: 'Dispute Summary', payroll_instructions: 'Payroll Instructions', profile: 'Profile Updates' };
+// Dispute Summary has no real content to redisplay (allDisputes/dispute_payroll_instructions
+// are the actual source of truth, always live) -- just a summary of what was pulled and
+// whether it was finalized, saved by dsSaveCutoffSnapshot.
+function _histDisputesSectionHtml(row) {
+  if (!row) return _histSectionWrap('Dispute Summary', '<div style="font-size:12px;color:#9898a6;">Not run for this cutoff.</div>');
+  var data = row.data || {};
+  var body = '<div style="border:1px solid #EBEBEF;border-radius:10px;padding:10px 12px;background:#fff;">'
+    + '<div style="font-size:12px;font-weight:600;color:#1a1a2e;margin-bottom:6px;">' + (row.cutoff_label||'')
+    + (data.finalized
+        ? ' <span style="font-size:10px;color:#32CE13;font-weight:600;">(Finalized)</span>'
+        : ' <span style="font-size:10px;color:#e67e00;font-weight:600;">(Pulled, not finalized)</span>')
+    + '</div>'
+    + '<div style="font-size:12px;color:#6b6b80;">' + (data.includedCount||0) + ' ticket' + (data.includedCount===1?'':'s') + ' included · ' + (data.payrollCount||0) + ' with payroll impact</div>'
+    + '</div>';
+  return _histSectionWrap('Dispute Summary', body);
+}
 
-// These four task types don't persist their actual computed output anywhere today -- only a
+// disputes_summary has its own real snapshot section now (_histDisputesSectionHtml) --
+// deliberately excluded here so it isn't also shown as a bare status line.
+var HIST_OTHER_TASK_LABELS = { newhires: 'New Hires', payroll_instructions: 'Payroll Instructions', profile: 'Profile Updates' };
+
+// These task types don't persist their actual computed output anywhere today -- only a
 // bare done/skipped status (with reason, if skipped) survives via task_run_history. Shown as a
 // simple status line each, per the user's request: skipped is indicated, never a viewable row.
 // Tasks a client has switched off in their Applicable Tasks matrix (isTaskEnabled) are left out
@@ -18065,6 +18096,54 @@ function dsUpdatePiLine(ticketId, lineIdx, field, value) {
   }
 }
 
+// Persists Dispute Summary's pulled/finalized state per (company, cut-off) so it survives a
+// reload and shows up in Processing History -- mirrors Variance/Validation's own
+// task_cutoff_review_state persistence. No file storage needed here (unlike Variance's
+// workbook): computeDisputeFindings recomputes included/payroll fresh from allDisputes at
+// any time, so only a small summary + the finalized flag actually need to survive.
+function dsSaveCutoffSnapshot(clientKey, g) {
+  var companyId = clients[clientKey] && clients[clientKey].companyId;
+  if (!companyId || !g.applicableCutoff) return;
+  supabaseClient.from('task_cutoff_review_state').upsert({
+    company_id: companyId, task_key: 'disputes_summary', cutoff_label: g.applicableCutoff,
+    data: { finalized: !!g.finalized, includedCount: (g.included||[]).length, payrollCount: (g.payroll||[]).length, thisCutoffCount: g.thisCutoffCount||0, priorOpenCount: g.priorOpenCount||0 },
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'company_id,task_key,cutoff_label' }).then(function(res) {
+    if (res.error) console.warn('Could not save Dispute Summary review state for ' + clientKey + ' / ' + g.applicableCutoff, res.error);
+  });
+}
+
+// Runs once when the task is opened fresh (first time this session, or after Reset) --
+// checks whether each sub already has a saved snapshot for its OWN currently-applicable
+// cut-off (not any older one -- a rollover means a genuinely new pull is expected) and
+// restores it, so "I already ran this cut-off" survives a reload instead of looking blank.
+async function dsRestoreFromSupabase() {
+  var restoredAny = false;
+  for (var i = 0; i < dsBatchGroups.length; i++) {
+    var g = dsBatchGroups[i];
+    if (g.status === 'done') continue;
+    var clientObj = clients[g.clientKey];
+    var companyId = clientObj && clientObj.companyId;
+    var applicableCutoff = dsApplicableCutoffKey(clientObj);
+    if (!companyId || !applicableCutoff) continue;
+    try {
+      var res = await supabaseClient.from('task_cutoff_review_state').select('*')
+        .eq('company_id', companyId).eq('task_key', 'disputes_summary').eq('cutoff_label', applicableCutoff).maybeSingle();
+      if (res.error || !res.data) continue;
+      var findings = computeDisputeFindings(g.clientKey, applicableCutoff);
+      g.applicableCutoff = applicableCutoff;
+      g.included = findings.included;
+      g.payroll = findings.payroll;
+      g.thisCutoffCount = findings.thisCutoffCount;
+      g.priorOpenCount = findings.priorOpenCount;
+      g.status = 'done';
+      g.finalized = !!(res.data.data && res.data.data.finalized);
+      restoredAny = true;
+    } catch (e) { console.warn('Could not restore Dispute Summary state for ' + g.clientKey, e); }
+  }
+  if (restoredAny) renderDsBatchList();
+}
+
 function computeDisputeFindings(clientKey, applicableCutoff) {
   var cu = window.currentUser || currentUser;
   var disputes = allDisputes.filter(function(d) {
@@ -18126,6 +18205,7 @@ function buildDisputeSummaryRunner(body) {
     + '<button class="task-run-btn green" id="ds-run-btn" onclick="runDisputeSummaryBatch()"><i class="ti ti-file-description"></i> Run</button>'
     + '<div id="ds-batch-list"></div>'
     + '<button onclick="dsResetAll()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:12px;background:none;color:#9898a6;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;margin-top:14px;"><i class="ti ti-refresh" style="font-size:12px;"></i> Reset and start over</button>';
+  dsRestoreFromSupabase();
 }
 
 // Explicit reset — clears pulled results for this task and starts a blank run
@@ -18164,6 +18244,7 @@ function runDisputeSummaryBatch() {
     g.thisCutoffCount = findings.thisCutoffCount;
     g.priorOpenCount = findings.priorOpenCount;
     g.status = 'done';
+    dsSaveCutoffSnapshot(g.clientKey, g);
   });
 
   renderDsBatchList();
@@ -18420,6 +18501,7 @@ function dsFinalizeFindings() {
     + '</div>';
   if (finalizedGi >= 0 && dsBatchGroups[finalizedGi]) {
     dsBatchGroups[finalizedGi].finalized = true;
+    dsSaveCutoffSnapshot(dsBatchGroups[finalizedGi].clientKey, dsBatchGroups[finalizedGi]);
     renderDsBatchList();
   }
   if (typeof showToast === 'function') showToast('Findings finalized \u2014 ready to generate');
@@ -18719,6 +18801,10 @@ function dsGenerateAll() {
     var filename = cutoffLabel.replace(/[^a-zA-Z0-9]/g,'_') + '_All_Disputes.xlsx';
     dsDownloadArrayBuffer(arrBuf, filename);
     if (typeof showToast === 'function') showToast('Downloaded: ' + filename);
+    // Generating the report IS the real completion signal for this task -- without this,
+    // pulling/finalizing/downloading never touched task_runs/task_run_history at all, so
+    // reopening later (or Processing History) always showed "Not run" despite a real run.
+    if (typeof finalizeBatchTaskIfApplicable === 'function') finalizeBatchTaskIfApplicable('disputes_summary', 'done', '');
   }).catch(function(err) {
     console.error('Dispute report build error:', err);
     if (typeof showToast === 'function') showToast('Error building report: ' + (err.message || err), '#e67e00');
@@ -18767,6 +18853,7 @@ function dsExportXLSX() {
     var filename = (clientKey ? clientKey + '_' : '') + cutoff.replace(/[^a-zA-Z0-9]/g,'_') + '_Reports.xlsx';
     dsDownloadArrayBuffer(arrBuf, filename);
     if (typeof showToast === 'function') showToast('Downloaded: ' + filename);
+    if (typeof finalizeBatchTaskIfApplicable === 'function') finalizeBatchTaskIfApplicable('disputes_summary', 'done', '');
   }).catch(function(err) {
     console.error('Dispute report build error:', err);
     if (typeof showToast === 'function') showToast('Error building report: ' + (err.message || err), '#e67e00');
