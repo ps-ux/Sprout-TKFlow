@@ -17968,19 +17968,45 @@ function dtmPiPayoutOptions() {
 // Period + Type (dispute code) + Date. Only called when the line hasn't been manually
 // edited (l._remarksAuto !== false) -- dtmUpdatePiLine/dsUpdatePiLine flip that flag off the
 // moment someone types into Remarks directly, so this never clobbers a manual edit again.
-function dtmPiLineRemarkTemplate(l) {
-  var type = l.code || '—';
-  var date = l.date || '—';
-  if (l.attendancePeriod === 'current') {
+// Effective Payout Inclusion / Attendance Period for a PI line -- falls back through:
+// this line's own value -> the ticket's old ticket-level value (from before Payroll
+// Instructions went per-line, still written at ticket-creation time, just no longer
+// user-editable) -> the ticket's own Included-in-Cut-off -> a live "what's applicable
+// right now" guess. Read-only -- never writes back into l.piPayout/l.attendancePeriod,
+// so an untouched line still persists as blank until someone actually picks a value.
+// This is what makes old, pre-per-line tickets' PI lines show their real original cut-off
+// again instead of blank, and what pre-fills a brand-new line the same way the old
+// ticket-level field used to.
+function dtmPiLineEffectivePayout(d, l) {
+  if (l.piPayout) return l.piPayout;
+  if (d.piPayout) return d.piPayout;
+  if (d.cutoff) return d.cutoff;
+  var clientObj = clients[d.client];
+  return (clientObj && typeof ticketApplicableCutoffKey === 'function') ? (ticketApplicableCutoffKey(clientObj) || '') : '';
+}
+function dtmPiLineEffectivePeriod(d, l) {
+  if (l.attendancePeriod) return l.attendancePeriod;
+  if (d.attendancePeriod) return d.attendancePeriod;
+  var payout = dtmPiLineEffectivePayout(d, l);
+  var clientObj = clients[d.client];
+  var realCurrent = (clientObj && typeof ticketApplicableCutoffKey === 'function') ? ticketApplicableCutoffKey(clientObj) : '';
+  return (payout && payout === realCurrent) ? 'current' : 'previous';
+}
+
+// Takes the ticket (d) too now, so it can resolve Attendance Period through the same
+// ticket-level fallback dtmPiLineEffectivePeriod uses -- a pre-existing line with no
+// per-line Attendance Period of its own still gets the right Remarks branch.
+function dtmPiLineRemarkTemplate(d, l) {
+  var type = l.code || '\u2014';
+  var date = l.date || '\u2014';
+  var period = dtmPiLineEffectivePeriod(d, l);
+  if (period === 'current') {
     if (l.code === 'Absent') return 'Kindly treat ' + date + ' as Present.';
     return 'Kindly credit the ' + type + ' premium for ' + date + '.';
   }
   return 'Payroll deduction due to ' + type + ' on ' + date + '. Requesting for necessary addback on basic and allowances (if applicable).';
 }
 
-// Returns the structured payroll-instruction lines for a dispute.
-// Prefers d.piLines (array of {code, number, addDed, remarks}); falls back
-// to legacy single d.amount string (old records) as a single unlabeled line.
 function getPiLines(d) {
   if (Array.isArray(d.piLines) && d.piLines.length) return d.piLines;
   if (d.amount) {
@@ -18006,7 +18032,7 @@ function dsUpdatePiLine(ticketId, lineIdx, field, value) {
   if (field === 'remarks') {
     l._remarksAuto = false;
   } else if (DTM_PI_TEMPLATE_FIELDS.indexOf(field) >= 0 && l._remarksAuto !== false) {
-    l.remarks = dtmPiLineRemarkTemplate(l);
+    l.remarks = dtmPiLineRemarkTemplate(d, l);
   }
   if (field === 'code' || field === 'number') {
     var rowId = ticketId.replace(/[^a-zA-Z0-9]/g, '') + '_' + lineIdx;
@@ -18038,7 +18064,7 @@ function computeDisputeFindings(clientKey, applicableCutoff) {
   // the ticket itself staying open until every line is resolved. Falls back to the ticket's
   // own Cut-off (d.cutoff) for any line that predates this per-line field.
   function ticketHasLineForCutoff(d) {
-    return getPiLines(d).some(function(l) { return (l.piPayout || d.cutoff) === applicableCutoff; });
+    return getPiLines(d).some(function(l) { return dtmPiLineEffectivePayout(d, l) === applicableCutoff; });
   }
   // Also surface any ticket with a line explicitly tagged for this payout, even if it
   // originated in an earlier cutoff and is already closed — so it isn't orphaned from the summary.
@@ -18255,7 +18281,9 @@ function renderDsResult(g) {
       if (!Array.isArray(d.piLines)) d.piLines = getPiLines(d);
       var dsDateOptions = dtmPiLineDateOptions(d);
       d.piLines.forEach(function(l, li) {
-        if ((l.piPayout || d.cutoff) !== g.applicableCutoff) return;
+        var effPayout = dtmPiLineEffectivePayout(d, l);
+        var effPeriod = dtmPiLineEffectivePeriod(d, l);
+        if (effPayout !== g.applicableCutoff) return;
         var isAdd = (l.addDed || 'Addition') !== 'Deduction';
         var remarkVal = (l.remarks || '').toString().replace(/"/g, '&quot;');
         var rowId = d.id.replace(/[^a-zA-Z0-9]/g, '') + '_' + li;
@@ -18265,11 +18293,11 @@ function renderDsResult(g) {
         var dsDateOptsHtml = ['<option value="">\u2014</option>'].concat(dsDateOptions.map(function(dt) {
           return '<option value="' + dt.replace(/"/g,'&quot;') + '"' + (l.date === dt ? ' selected' : '') + '>' + dt + '</option>';
         })).join('');
-        var dsHasPayoutMatch = dsPayoutOptions.some(function(o){ return o.value === l.piPayout; });
+        var dsHasPayoutMatch = dsPayoutOptions.some(function(o){ return o.value === effPayout; });
         var dsPayoutOptsHtml = ['<option value="">\u2014</option>']
-          .concat(!dsHasPayoutMatch && l.piPayout ? ['<option value="' + l.piPayout.replace(/"/g,'&quot;') + '" selected>' + dtmShortPayoutLabel(l.piPayout) + '</option>'] : [])
+          .concat(!dsHasPayoutMatch && effPayout ? ['<option value="' + effPayout.replace(/"/g,'&quot;') + '" selected>' + dtmShortPayoutLabel(effPayout) + '</option>'] : [])
           .concat(dsPayoutOptions.map(function(o) {
-            return '<option value="' + o.value.replace(/"/g,'&quot;') + '"' + (o.value === l.piPayout ? ' selected' : '') + '>' + o.label + '</option>';
+            return '<option value="' + o.value.replace(/"/g,'&quot;') + '"' + (o.value === effPayout ? ' selected' : '') + '>' + o.label + '</option>';
           })).join('');
         payrollRows += '<tr>'
           + td(d.id, 'font-weight:600;color:#32CE13;white-space:nowrap;')
@@ -18280,8 +18308,8 @@ function renderDsResult(g) {
           + '</td>'
           + '<td style="padding:4px 6px;border-bottom:1px solid #EBEBEF;">'
           + '<select onchange="dsUpdatePiLine(\'' + d.id + '\',' + li + ',\'attendancePeriod\',this.value)" style="width:100%;min-width:90px;border:1px solid #EBEBEF;border-radius:6px;background:#fff;padding:4px 6px;font-size:11px;font-family:Rubik,sans-serif;">'
-          + '<option value="previous"' + (l.attendancePeriod !== 'current' ? ' selected' : '') + '>Previous</option>'
-          + '<option value="current"' + (l.attendancePeriod === 'current' ? ' selected' : '') + '>Current</option>'
+          + '<option value="previous"' + (effPeriod !== 'current' ? ' selected' : '') + '>Previous</option>'
+          + '<option value="current"' + (effPeriod === 'current' ? ' selected' : '') + '>Current</option>'
           + '</select>'
           + '</td>'
           + '<td style="padding:4px 6px;border-bottom:1px solid #EBEBEF;">'
@@ -18488,11 +18516,11 @@ function dsFillDisputesTemplateSheet(baseSheetXml, prevRows, currRows) {
 function dsPiRowsForTicket(d, useEdited, applicableCutoff) {
   var lines = Array.isArray(d.piLines) ? d.piLines : getPiLines(d);
   if (applicableCutoff != null) {
-    lines = lines.filter(function(l) { return (l.piPayout || d.cutoff) === applicableCutoff; });
+    lines = lines.filter(function(l) { return dtmPiLineEffectivePayout(d, l) === applicableCutoff; });
   }
   return lines.map(function(l) {
     var remarks = (useEdited && l.remarks) ? l.remarks : (d.recommendedResolution || d.otherRemarks || l.remarks || '');
-    return { id: d.id||'', empNo: d.empNo||'', name: d.name||'', detail: l.code||d.nature||'', number: l.number, unit: codeUnit(l.code, l.number), kind: l.addDed||'Addition', remarks: remarks, isCurrent: l.attendancePeriod === 'current', date: l.date||'' };
+    return { id: d.id||'', empNo: d.empNo||'', name: d.name||'', detail: l.code||d.nature||'', number: l.number, unit: codeUnit(l.code, l.number), kind: l.addDed||'Addition', remarks: remarks, isCurrent: dtmPiLineEffectivePeriod(d, l) === 'current', date: l.date||'' };
   });
 }
 
@@ -24199,6 +24227,30 @@ function dtmSelectWithOtherHtml(label, fieldKey, currentValue, presetOptions, ot
     + '</div>';
 }
 
+// TAT badge, status badge, status buttons -- the parts of the ticket modal that a plain status
+// change actually needs to refresh. Extracted out of openDisputeTicket so dtmUpdateStatus can
+// call just this instead of the full re-render, which was resetting whichever accordion section
+// the user had open/closed back to its auto-computed default on every status change.
+function dtmRefreshStatusBadges(d) {
+  var tb = document.getElementById('dtm-tat-badge');
+  if (tb) {
+    tb.textContent = d.tatLabel;
+    tb.style.cssText = 'font-size:11px;font-weight:500;padding:3px 10px;border-radius:20px;background:' + dtmTatBgs[d.tat] + ';color:' + dtmTatColors[d.tat] + ';border:1px solid ' + dtmTatColors[d.tat] + '40;';
+  }
+  var sb = document.getElementById('dtm-status-badge');
+  if (sb) {
+    sb.textContent = d.statusLabel;
+    sb.style.cssText = 'font-size:11px;font-weight:500;padding:3px 10px;border-radius:20px;background:' + dtmStBgs[d.status] + ';color:' + dtmStColors[d.status] + ';border:1px solid ' + dtmStColors[d.status] + '40;';
+  }
+  document.querySelectorAll('.dtm-st-btn').forEach(function(btn) {
+    var active = btn.getAttribute('data-status') === d.status;
+    btn.style.background  = active ? dtmStBgs[d.status]    : 'var(--bg-card,#fff)';
+    btn.style.color       = active ? dtmStColors[d.status]  : 'var(--text-secondary,#6b6b80)';
+    btn.style.borderColor = active ? dtmStColors[d.status]  : 'var(--border,#EBEBEF)';
+    btn.style.fontWeight  = active ? '600' : '500';
+  });
+}
+
 function openDisputeTicket(id, clientContext) {
   var d = allDisputes.find(function(x) { return x.id === id; });
   if (!d) return;
@@ -24209,13 +24261,7 @@ function openDisputeTicket(id, clientContext) {
   // rather than the internal placeholder id, which would look like a broken/garbage number.
   document.getElementById('dtm-id').textContent = d._isDraft ? 'Draft — not yet saved' : d.id;
 
-  var tb = document.getElementById('dtm-tat-badge');
-  tb.textContent = d.tatLabel;
-  tb.style.cssText = 'font-size:11px;font-weight:500;padding:3px 10px;border-radius:20px;background:' + dtmTatBgs[d.tat] + ';color:' + dtmTatColors[d.tat] + ';border:1px solid ' + dtmTatColors[d.tat] + '40;';
-
-  var sb = document.getElementById('dtm-status-badge');
-  sb.textContent = d.statusLabel;
-  sb.style.cssText = 'font-size:11px;font-weight:500;padding:3px 10px;border-radius:20px;background:' + dtmStBgs[d.status] + ';color:' + dtmStColors[d.status] + ';border:1px solid ' + dtmStColors[d.status] + '40;';
+  dtmRefreshStatusBadges(d);
 
   // Ensure piLines exists (migrates legacy single-amount records) so the PI editor below has something to render
   if (!Array.isArray(d.piLines)) d.piLines = getPiLines(d);
@@ -24337,15 +24383,6 @@ function openDisputeTicket(id, clientContext) {
   if (piSection) piSection.open = hasPi;
   var infoSection = document.getElementById('dtm-section-info');
   if (infoSection) infoSection.open = !(hasFindings || hasPi);
-
-  // Status buttons
-  document.querySelectorAll('.dtm-st-btn').forEach(function(btn) {
-    var active = btn.getAttribute('data-status') === d.status;
-    btn.style.background  = active ? dtmStBgs[d.status]    : 'var(--bg-card,#fff)';
-    btn.style.color       = active ? dtmStColors[d.status]  : 'var(--text-secondary,#6b6b80)';
-    btn.style.borderColor = active ? dtmStColors[d.status]  : 'var(--border,#EBEBEF)';
-    btn.style.fontWeight  = active ? '600' : '500';
-  });
 
   // Reset paste-extract popup -- closed every time the modal opens
   var pasteArea = document.getElementById('dtm-paste-area');
@@ -24729,18 +24766,20 @@ function dtmRenderPiLines(d) {
     var dateOptsHtml = ['<option value="">\u2014</option>'].concat(dateOptions.map(function(dt) {
       return '<option value="' + dt.replace(/"/g,'&quot;') + '"' + (l.date === dt ? ' selected' : '') + '>' + dt + '</option>';
     })).join('');
-    var hasPayoutMatch = payoutOptions.some(function(o){ return o.value === l.piPayout; });
+    var effPayout = dtmPiLineEffectivePayout(d, l);
+    var effPeriod = dtmPiLineEffectivePeriod(d, l);
+    var hasPayoutMatch = payoutOptions.some(function(o){ return o.value === effPayout; });
     var payoutOptsHtml = ['<option value="">\u2014</option>']
-      .concat(!hasPayoutMatch && l.piPayout ? ['<option value="' + l.piPayout.replace(/"/g,'&quot;') + '" selected>' + dtmShortPayoutLabel(l.piPayout) + '</option>'] : [])
+      .concat(!hasPayoutMatch && effPayout ? ['<option value="' + effPayout.replace(/"/g,'&quot;') + '" selected>' + dtmShortPayoutLabel(effPayout) + '</option>'] : [])
       .concat(payoutOptions.map(function(o) {
-        return '<option value="' + o.value.replace(/"/g,'&quot;') + '"' + (o.value === l.piPayout ? ' selected' : '') + '>' + o.label + '</option>';
+        return '<option value="' + o.value.replace(/"/g,'&quot;') + '"' + (o.value === effPayout ? ' selected' : '') + '>' + o.label + '</option>';
       })).join('');
     return '<div style="border:1px solid var(--border,#EBEBEF);border-radius:10px;padding:8px;margin-bottom:8px;">'
       + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:6px;align-items:center;margin-bottom:6px;">'
       + '<select onchange="dtmUpdatePiLine(' + i + ',\'piPayout\',this.value)" title="Payout Inclusion" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;background:#fff;color:var(--text-primary);">' + payoutOptsHtml + '</select>'
       + '<select onchange="dtmUpdatePiLine(' + i + ',\'attendancePeriod\',this.value)" title="Attendance Period" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;background:#fff;color:var(--text-primary);">'
-      + '<option value="previous"' + (l.attendancePeriod !== 'current' ? ' selected' : '') + '>Previous</option>'
-      + '<option value="current"' + (l.attendancePeriod === 'current' ? ' selected' : '') + '>Current</option>'
+      + '<option value="previous"' + (effPeriod !== 'current' ? ' selected' : '') + '>Previous</option>'
+      + '<option value="current"' + (effPeriod === 'current' ? ' selected' : '') + '>Current</option>'
       + '</select>'
       + '<select onchange="dtmUpdatePiLine(' + i + ',\'date\',this.value)" title="Date of Dispute" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;background:#fff;color:var(--text-primary);">' + dateOptsHtml + '</select>'
       + '<div onclick="dtmRemovePiLine(' + i + ')" style="cursor:pointer;color:#c0392b;font-size:16px;padding:2px 6px;" title="Remove line">&times;</div>'
@@ -24763,15 +24802,12 @@ function dtmAddPiLine() {
   var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
   if (!d) return;
   if (!Array.isArray(d.piLines)) d.piLines = [];
-  // Seed Payout Inclusion/Attendance Period from the same "what's applicable right now"
-  // logic the old ticket-level fields used to auto-default from, and Date from the ticket's
-  // first entered dispute date -- all still fully editable per line afterward.
-  var clientObj = clients[d.client];
-  var realCurrent = (clientObj && typeof ticketApplicableCutoffKey === 'function') ? ticketApplicableCutoffKey(clientObj) : '';
-  var payoutDefault = d.cutoff || realCurrent || '';
-  var periodDefault = (payoutDefault && payoutDefault === realCurrent) ? 'current' : 'previous';
-  var line = { code: '', number: '', addDed: 'Addition', remarks: '', date: dtmPiLineDateOptions(d)[0] || '', piPayout: payoutDefault, attendancePeriod: periodDefault, _remarksAuto: true };
-  line.remarks = dtmPiLineRemarkTemplate(line);
+  // Left blank -- dtmPiLineEffectivePayout/dtmPiLineEffectivePeriod resolve a display default
+  // (ticket's old Payout Inclusion/Attendance Period -> Included-in-Cut-off -> live "what's
+  // applicable now") without writing anything until the user actually picks a value, same
+  // fallback used for showing a pre-existing line's original cut-off again.
+  var line = { code: '', number: '', addDed: 'Addition', remarks: '', date: dtmPiLineDateOptions(d)[0] || '', piPayout: '', attendancePeriod: '', _remarksAuto: true };
+  line.remarks = dtmPiLineRemarkTemplate(d, line);
   d.piLines.push(line);
   dtmRenderPiLines(d);
   dtmSyncPiLines(dtmCurrentId);
@@ -24790,7 +24826,7 @@ function dtmUpdatePiLine(idx, field, value, skipRerender) {
   if (field === 'remarks') {
     l._remarksAuto = false;
   } else if (DTM_PI_TEMPLATE_FIELDS.indexOf(field) >= 0 && l._remarksAuto !== false) {
-    l.remarks = dtmPiLineRemarkTemplate(l);
+    l.remarks = dtmPiLineRemarkTemplate(d, l);
   }
   if (skipRerender) {
     // Avoid rebuilding the whole list (would drop input focus mid-keystroke) —
@@ -24847,7 +24883,12 @@ function dtmUpdateStatus(newStatus) {
     note: 'Status: ' + oldLabel + ' \u2192 ' + d.statusLabel,
     type: 'status'
   });
-  openDisputeTicket(dtmCurrentId);
+  // Was a full openDisputeTicket() re-render -- refreshed the badge/log fine, but also reset
+  // whichever accordion section (Ticket Info/Findings/Payroll Instructions) the user had open
+  // back to its auto-computed default every time, even though nothing about the section
+  // contents actually changed. Only the badge/buttons and the log itself need to update here.
+  dtmRefreshStatusBadges(d);
+  dtmRenderLog(dtmCurrentId);
   if (typeof renderDisputes === 'function') renderDisputes('all');
 }
 
