@@ -18271,7 +18271,7 @@ function renderDsResult(g) {
         + td(d.recommendedResolution, 'font-size:11px;')
         + '<td style="padding:6px 10px;border-bottom:1px solid #EBEBEF;">'
         + '<span style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:20px;background:' + stBg(d.status) + ';color:' + stColor(d.status) + ';">' + (d.statusLabel || '') + '</span></td>'
-        + td(d.payoutCutoff || d.cutoff, 'font-size:11px;color:#9898a6;')
+        + td(d.cutoff || d.payoutCutoff, 'font-size:11px;color:#9898a6;')
         + td(d.amount || '\u2014', 'font-weight:500;color:#e67e00;')
         + td(d.updateOpen, 'font-size:11px;')
         + td(d.otherRemarks, 'font-size:11px;color:#9898a6;')
@@ -22921,7 +22921,7 @@ function lcvFindManualVLTickets(subKey) {
       id: d.id || '', dateSubmitted: d.dateSubmitted || '', empNo: d.empNo || '', name: d.name || '',
       nature: d.nature || '', details: d.fullDetails || '', dateAction: d.dateAction || '',
       actionMade: d.findings || '', recommendedResolution: d.recommendedResolution || '',
-      payoutCutoff: d.payoutCutoff || d.cutoff || '', rawAmount: d.amount || '',
+      payoutCutoff: d.cutoff || d.payoutCutoff || '', rawAmount: d.amount || '',
       disputeDates: d.disputeDates || '', coveredDates: lcvParseDateList(d.disputeDates || ''),
       suggestedDays: lcvParseVLDaysSuggestion(d.amount), confirmedDays: null, confirmed: false,
     };
@@ -25551,7 +25551,7 @@ function dtmRenderSummary(filterClient, filterStatus, lockGroupKeys) {
       + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);max-width:220px;white-space:normal;">' + (d.findings || '\u2014') + '</td>'
       + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);max-width:220px;white-space:normal;">' + (d.recommendedResolution || '\u2014') + '</td>'
       + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);white-space:nowrap;"><span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:20px;background:' + dtmStBgs[d.status] + ';color:' + dtmStColors[d.status] + ';">' + d.statusLabel + '</span></td>'
-      + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);white-space:nowrap;">' + (d.payoutCutoff || d.cutoff || '\u2014') + '</td>'
+      + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);white-space:nowrap;">' + (d.cutoff || d.payoutCutoff || '\u2014') + '</td>'
       + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);white-space:nowrap;">' + (d.amount || '\u2014') + '</td>'
       + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);max-width:200px;white-space:normal;">' + (d.updateOpen || '\u2014') + '</td>'
       + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);max-width:200px;white-space:normal;">' + (d.otherRemarks || '\u2014') + '</td>'
@@ -25591,7 +25591,7 @@ function dtmExport() {
       'Date/s of Dispute': d.disputeDates || '', 'Full Details': d.fullDetails || '',
       'Date of Action': d.dateAction || '', 'Findings': d.findings || '',
       'Recommended Resolution': d.recommendedResolution || '', 'Ticket Status': d.statusLabel,
-      'Payout Cut-Off Inclusion': d.payoutCutoff || d.cutoff || '',
+      'Payout Cut-Off Inclusion': d.cutoff || d.payoutCutoff || '',
       'Amount': d.amount || '', 'Update for Open Tickets': d.updateOpen || '',
       'Other Remarks': d.otherRemarks || ''
     };
