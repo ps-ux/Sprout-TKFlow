@@ -18516,10 +18516,21 @@ function renderDsResult(g) {
     + '<tbody>' + payrollRows + '</tbody>'
     + '</table></div></div>'
 
-    // Finalize gate — Generate/Download only appears after finalizing
+    // Finalize gate — Generate/Download only appears after finalizing. Respects g.finalized
+    // (not just a fresh unfinalized default) -- this whole view gets rebuilt by dsSwitchGroup
+    // and by dsUpdatePiLine (editing a line's Payout Inclusion/Attendance Period/Date/Type),
+    // and rendering the plain "Finalize findings" button unconditionally here reset an
+    // already-finalized subcompany back to looking unfinalized every time, even though
+    // g.finalized itself was never actually cleared -- exactly what looked like the button
+    // "not sticking".
     + '<div id="ds-finalize-zone">'
-    + '<button class="task-run-btn" onclick="dsFinalizeFindings()">'
-    + '<i class="ti ti-checkbox"></i> Finalize findings</button>'
+    + (g.finalized
+        ? '<div style="display:flex;align-items:center;gap:8px;">'
+          + '<span style="font-size:12px;font-weight:600;color:var(--kk-700);background:var(--kk-100);padding:6px 12px;border-radius:12px;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-circle-check"></i> Findings finalized</span>'
+          + '<button class="task-run-btn green" style="flex:1;" onclick="dsExportXLSX()"><i class="ti ti-file-description"></i> Generate dispute reports</button>'
+          + '</div>'
+        : '<button class="task-run-btn" onclick="dsFinalizeFindings()">'
+          + '<i class="ti ti-checkbox"></i> Finalize findings</button>')
     + '</div>';
 
   // Stash the computed sets so finalize/export use exactly what was reviewed, not a re-query
