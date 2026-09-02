@@ -10856,12 +10856,13 @@ function _emailSave() {
 
 function _emailRestore() {
   var k = _emailStoreKey();
-  // No saved state yet for this workspace means this is the first time the Email Generator
-  // has been opened here this session (a saved state only ever appears after Generate calls
-  // _emailSave) -- that's exactly when live prefill defaults are wanted; once a real
-  // (possibly hand-edited) value has been saved, restore that instead of recomputing fresh.
-  var isFirstOpenThisSession = !_emailStore[k];
   var s = _emailStore[k] || {};
+  // Checking "has _emailStore[k] ever been set" isn't enough -- openWorkspace() calls
+  // _emailSave() on every client switch to cache whatever's currently in the fields, including
+  // switches between subcompanies in the same group that happen before the Email tab was ever
+  // opened, which silently created a blank cache entry and made prefill think it had already
+  // run. Check whether anything meaningful was actually saved instead.
+  var isFirstOpenThisSession = !(s.poc || s.greeting || s.cutoff || s.coverage || s.followup || s.body);
   var fields = ['poc','greeting','cutoff','coverage','followup'];
   fields.forEach(function(f) {
     var el = document.getElementById('email-' + f);
