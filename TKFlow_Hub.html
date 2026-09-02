@@ -13313,11 +13313,13 @@ function renderTKReview() {
                              .sort(function(a,b){ return bioClockMins(a.logTime)-bioClockMins(b.logTime); });
           var outs = entries.filter(function(b){ return (b.mode||'').toLowerCase()==='out'; })
                              .sort(function(a,b){ return bioClockMins(a.logTime)-bioClockMins(b.logTime); });
-          // Just the earliest IN and latest OUT for the day -- a "+N more IN/OUT" indicator
-          // here wasn't clickable/expandable, so with 3+ punches on either side there was no
-          // way to actually see them; the earliest/latest pair is what actually matters for
-          // attendance anyway (intermediate punches, e.g. a lunch break, aren't relevant here).
-          var shownIns  = ins.length ? [ins[0]] : [];
+          // Earliest + latest IN, and latest OUT -- a "+N more IN/OUT" indicator here wasn't
+          // clickable/expandable, so with 3+ punches on either side there was no way to
+          // actually see them. Originally just earliest IN + latest OUT; per user request,
+          // latest IN is shown too now (when it differs from earliest) since which of several
+          // IN taps was the real one matters when reviewing a suspicious day -- latest OUT
+          // alone was already enough on the OUT side, so that stays a single value.
+          var shownIns  = ins.length ? (ins.length > 1 ? [ins[0], ins[ins.length - 1]] : [ins[0]]) : [];
           var shownOuts = outs.length ? [outs[outs.length - 1]] : [];
 
           // Certificate of Attendance punches (Biologs sheet Notes column) are tagged inline
@@ -13328,7 +13330,10 @@ function renderTKReview() {
             return (b.logTime||'').replace(/\d{4}/,'').replace(/\s+/g,' ').trim() + (b.isCOA ? ' -COA' : '');
           }
           var lines = [];
-          shownIns.forEach(function(b){ lines.push('<div style="color:var(--text-secondary);">IN &nbsp;' + fmtEntry(b) + '</div>'); });
+          shownIns.forEach(function(b, bi) {
+            var tag = shownIns.length > 1 ? (bi === 0 ? 'IN (Earliest)' : 'IN (Latest)&nbsp;&nbsp;') : 'IN &nbsp;';
+            lines.push('<div style="color:var(--text-secondary);">' + tag + ' ' + fmtEntry(b) + '</div>');
+          });
           shownOuts.forEach(function(b){ lines.push('<div style="color:var(--text-secondary);">OUT ' + fmtEntry(b) + '</div>'); });
           var entriesHtml = lines.length ? lines.join('') : '<div style="color:var(--text-muted);font-style:italic;">no logs</div>';
 
