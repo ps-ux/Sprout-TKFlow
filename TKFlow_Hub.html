@@ -15606,7 +15606,7 @@ function runValidation(opts) {
         // above) -- without this, a Half Day Leave day with zero logs on its remaining
         // working half fell straight into isFullAbsent below as a full-day absence, when the
         // leave already excuses the OTHER half.
-        halfDayResult = { half: 'leave-no-logs', reason: 'No logs for the working half of this Half Day Leave' };
+        halfDayResult = { half: 'leave-no-logs', reason: 'No logs for the working half of this Half Day ' + (shiftU.includes('UNPAID') ? 'Unpaid Leave' : 'Leave') };
       }
 
       var isFullAbsent = isMarkedAbsentInSummary || (bioU === 'NO LOGS' && !halfDayResult);
@@ -15647,9 +15647,14 @@ function runValidation(opts) {
         // reasons; every other half-day reason (leave-no-logs, leave-short, short-total,
         // partial, full-missing) doesn't map as cleanly, so those keep the original label.
         var halfDayLabel = isHalfDayAbsent ? ({ morning: 'Late IN', afternoon: 'Early OUT' }[halfDayResult.half] || 'Half Day Absent') : '';
+        // A day whose shift is explicitly tagged (Half Day) Unpaid Leave but still ends up
+        // flagged absent (no logs against a real time range, or short of required hours) used
+        // to read as a generic "No Logs" remark with zero mention of the leave itself --
+        // confirmed by the user against a real shift like "9:00AM to 5:00PM (Unpaid Leave)".
+        var unpaidLeaveNote = (isLeaveLabel && !isHalfDayAbsent && shiftU.includes('UNPAID')) ? 'Unpaid Leave \u2014 ' : '';
         var remark = isHalfDayAbsent
           ? halfDayLabel + ' \u2014 ' + halfDayResult.reason + (hasApp ? '; Has ' + appType : '; No Pending Application')
-          : tkAppendCoaMismatchNote(deriveRemark(biologs, dayBios, hasApp, appType), dayBios, shift);
+          : unpaidLeaveNote + tkAppendCoaMismatchNote(deriveRemark(biologs, dayBios, hasApp, appType), dayBios, shift);
 
         // Get matched applications for this date
         var matchedApps = (appsByEmp[_curKey]||[]).filter(function(a){
@@ -18129,6 +18134,9 @@ function dtmPiLineRemarkTemplate(d, l) {
   // already-processed payroll (Previous), so both periods share the same "credit premium"
   // wording for those; only Absent/Undertime differ by period below.
   if (l.code !== 'Absent' && l.code !== 'Undertime') {
+    // A premium-type line can itself be marked Deduction (e.g. a premium was credited in
+    // error and needs to be reversed) -- "credit" wording would read backwards for that case.
+    if ((l.addDed || 'Addition') === 'Deduction') return 'Kindly deduct the ' + type + ' premium for ' + date + '.';
     return 'Kindly credit the ' + type + ' premium for ' + date + '.';
   }
   if (period === 'current') {
@@ -18174,7 +18182,9 @@ function dsUpdatePiLine(ticketId, lineIdx, field, value) {
   // out of this report entirely, if Payout Inclusion no longer matches this batch's applicable
   // cut-off) or regenerate its auto Remarks -- re-render the whole result so what's shown here
   // always matches what would actually be generated, rather than patching just this one cell.
-  if (['piPayout', 'attendancePeriod', 'date', 'code'].indexOf(field) >= 0) {
+  // addDed included too -- toggling Addition/Deduction on a premium line flips its auto Remarks
+  // wording (credit vs deduct), and without a re-render the visible textbox kept the old text.
+  if (['piPayout', 'attendancePeriod', 'date', 'code', 'addDed'].indexOf(field) >= 0) {
     var g = dsBatchGroups[dsActiveGroupIdx];
     if (g) renderDsResult(g);
   }
@@ -25119,7 +25129,7 @@ function dtmRenderPiLines(d) {
       + '<select onchange="dtmUpdatePiLine(' + i + ',\'code\',this.value)" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;background:#fff;color:var(--text-primary);">' + codeOptions + '</select>'
       + '<input type="number" step="any" value="' + (l.number != null ? l.number : '') + '" oninput="dtmUpdatePiLine(' + i + ',\'number\',this.value,true)" placeholder="Number" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;">'
       + '<div id="dtm-pi-unit-' + i + '" style="font-size:11px;color:var(--text-muted);padding:6px 4px;">' + unit + '</div>'
-      + '<select onchange="dtmUpdatePiLine(' + i + ',\'addDed\',this.value,true)" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;background:#fff;">'
+      + '<select onchange="dtmUpdatePiLine(' + i + ',\'addDed\',this.value)" style="padding:6px 8px;border:1px solid var(--border,#EBEBEF);border-radius:7px;font-size:11px;font-family:Rubik,sans-serif;background:#fff;">'
       + '<option value="Addition"' + (l.addDed !== 'Deduction' ? ' selected' : '') + '>Addition</option>'
       + '<option value="Deduction"' + (l.addDed === 'Deduction' ? ' selected' : '') + '>Deduction</option>'
       + '</select>'
@@ -25148,8 +25158,9 @@ function dtmAddPiLine() {
 
 // Fields that feed the Remarks template -- changing any of these regenerates Remarks, unless
 // the line's Remarks have already been manually edited (_remarksAuto flipped false the moment
-// someone types into that field directly, see below).
-var DTM_PI_TEMPLATE_FIELDS = ['code', 'date', 'attendancePeriod'];
+// someone types into that field directly, see below). addDed included so switching a premium
+// line to Deduction flips its wording from "credit" to "deduct" (dtmPiLineRemarkTemplate).
+var DTM_PI_TEMPLATE_FIELDS = ['code', 'date', 'attendancePeriod', 'addDed'];
 
 function dtmUpdatePiLine(idx, field, value, skipRerender) {
   var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
