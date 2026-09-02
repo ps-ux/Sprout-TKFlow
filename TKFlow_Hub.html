@@ -13497,7 +13497,7 @@ function tkBuildManualRemark(detRow, dayBios, hasApp, appType, forceFlag) {
   var bioU = biologs.toUpperCase();
   if (bioU === 'NO LOGS' || bioU === '') {
     var appSuffixCap = hasApp ? 'Has ' + appType : 'No Pending Application';
-    if (forceFlag === 'half') return { remark: 'Half Day Absent — manually flagged; ' + appSuffixCap, isHalfDay: true };
+    if (forceFlag === 'half') return { remark: 'Half Day Absent; ' + appSuffixCap, isHalfDay: true };
     // Cross-check the separate Biologs-file entries the same way the automatic scan's
     // deriveRemark already does, instead of a flat "No Logs" -- this used to say plain
     // "No Logs" even when the Biologs tab actually had a one-sided IN/OUT punch for the day,
@@ -13523,7 +13523,7 @@ function tkBuildManualRemark(detRow, dayBios, hasApp, appType, forceFlag) {
   if (forceFlag === 'half') {
     // User overrode to Half Day even though auto-detection didn't independently find a
     // half-day condition -- still honor the manual choice, just without a detected reason.
-    return { remark: 'Half Day Absent — manually flagged' + (hasApp ? '; Has ' + appType : '; No Pending Application'), isHalfDay: true };
+    return { remark: 'Half Day Absent' + (hasApp ? '; Has ' + appType : '; No Pending Application'), isHalfDay: true };
   }
   if (typeof window._tkDeriveRemark === 'function') {
     return { remark: window._tkDeriveRemark(biologs, dayBios || [], hasApp, appType, detRow.shift || ''), isHalfDay: false };
@@ -14141,7 +14141,7 @@ function tkDownloadOutput() {
   }
   var useLegacyFormat = !!window.tkLegacyFormat;
   var legacySummaryByEmp = {}; // { empId: {dates:[], remarks:[]} } — Absent/Half Day Absent only
-  var vdRows = [['Employee ID','Name','Date','Type','No.','Shift','Biologs','Total Hours','Remarks']];
+  var vdRows = [['Employee ID','Name','Type','No.','Date','Shift','Biologs','Total Hours','Remarks']];
   tkReviewRows.forEach(function(r) {
     if (!r.checked) return;
     (r.evidence || []).forEach(function(ev) {
@@ -14162,7 +14162,7 @@ function tkDownloadOutput() {
         }
       }
       var dateDisplay = ev.dateObj ? fmtDDMMM(ev.dateObj) : (ev.date||'');
-      vdRows.push([r.id||'', r.name||'', dateDisplay, type, num, ev.shift||'', ev.biologs||'', ev.totalHrs||'', remark]);
+      vdRows.push([r.id||'', r.name||'', type, num, dateDisplay, ev.shift||'', ev.biologs||'', ev.totalHrs||'', remark]);
     });
   });
 
@@ -14228,9 +14228,9 @@ function tkDownloadOutput() {
           vdWs['!cols'] = [
             {wch:12}, // Employee ID
             {wch:24}, // Name
-            {wch:10}, // Date
             {wch:16}, // Type
-            {wch:14}, // Minutes
+            {wch:14}, // No.
+            {wch:10}, // Date
             {wch:24}, // Shift
             {wch:22}, // Biologs
             {wch:11}, // Total Hours
@@ -14267,11 +14267,11 @@ function tkDownloadOutput() {
                   vdSheetXml = setStyle(vdSheetXml, idxToCol(c0)+'1', boldXfId);
                 }
                 for (var r = 1; r < vdRows.length; r++) {
-                  var type = vdRows[r][3];
+                  var type = vdRows[r][2];
                   var styleId = type === 'Absent' || type === 'Half Day Absent' ? yellowXfId
                               : (type === 'Late' || type === 'Undertime' || type === 'Late + Undertime' ? greenXfId : null);
                   if (styleId === null) continue;
-                  vdSheetXml = setStyle(vdSheetXml, idxToCol(3)+(r+1), styleId); // Type column only
+                  vdSheetXml = setStyle(vdSheetXml, idxToCol(2)+(r+1), styleId); // Type column only
                 }
                 vdZip.file('xl/worksheets/sheet1.xml', vdSheetXml);
                 return mergeExternalSheet(baseFiles, vdZip, 'xl/worksheets/sheet1.xml', 'Validation Details', null);
@@ -18180,6 +18180,60 @@ function dsUpdatePiLine(ticketId, lineIdx, field, value) {
   }
 }
 
+// Manual overrides for what this specific report run includes — g.included/g.payroll hold
+// references into the real allDisputes/piLines data (see computeDisputeFindings), so removing
+// a ticket here only drops it from THIS batch's local arrays, it never touches the underlying
+// dispute. Re-running "Pull" recomputes from scratch and would bring a removed ticket back --
+// same recompute-on-demand semantics as the rest of this task.
+function dsRemoveTicket(ticketId) {
+  var g = dsBatchGroups[dsActiveGroupIdx];
+  if (!g) return;
+  g.included = (g.included || []).filter(function(d){ return d.id !== ticketId; });
+  g.payroll  = (g.payroll  || []).filter(function(d){ return d.id !== ticketId; });
+  renderDsResult(g);
+}
+
+function dsAddTicket() {
+  var g = dsBatchGroups[dsActiveGroupIdx];
+  if (!g) return;
+  var input = document.getElementById('ds-add-ticket-input');
+  var raw = ((input && input.value) || '').trim();
+  if (!raw) return;
+  var d = allDisputes.find(function(x){ return x.id === raw || x.id === '#' + raw; });
+  if (!d) { if (typeof showToast === 'function') showToast('Ticket ' + raw + ' not found', '#e67e00'); return; }
+  if (g.included.indexOf(d) === -1) g.included.push(d);
+  var hasLineForCutoff = getPiLines(d).some(function(l){ return dtmPiLineEffectivePayout(d, l) === g.applicableCutoff; });
+  if (hasLineForCutoff && g.payroll.indexOf(d) === -1) g.payroll.push(d);
+  if (input) input.value = '';
+  renderDsResult(g);
+}
+
+// Unlike dsRemoveTicket/dsAddTicket (local to this report run), a PI line lives on the real
+// ticket (d.piLines) -- adding/removing one here is the same underlying edit as doing it from
+// the ticket's own Payroll Instructions editor (dtmAddPiLine/dtmRemovePiLine), just reachable
+// from this batch view. dtmSyncPiLines persists it the same way either entry point does.
+function dsAddPiLine(ticketId) {
+  var g = dsBatchGroups[dsActiveGroupIdx];
+  var d = allDisputes.find(function(x){ return x.id === ticketId; });
+  if (!g || !d) return;
+  if (!Array.isArray(d.piLines)) d.piLines = [];
+  var line = { code: '', number: '', addDed: 'Addition', remarks: '', date: '', piPayout: g.applicableCutoff || '', attendancePeriod: '', _remarksAuto: true };
+  line.remarks = dtmPiLineRemarkTemplate(d, line);
+  d.piLines.push(line);
+  if (g.payroll.indexOf(d) === -1) g.payroll.push(d);
+  if (typeof dtmSyncPiLines === 'function') dtmSyncPiLines(ticketId);
+  renderDsResult(g);
+}
+
+function dsRemovePiLine(ticketId, lineIdx) {
+  var g = dsBatchGroups[dsActiveGroupIdx];
+  var d = allDisputes.find(function(x){ return x.id === ticketId; });
+  if (!g || !d || !Array.isArray(d.piLines)) return;
+  d.piLines.splice(lineIdx, 1);
+  if (typeof dtmSyncPiLines === 'function') dtmSyncPiLines(ticketId);
+  renderDsResult(g);
+}
+
 // Persists Dispute Summary's pulled/finalized state per (company, cut-off) so it survives a
 // reload and shows up in Processing History -- mirrors Variance/Validation's own
 // task_cutoff_review_state persistence. No file storage needed here (unlike Variance's
@@ -18410,7 +18464,7 @@ function renderDsResult(g) {
   // Dispute summary rows
   var summaryRows = '';
   if (!included.length) {
-    summaryRows = '<tr><td colspan="17" style="padding:16px;text-align:center;color:#9898a6;font-size:12px;">No disputes found for this cut-off and client</td></tr>';
+    summaryRows = '<tr><td colspan="18" style="padding:16px;text-align:center;color:#9898a6;font-size:12px;">No disputes found for this cut-off and client</td></tr>';
   } else {
     included.forEach(function(d) {
       summaryRows += '<tr>'
@@ -18434,6 +18488,9 @@ function renderDsResult(g) {
         + '<td style="padding:6px 10px;border-bottom:1px solid #EBEBEF;">'
         + (d.cutoff !== g.applicableCutoff ? '<span style="font-size:10px;background:#fff4e6;color:#e67e00;padding:1px 6px;border-radius:4px;">\u26A0 Prior</span>' : '')
         + '</td>'
+        + '<td style="padding:6px 10px;border-bottom:1px solid #EBEBEF;">'
+        + '<button onclick="dsRemoveTicket(\'' + d.id + '\')" title="Remove from this report" style="background:none;border:none;color:#c0392b;cursor:pointer;padding:2px;font-size:14px;"><i class="ti ti-x"></i></button>'
+        + '</td>'
         + '</tr>';
     });
   }
@@ -18445,7 +18502,7 @@ function renderDsResult(g) {
   var payrollRows = '';
   var payrollRowCount = 0;
   if (!payroll.length) {
-    payrollRows = '<tr><td colspan="11" style="padding:12px;text-align:center;color:#9898a6;font-size:12px;">No open tickets with payroll impact</td></tr>';
+    payrollRows = '<tr><td colspan="12" style="padding:12px;text-align:center;color:#9898a6;font-size:12px;">No open tickets with payroll impact</td></tr>';
   } else {
     var dsPayoutOptions = dtmPiPayoutOptions();
     payroll.forEach(function(d) {
@@ -18505,12 +18562,21 @@ function renderDsResult(g) {
           + '<input value="' + remarkVal + '" oninput="dsUpdatePiLine(\'' + d.id + '\',' + li + ',\'remarks\',this.value)" placeholder="Type remarks\u2026" '
           + 'style="width:100%;min-width:160px;border:1px solid #EBEBEF;border-radius:6px;background:#fff;padding:4px 7px;font-size:11px;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;">'
           + '</td>'
+          + '<td style="padding:4px 6px;border-bottom:1px solid #EBEBEF;">'
+          + '<button onclick="dsRemovePiLine(\'' + d.id + '\',' + li + ')" title="Remove this line" style="background:none;border:none;color:#c0392b;cursor:pointer;padding:2px;font-size:14px;"><i class="ti ti-x"></i></button>'
+          + '</td>'
           + '</tr>';
         payrollRowCount++;
       });
+      // One "+ Add line" row per ticket, right after its own matching lines -- keeps the
+      // control next to the ticket it'll actually add a line to, rather than one global
+      // control with no ticket context.
+      payrollRows += '<tr><td colspan="12" style="padding:4px 10px 8px;border-bottom:1px solid #EBEBEF;">'
+        + '<button onclick="dsAddPiLine(\'' + d.id + '\')" style="background:none;border:none;color:#32CE13;cursor:pointer;padding:2px;font-size:11px;font-weight:600;font-family:Rubik,sans-serif;"><i class="ti ti-plus" style="font-size:11px;"></i> Add line for ' + d.id + '</button>'
+        + '</td></tr>';
     });
     if (!payrollRowCount) {
-      payrollRows = '<tr><td colspan="11" style="padding:12px;text-align:center;color:#9898a6;font-size:12px;">No lines tagged for this cut-off (' + (g.applicableCutoff || '—') + ')</td></tr>';
+      payrollRows = '<tr><td colspan="12" style="padding:12px;text-align:center;color:#9898a6;font-size:12px;">No lines tagged for this cut-off (' + (g.applicableCutoff || '—') + ')</td></tr>';
     }
   }
 
@@ -18531,10 +18597,14 @@ function renderDsResult(g) {
     + th('Ticket #') + th('Employee ID') + th('Employee Name') + th('Date Filed')
     + th('Entity') + th('Nature') + th('Dispute Date/s') + th('Full Details')
     + th('Date of Action') + th('Findings') + th('Recommended Resolution')
-    + th('Status') + th('Payout Cut-off') + th('Amount') + th('Update (Open)') + th('Other Remarks') + th('')
+    + th('Status') + th('Payout Cut-off') + th('Amount') + th('Update (Open)') + th('Other Remarks') + th('') + th('')
     + '</tr></thead>'
     + '<tbody>' + summaryRows + '</tbody>'
     + '</table></div></div>'
+    + '<div style="display:flex;gap:6px;margin:-8px 0 14px;">'
+    + '<input type="text" id="ds-add-ticket-input" placeholder="Ticket # to add (e.g. #2026-092)" style="flex:1;padding:6px 10px;border:1px solid #EBEBEF;border-radius:8px;font-size:11px;font-family:Rubik,sans-serif;">'
+    + '<button onclick="dsAddTicket()" style="padding:6px 12px;background:#F4F4F8;border:1px solid #EBEBEF;border-radius:8px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-plus" style="font-size:12px;"></i> Add ticket</button>'
+    + '</div>'
 
     // Payroll instructions table
     + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
@@ -18546,11 +18616,11 @@ function renderDsResult(g) {
     + '<div style="border:1px solid #EBEBEF;border-radius:14px;overflow:hidden;margin-bottom:14px;"><div style="overflow-x:auto;">'
     + '<table style="width:100%;border-collapse:collapse;font-size:11px;">'
     + '<thead>'
-    + '<tr style="background:#32CE13;"><th colspan="11" style="padding:6px 10px;text-align:left;font-weight:600;color:#fff;letter-spacing:.5px;">DISPUTE</th></tr>'
+    + '<tr style="background:#32CE13;"><th colspan="12" style="padding:6px 10px;text-align:left;font-weight:600;color:#fff;letter-spacing:.5px;">DISPUTE</th></tr>'
     + '<tr style="background:#F4F4F8;">'
     + th('Dispute Ticket#') + th('Employee No.') + th('Full Name')
     + th('Payout Inclusion') + th('Attendance Period') + th('Date')
-    + th('Dispute Details') + th('Number') + th('Unit (Days/Hrs/Mins)') + th('Addition/Deduction') + th('Remarks')
+    + th('Dispute Details') + th('Number') + th('Unit (Days/Hrs/Mins)') + th('Addition/Deduction') + th('Remarks') + th('')
     + '</tr></thead>'
     + '<tbody>' + payrollRows + '</tbody>'
     + '</table></div></div>'
