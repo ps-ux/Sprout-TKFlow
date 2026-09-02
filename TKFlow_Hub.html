@@ -10277,8 +10277,15 @@ function _persistCutoffRolloverReset(clientKey, newLabel) {
   supabaseClient.from('companies').update({ cutoff: newLabel }).eq('short_key', clientKey).then(function(res) {
     if (res.error) console.warn('Could not persist cutoff label for ' + clientKey, res.error);
   });
-  supabaseClient.from('task_runs').delete().eq('company_id', companyId).then(function(res) {
-    if (res.error) console.warn('Could not reset task_runs for ' + clientKey, res.error);
+  // .select() so we can tell a real delete apart from RLS silently letting the call
+  // "succeed" with 0 rows removed (confirmed happening for task_runs -- no DELETE policy
+  // existed, so old Done/Skipped rows survived every rollover with no error ever thrown).
+  supabaseClient.from('task_runs').delete().eq('company_id', companyId).select().then(function(res) {
+    if (res.error) { console.warn('Could not reset task_runs for ' + clientKey, res.error); return; }
+    if (!res.data || !res.data.length) {
+      console.warn('task_runs delete for ' + clientKey + ' affected 0 rows -- likely missing RLS delete policy');
+      if (typeof showToast === 'function') showToast('Task history for ' + clientKey + ' may not have reset -- check Supabase RLS on task_runs', '#e67e00');
+    }
   });
 }
 
