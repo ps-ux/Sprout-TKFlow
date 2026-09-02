@@ -1583,7 +1583,7 @@ function signInWithGoogle() {
                via the header's "Task snapshots" button, shows each in-scope client's saved
                task results (reusing the exact same read-only renderers as Processing History's
                own snapshot viewer, see _renderHistorySnapshotBody). -->
-          <div id="email-snapshot-panel" style="position:fixed;top:0;right:0;height:100vh;width:420px;max-width:90vw;background:#fff;box-shadow:-6px 0 28px rgba(0,0,0,0.18);z-index:3000;transform:translateX(100%);transition:transform .22s ease;display:flex;flex-direction:column;">
+          <div id="email-snapshot-panel" style="position:fixed;top:0;right:0;height:100vh;width:720px;max-width:92vw;background:#fff;box-shadow:-6px 0 28px rgba(0,0,0,0.18);z-index:3000;transform:translateX(100%);transition:transform .22s ease;display:flex;flex-direction:column;">
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #EBEBEF;flex-shrink:0;">
               <div>
                 <div style="font-size:13px;font-weight:600;color:#1a1a2e;">Task snapshots</div>
@@ -2960,27 +2960,30 @@ function archiveBuildValidationSnapshotHtml(data) {
   var body = rows.map(function(r) {
     var datesDisplay = (r.dates && r.dates.length) ? r.dates.join(', ') : '—';
     var remarksDisplay = (r.remarks && r.remarks.length) ? r.remarks.join('; ') : '—';
+    var divider = 'border-right:1px solid #F4F4F8;';
     return '<tr>'
-      + '<td style="padding:6px 8px;font-size:11px;color:#9898a6;font-family:monospace;white-space:nowrap;">' + (r.id||'') + '</td>'
-      + '<td style="padding:6px 8px;font-size:12px;font-weight:500;color:#1a1a2e;word-break:break-word;">' + (r.name||'') + '</td>'
-      + '<td style="padding:6px 8px;font-size:12px;color:#1a1a2e;white-space:nowrap;">' + (r.daysAbsent||0) + '</td>'
-      + '<td style="padding:6px 8px;font-size:12px;color:#1a1a2e;word-break:break-word;">' + datesDisplay + '</td>'
-      + '<td style="padding:6px 8px;font-size:12px;color:#1a1a2e;word-break:break-word;">' + remarksDisplay + '</td>'
-      + '<td style="padding:6px 8px;font-size:11px;white-space:nowrap;">' + (r.checked ? '<span style="color:#32CE13;font-weight:600;">Confirmed</span>' : '<span style="color:#e67e00;font-weight:600;">Unconfirmed</span>') + '</td>'
+      + '<td style="padding:6px 10px;font-size:11px;color:#9898a6;font-family:monospace;white-space:nowrap;' + divider + '">' + (r.id||'') + '</td>'
+      + '<td style="padding:6px 10px;font-size:12px;font-weight:500;color:#1a1a2e;word-break:break-word;' + divider + '">' + (r.name||'') + '</td>'
+      + '<td style="padding:6px 10px;font-size:12px;color:#1a1a2e;white-space:nowrap;' + divider + '">' + (r.daysAbsent||0) + '</td>'
+      + '<td style="padding:6px 10px;font-size:12px;color:#1a1a2e;word-break:break-word;' + divider + '">' + datesDisplay + '</td>'
+      + '<td style="padding:6px 10px;font-size:12px;color:#1a1a2e;word-break:break-word;' + divider + '">' + remarksDisplay + '</td>'
+      + '<td style="padding:6px 10px;font-size:11px;white-space:nowrap;">' + (r.checked ? '<span style="color:#32CE13;font-weight:600;">Confirmed</span>' : '<span style="color:#e67e00;font-weight:600;">Unconfirmed</span>') + '</td>'
       + '</tr>';
   }).join('');
   // table-layout:fixed + explicit widths so Remarks (the column actually worth reading) gets
-  // most of the space instead of every column splitting it roughly evenly -- previously
-  // unreadable in the Task Snapshots panel's narrow 420px drawer, per user feedback.
+  // most of the space instead of every column splitting it roughly evenly. Also widened the
+  // Task Snapshots panel itself (420px -> 720px) and added a light border-right between cells
+  // -- at the narrower width, header/cell text from adjacent columns visually ran together with
+  // nothing marking the boundary between them, per user screenshot.
   return '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-radius:10px;"><table style="width:100%;border-collapse:collapse;table-layout:fixed;">'
-    + '<colgroup><col style="width:8%"><col style="width:14%"><col style="width:9%"><col style="width:18%"><col style="width:41%"><col style="width:10%"></colgroup>'
+    + '<colgroup><col style="width:8%"><col style="width:16%"><col style="width:9%"><col style="width:17%"><col style="width:40%"><col style="width:10%"></colgroup>'
     + '<thead><tr style="background:#F4F4F8;">'
-    + '<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">ID</th>'
-    + '<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Name</th>'
-    + '<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Days Absent</th>'
-    + '<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Dates</th>'
-    + '<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Remarks</th>'
-    + '<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Status</th>'
+    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;border-right:1px solid #EBEBEF;">ID</th>'
+    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;border-right:1px solid #EBEBEF;">Name</th>'
+    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;border-right:1px solid #EBEBEF;">Days Absent</th>'
+    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;border-right:1px solid #EBEBEF;">Dates</th>'
+    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;border-right:1px solid #EBEBEF;">Remarks</th>'
+    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Status</th>'
     + '</tr></thead><tbody>' + body + '</tbody></table></div>';
 }
 
