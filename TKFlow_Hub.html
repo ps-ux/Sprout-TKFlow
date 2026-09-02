@@ -12662,7 +12662,11 @@ function varDownload(coId) {
     + '</styleSheet>';
 
   function doDownload(arrayBuf) {
-    var fname = (varActiveSubShortName() + '_Attendance Variance Analysis_' + (co._filenamePayout || co._payout)).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx';
+    // Per user's call: name the file after the SAME payout Variance is actually reviewing
+    // (co._payout, the "most recently paid" period shown on the card) rather than the older
+    // one-cycle-earlier convention (_filenamePayout) -- the two used to disagree, which is
+    // exactly what prompted this change.
+    var fname = (varActiveSubShortName() + '_Attendance Variance Analysis_' + co._payout).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx';
     var blob = new Blob([arrayBuf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
