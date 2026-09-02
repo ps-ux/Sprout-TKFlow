@@ -10856,6 +10856,11 @@ function _emailSave() {
 
 function _emailRestore() {
   var k = _emailStoreKey();
+  // No saved state yet for this workspace means this is the first time the Email Generator
+  // has been opened here this session (a saved state only ever appears after Generate calls
+  // _emailSave) -- that's exactly when live prefill defaults are wanted; once a real
+  // (possibly hand-edited) value has been saved, restore that instead of recomputing fresh.
+  var isFirstOpenThisSession = !_emailStore[k];
   var s = _emailStore[k] || {};
   var fields = ['poc','greeting','cutoff','coverage','followup'];
   fields.forEach(function(f) {
@@ -10866,6 +10871,7 @@ function _emailRestore() {
   if (eb) eb.value = s.body || '';
   var eo = document.getElementById('email-output');
   if (eo) eo.style.display = s.outputVisible ? 'block' : 'none';
+  if (isFirstOpenThisSession && typeof emailPrefillFromClient === 'function') emailPrefillFromClient();
   if (typeof emailRenderServicesChecklist === 'function') emailRenderServicesChecklist();
 }
 
@@ -19351,13 +19357,30 @@ var EMAIL_SERVICES = [
 ];
 window._emailFindings = window._emailFindings || {}; // { serviceKey: [ {id, text, checked} ] }
 
+// Maps an email service to the taskConfig key that governs whether it's actually applicable
+// for this client (see isTaskEnabled) -- same key names checkCutoffRollover/taskStatus use.
+var EMAIL_SERVICE_TASK_KEY = { tk: 'validation', 'var': 'variance', disp: 'disputes_summary', nh: 'newhires', lcv: 'leave_credits_validation' };
+
+// Tracks which workspace the checklist was last rendered for -- only re-derives checked state
+// from task applicability when that changes (a genuinely new client/group), so the user's own
+// manual checks/unchecks survive re-renders triggered within the same workspace (e.g. adding a
+// custom finding). Switching group-vs-standalone/`.some()` matches the same "any sub has this
+// enabled" convention the Leave Monitoring/LCV/Disputes tab-visibility checks already use.
+var _emailChecklistLastKey = null;
 function emailRenderServicesChecklist() {
   var el = document.getElementById('email-services-checklist');
   if (!el) return;
+  var key = (typeof _emailStoreKey === 'function') ? _emailStoreKey() : '';
+  var isFreshContext = key !== _emailChecklistLastKey;
+  _emailChecklistLastKey = key;
   var prevChecked = emailCheckedServices();
+  var cks = emailClientKeys();
   el.innerHTML = EMAIL_SERVICES.map(function(s) {
+    var isChecked = isFreshContext
+      ? (cks.length ? cks.some(function(ck){ return isTaskEnabled(ck, EMAIL_SERVICE_TASK_KEY[s.key]); }) : true)
+      : (prevChecked.indexOf(s.key) >= 0);
     return '<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#1a1a2e;cursor:pointer;">'
-      + '<input type="checkbox" class="email-service-checkbox" value="' + s.key + '" onchange="emailRefreshFindings()" style="cursor:pointer;"' + (prevChecked.indexOf(s.key) >= 0 ? ' checked' : '') + '>'
+      + '<input type="checkbox" class="email-service-checkbox" value="' + s.key + '" onchange="emailRefreshFindings()" style="cursor:pointer;"' + (isChecked ? ' checked' : '') + '>'
       + '<i class="ti ' + s.icon + '" style="font-size:13px;color:#32CE13;"></i> ' + s.label
       + '</label>';
   }).join('');
@@ -19375,6 +19398,84 @@ function emailClientKeys() {
 }
 function emailClientName(k) {
   return (typeof clients !== 'undefined' && clients[k] && clients[k].name) || k;
+}
+
+// "6/23-7/8" + 2026 -> "June 23 – July 8, 2026" -- same regex/cross-month logic as
+// formatAttCovShort, just with full month names and a year for a client-facing sentence
+// instead of a compact sheet-tab label.
+var EMAIL_MONTH_NAMES_FULL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+function emailFormatAttCovFull(attCov, yr) {
+  var m = (attCov || '').match(/(\d{1,2})\/(\d{1,2})\s*[-–—]\s*(\d{1,2})\/(\d{1,2})/);
+  if (!m) return attCov || '';
+  var startMon = parseInt(m[1],10) - 1, startDay = parseInt(m[2],10);
+  var endMon = parseInt(m[3],10) - 1, endDay = parseInt(m[4],10);
+  var startStr = EMAIL_MONTH_NAMES_FULL[startMon] + ' ' + startDay;
+  var endStr = (startMon === endMon ? '' : EMAIL_MONTH_NAMES_FULL[endMon] + ' ') + endDay;
+  return startStr + ' – ' + endStr + ', ' + yr;
+}
+
+// Live prefill for a first-time-this-session open of the Email Generator -- only ever writes
+// into a field that's still empty, so it never clobbers a value the user already typed or a
+// previously-saved/edited one (_emailRestore only calls this when nothing's been saved yet).
+function emailPrefillFromClient() {
+  var cks = emailClientKeys();
+  if (!cks.length) return;
+
+  // Greeting name: prefer a Primary Contact POC (group-shared list first, then each sub's own
+  // list, matching the display order in Client Profile), else just the first POC on file.
+  var pocEl = document.getElementById('email-poc');
+  if (pocEl && !pocEl.value) {
+    var candidates = (typeof _pocGet === 'function' ? _pocGet() : []).slice();
+    cks.forEach(function(ck){ candidates = candidates.concat((clients[ck] && clients[ck].pocs) || []); });
+    var chosen = candidates.filter(function(p){ return p.contactType === 'Primary Contact'; })[0] || candidates[0];
+    if (chosen && chosen.name) pocEl.value = chosen.name;
+  }
+
+  // Greeting line: simple time-of-day/day-of-week default -- freely editable before sending,
+  // same as every other prefilled field here.
+  var greetEl = document.getElementById('email-greeting');
+  if (greetEl && !greetEl.value) {
+    var now = new Date();
+    greetEl.value = now.getDay() === 5 ? 'Happy Friday!' : (now.getHours() < 12 ? 'Good morning!' : 'Good afternoon!');
+  }
+
+  // Payroll cut-off + Attendance coverage dates: from the period containing today -- the same
+  // "current" every task except Variance means (findCurrentCalendarPeriodIdx), not Variance's
+  // own staggered "most recently completed" period.
+  var periods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
+  var idx = (periods.length && typeof findCurrentCalendarPeriodIdx === 'function') ? findCurrentCalendarPeriodIdx(periods) : -1;
+  var p = idx >= 0 ? periods[idx] : null;
+  if (p) {
+    var cutoffEl = document.getElementById('email-cutoff');
+    if (cutoffEl && !cutoffEl.value) cutoffEl.value = p.monthName + ' ' + (p.period === 1 ? '1st' : '2nd') + ' payroll';
+    var coverageEl = document.getElementById('email-coverage');
+    if (coverageEl && !coverageEl.value) coverageEl.value = emailFormatAttCovFull(p.attCov, p.yr);
+
+    // Meeting/follow-up note: deadline labels are freeform per client's own uploaded calendar
+    // file (not a fixed enum), so this matches by keyword rather than an exact label -- per
+    // the user, KN's calendar calls this step "Payroll Instructions + Disputes Finalization".
+    // Only fills the note when a matching deadline is found AND actually carries a parsed time
+    // (hasTime) -- a date-only deadline would otherwise silently default to a fake midnight,
+    // which is worse than just leaving this field blank for the user to fill in by hand.
+    var followupEl = document.getElementById('email-followup');
+    if (followupEl && !followupEl.value) {
+      var meetingCandidates = (p.deadlines || []).filter(function(d) {
+        var l = (d.label || '').toLowerCase();
+        return l.indexOf('finaliz') >= 0 || (l.indexOf('payroll instructions') >= 0 && l.indexOf('disputes') >= 0);
+      });
+      var meetingDl = meetingCandidates.filter(function(d){ return d.hasTime; })[0];
+      if (meetingDl) followupEl.value = emailFormatMeetingNote(meetingDl.date);
+    }
+  }
+}
+
+var EMAIL_WEEKDAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+function emailFormatMeetingNote(d) {
+  var wd = EMAIL_WEEKDAY_NAMES[d.getDay()], mon = EMAIL_MONTH_NAMES_FULL[d.getMonth()], day = d.getDate();
+  var h = d.getHours(), m = d.getMinutes(), ampm = h >= 12 ? 'PM' : 'AM';
+  var h12 = h % 12; if (h12 === 0) h12 = 12;
+  var mm = (m < 10 ? '0' : '') + m;
+  return 'I look forward to discussing these with you on ' + wd + ', ' + mon + ' ' + day + ', at ' + h12 + ':' + mm + ampm + '.';
 }
 
 // ---- Auto-detection per service — each returns candidate {id, text} finding lines ----
