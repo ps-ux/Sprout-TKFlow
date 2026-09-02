@@ -1596,7 +1596,6 @@ function signInWithGoogle() {
         </div>
 
         <style>
-          #email-snapshot-panel.open { transform: translateX(0); }
           .sp-note { width:260px; min-height:210px; border-radius:4px 4px 8px 8px; padding:14px 14px 8px; display:flex; flex-direction:column; box-shadow:0 3px 8px rgba(0,0,0,0.12); position:relative; transition:transform .1s; box-sizing:border-box; }
           .sp-note:hover { transform:translateY(-2px); box-shadow:0 5px 12px rgba(0,0,0,0.16); }
           .sp-note.sp-archived { opacity:0.55; }
@@ -19687,6 +19686,12 @@ function emailToggleSnapshotPanel() {
   if (!panel) return;
   var willOpen = !panel.classList.contains('open');
   panel.classList.toggle('open', willOpen);
+  // The .open CSS rule alone can never win here -- the panel's own inline style="transform:..."
+  // (set directly on the element in the HTML) always outranks a stylesheet rule targeting the
+  // same element, ID selector or not, so the class toggle above was visually a no-op. Set the
+  // transform directly instead; that's the same "this element's own inline style" the HTML's
+  // initial attribute set, so there's no specificity fight.
+  panel.style.transform = willOpen ? 'translateX(0)' : 'translateX(100%)';
   if (willOpen) emailRenderSnapshotPanel();
 }
 
