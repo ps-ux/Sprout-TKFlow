@@ -2961,22 +2961,26 @@ function archiveBuildValidationSnapshotHtml(data) {
     var datesDisplay = (r.dates && r.dates.length) ? r.dates.join(', ') : '—';
     var remarksDisplay = (r.remarks && r.remarks.length) ? r.remarks.join('; ') : '—';
     return '<tr>'
-      + '<td style="padding:6px 10px;font-size:11px;color:#9898a6;font-family:monospace;white-space:nowrap;">' + (r.id||'') + '</td>'
-      + '<td style="padding:6px 10px;font-size:12px;font-weight:500;color:#1a1a2e;">' + (r.name||'') + '</td>'
-      + '<td style="padding:6px 10px;font-size:12px;color:#1a1a2e;">' + (r.daysAbsent||0) + '</td>'
-      + '<td style="padding:6px 10px;font-size:12px;color:#1a1a2e;">' + datesDisplay + '</td>'
-      + '<td style="padding:6px 10px;font-size:12px;color:#1a1a2e;">' + remarksDisplay + '</td>'
-      + '<td style="padding:6px 10px;font-size:11px;white-space:nowrap;">' + (r.checked ? '<span style="color:#32CE13;font-weight:600;">Confirmed</span>' : '<span style="color:#e67e00;font-weight:600;">Unconfirmed</span>') + '</td>'
+      + '<td style="padding:6px 8px;font-size:11px;color:#9898a6;font-family:monospace;white-space:nowrap;">' + (r.id||'') + '</td>'
+      + '<td style="padding:6px 8px;font-size:12px;font-weight:500;color:#1a1a2e;word-break:break-word;">' + (r.name||'') + '</td>'
+      + '<td style="padding:6px 8px;font-size:12px;color:#1a1a2e;white-space:nowrap;">' + (r.daysAbsent||0) + '</td>'
+      + '<td style="padding:6px 8px;font-size:12px;color:#1a1a2e;word-break:break-word;">' + datesDisplay + '</td>'
+      + '<td style="padding:6px 8px;font-size:12px;color:#1a1a2e;word-break:break-word;">' + remarksDisplay + '</td>'
+      + '<td style="padding:6px 8px;font-size:11px;white-space:nowrap;">' + (r.checked ? '<span style="color:#32CE13;font-weight:600;">Confirmed</span>' : '<span style="color:#e67e00;font-weight:600;">Unconfirmed</span>') + '</td>'
       + '</tr>';
   }).join('');
-  return '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-radius:10px;"><table style="width:100%;border-collapse:collapse;">'
+  // table-layout:fixed + explicit widths so Remarks (the column actually worth reading) gets
+  // most of the space instead of every column splitting it roughly evenly -- previously
+  // unreadable in the Task Snapshots panel's narrow 420px drawer, per user feedback.
+  return '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-radius:10px;"><table style="width:100%;border-collapse:collapse;table-layout:fixed;">'
+    + '<colgroup><col style="width:8%"><col style="width:14%"><col style="width:9%"><col style="width:18%"><col style="width:41%"><col style="width:10%"></colgroup>'
     + '<thead><tr style="background:#F4F4F8;">'
-    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">ID</th>'
-    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Name</th>'
-    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Days Absent</th>'
-    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Dates</th>'
-    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Remarks</th>'
-    + '<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Status</th>'
+    + '<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">ID</th>'
+    + '<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Name</th>'
+    + '<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Days Absent</th>'
+    + '<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Dates</th>'
+    + '<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Remarks</th>'
+    + '<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:600;color:#9898a6;">Status</th>'
     + '</tr></thead><tbody>' + body + '</tbody></table></div>';
 }
 
