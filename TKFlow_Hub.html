@@ -1513,7 +1513,10 @@ function signInWithGoogle() {
               <div style="font-size:13px;font-weight:600;color:#1a1a2e;">Email generator</div>
               <div style="font-size:11px;color:#9898a6;margin-top:2px;">Drafts your submission email based on completed task results</div>
             </div>
-            <button onclick="generateEmail()" style="padding:8px 18px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:flex;align-items:center;gap:7px;"><i class="ti ti-sparkles" style="font-size:15px;"></i> Generate</button>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button onclick="emailToggleSnapshotPanel()" title="Show/hide each task's saved results as a reference while you write" style="padding:8px 16px;background:#fff;color:#1a1a2e;border:1px solid #EBEBEF;border-radius:12px;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:flex;align-items:center;gap:7px;"><i class="ti ti-layout-sidebar-right" style="font-size:15px;color:#32CE13;"></i> Task snapshots</button>
+              <button onclick="generateEmail()" style="padding:8px 18px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:flex;align-items:center;gap:7px;"><i class="ti ti-sparkles" style="font-size:15px;"></i> Generate</button>
+            </div>
           </div>
           <!-- Config card -->
           <div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;padding:16px;margin-bottom:14px;">
@@ -1574,9 +1577,26 @@ function signInWithGoogle() {
             <textarea id="email-body" style="width:100%;height:360px;padding:14px;border:1px solid #EBEBEF;border-radius:14px;font-size:13px;font-family:Rubik,sans-serif;color:#1a1a2e;resize:vertical;outline:none;line-height:1.8;box-sizing:border-box;" spellcheck="true"></textarea>
             <div style="font-size:11px;color:#9898a6;margin-top:6px;"><i class="ti ti-info-circle" style="font-size:12px;vertical-align:-2px;"></i> Review and edit before copying. Regenerate to reset.</div>
           </div>
+
+          <!-- Task snapshots slide-in — a reference panel for hand-writing the email body,
+               separate from the auto-generated "Findings to mention" checklist above. Toggled
+               via the header's "Task snapshots" button, shows each in-scope client's saved
+               task results (reusing the exact same read-only renderers as Processing History's
+               own snapshot viewer, see _renderHistorySnapshotBody). -->
+          <div id="email-snapshot-panel" style="position:fixed;top:0;right:0;height:100vh;width:420px;max-width:90vw;background:#fff;box-shadow:-6px 0 28px rgba(0,0,0,0.18);z-index:3000;transform:translateX(100%);transition:transform .22s ease;display:flex;flex-direction:column;">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #EBEBEF;flex-shrink:0;">
+              <div>
+                <div style="font-size:13px;font-weight:600;color:#1a1a2e;">Task snapshots</div>
+                <div style="font-size:11px;color:#9898a6;margin-top:2px;">Reference while writing the email body</div>
+              </div>
+              <button onclick="emailToggleSnapshotPanel()" style="width:30px;height:30px;border-radius:8px;border:1px solid #EBEBEF;background:#fff;color:#9898a6;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><i class="ti ti-x"></i></button>
+            </div>
+            <div id="email-snapshot-body" style="flex:1;overflow-y:auto;padding:16px 18px;"></div>
+          </div>
         </div>
 
         <style>
+          #email-snapshot-panel.open { transform: translateX(0); }
           .sp-note { width:260px; min-height:210px; border-radius:4px 4px 8px 8px; padding:14px 14px 8px; display:flex; flex-direction:column; box-shadow:0 3px 8px rgba(0,0,0,0.12); position:relative; transition:transform .1s; box-sizing:border-box; }
           .sp-note:hover { transform:translateY(-2px); box-shadow:0 5px 12px rgba(0,0,0,0.16); }
           .sp-note.sp-archived { opacity:0.55; }
@@ -19588,10 +19608,17 @@ function emailDetectLcv() {
 var EMAIL_DETECTORS = { tk: emailDetectTk, 'var': emailDetectVar, disp: emailDetectDisp, nh: emailDetectNh, lcv: emailDetectLcv };
 
 function emailFindingsSectionHtml(svc, findings) {
+  // Text is directly editable (was a plain <span>) -- per user request, so the auto-detected
+  // wording can be tweaked in place while writing the email instead of only being addable-to
+  // via the separate custom-note input below. Looks like plain text until focused (transparent
+  // border/background) so the row doesn't read as a form field until you actually click into it.
   var rowsHtml = findings.map(function(f, i) {
+    var textVal = String(f.text || '').replace(/"/g, '&quot;');
     return '<div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:4px;">'
-      + '<input type="checkbox" ' + (f.checked ? 'checked' : '') + ' onchange="emailToggleFinding(' + "'" + svc + "'" + ',' + i + ',this.checked)" style="cursor:pointer;margin-top:2px;">'
-      + '<span style="font-size:12px;color:#1a1a2e;">' + f.text + '</span>'
+      + '<input type="checkbox" ' + (f.checked ? 'checked' : '') + ' onchange="emailToggleFinding(' + "'" + svc + "'" + ',' + i + ',this.checked)" style="cursor:pointer;margin-top:5px;flex-shrink:0;">'
+      + '<input type="text" value="' + textVal + '" oninput="emailUpdateFindingText(' + "'" + svc + "'" + ',' + i + ',this.value)" '
+      + 'style="flex:1;font-size:12px;color:#1a1a2e;font-family:Rubik,sans-serif;border:1px solid transparent;border-radius:6px;padding:3px 6px;background:transparent;outline:none;" '
+      + 'onfocus="this.style.borderColor=\'#EBEBEF\';this.style.background=\'#fff\';" onblur="this.style.borderColor=\'transparent\';this.style.background=\'transparent\';">'
       + '</div>';
   }).join('');
   return '<div style="margin-bottom:12px;">'
@@ -19622,11 +19649,16 @@ async function emailRefreshFindings() {
     var svc = checked[i];
     var detector = EMAIL_DETECTORS[svc];
     var candidates = detector ? await detector() : [];
-    // Preserve previously checked state (and any custom-added lines) for findings that still exist.
+    // Preserve previously checked state, any hand-edited text, and any custom-added lines for
+    // findings that still exist -- re-detecting must not stomp an edit just because some OTHER
+    // service's checkbox was toggled and triggered a full refresh.
     var prevState = window._emailFindings[svc] || [];
     var prevMap = {}; prevState.forEach(function(f){ prevMap[f.id] = f; });
     var customLines = prevState.filter(function(f){ return (f.id + '').indexOf('custom-') === 0; });
-    var findings = candidates.map(function(c) { return { id: c.id, text: c.text, checked: prevMap[c.id] ? prevMap[c.id].checked : true }; }).concat(customLines);
+    var findings = candidates.map(function(c) {
+      var prev = prevMap[c.id];
+      return { id: c.id, text: (prev && prev.edited) ? prev.text : c.text, checked: prev ? prev.checked : true, edited: prev ? !!prev.edited : false };
+    }).concat(customLines);
     window._emailFindings[svc] = findings;
     sections.push(emailFindingsSectionHtml(svc, findings));
   }
@@ -19635,6 +19667,85 @@ async function emailRefreshFindings() {
 
 function emailToggleFinding(svc, idx, checked) {
   if (window._emailFindings[svc] && window._emailFindings[svc][idx]) window._emailFindings[svc][idx].checked = checked;
+}
+
+function emailUpdateFindingText(svc, idx, value) {
+  var f = window._emailFindings[svc] && window._emailFindings[svc][idx];
+  if (!f) return;
+  f.text = value;
+  f.edited = true; // stops the next re-detect from overwriting this with the fresh auto-text
+}
+
+// Slide-in reference panel -- shows each in-scope client's actual saved task results, reusing
+// the exact same read-only section renderers Processing History's own snapshot viewer uses
+// (_histValidationSectionHtml/_histVarianceSectionHtml/_histDisputesSectionHtml/
+// _histStatusOnlySectionsHtml, see toggleHistorySnapshot above), just keyed to the LIVE current
+// cutoff instead of a specific historical Processing History row. Meant to guide someone
+// hand-writing the email body, separate from the auto-generated Findings checklist.
+function emailToggleSnapshotPanel() {
+  var panel = document.getElementById('email-snapshot-panel');
+  if (!panel) return;
+  var willOpen = !panel.classList.contains('open');
+  panel.classList.toggle('open', willOpen);
+  if (willOpen) emailRenderSnapshotPanel();
+}
+
+async function emailRenderSnapshotPanel() {
+  var body = document.getElementById('email-snapshot-body');
+  if (!body) return;
+  var cks = emailClientKeys();
+  if (!cks.length) { body.innerHTML = '<div style="font-size:12px;color:#9898a6;">No client selected.</div>'; return; }
+  body.innerHTML = '<div style="font-size:12px;color:#9898a6;"><i class="ti ti-loader"></i> Loading task snapshots…</div>';
+
+  var perClientHtml = [];
+  for (var i = 0; i < cks.length; i++) {
+    var ck = cks[i];
+    var companyId = clients[ck] && clients[ck].companyId;
+    if (!companyId) continue;
+    // Same live-current label markTaskStarted stamps onto a Processing History row's own
+    // cutoffLabel -- using it here keeps this panel's queries consistent with how those rows
+    // (and toggleHistorySnapshot's viewer) already look this data up.
+    var cutoffLabel = (typeof getCurrentCutoffLabel === 'function') ? getCurrentCutoffLabel(ck) : ((clients[ck] && clients[ck].cutoff) || '');
+    var sectionsHtml = '';
+    try {
+      var tkRes = await supabaseClient.from('task_cutoff_review_state').select('*')
+        .eq('company_id', companyId).eq('task_key', 'validation').eq('cutoff_label', cutoffLabel).maybeSingle();
+      sectionsHtml += _histValidationSectionHtml(tkRes.error ? null : tkRes.data);
+    } catch (err) {
+      sectionsHtml += _histSectionWrap('Validation', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
+    }
+    try {
+      // No Processing-History-row time window to bucket by here (this is the live cutoff, not
+      // a specific historical row) -- just the most recent couple of saved runs, which is what
+      // "what have I got so far this cutoff" actually means in practice.
+      var varRes = await supabaseClient.from('task_cutoff_review_state').select('*')
+        .eq('company_id', companyId).eq('task_key', 'variance').order('updated_at', { ascending: false }).limit(2);
+      sectionsHtml += _histVarianceSectionHtml(varRes.error ? [] : (varRes.data || []), null);
+    } catch (err) {
+      sectionsHtml += _histSectionWrap('Variance', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
+    }
+    try {
+      // Disputes Summary saves under the short cutoff label ("August 2nd"), not the long
+      // getCurrentCutoffLabel form -- same strip _renderHistorySnapshotBody/dsShortLabel do.
+      var dsShortLabel = String(cutoffLabel || '').split(' Payout')[0];
+      var dsRes = await supabaseClient.from('task_cutoff_review_state').select('*')
+        .eq('company_id', companyId).eq('task_key', 'disputes_summary').eq('cutoff_label', dsShortLabel).maybeSingle();
+      sectionsHtml += _histDisputesSectionHtml(dsRes.error ? null : dsRes.data);
+    } catch (err) {
+      sectionsHtml += _histSectionWrap('Dispute Summary', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
+    }
+    sectionsHtml += _histStatusOnlySectionsHtml(ck, cutoffLabel);
+
+    perClientHtml.push('<div style="margin-bottom:22px;">'
+      + '<div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #EBEBEF;">' + emailClientName(ck) + '</div>'
+      + sectionsHtml
+      + '</div>');
+  }
+
+  // Re-fetch in case the panel was closed (or a different workspace opened) while the awaits
+  // above were in flight -- same guard _renderHistorySnapshotBody uses for the same reason.
+  body = document.getElementById('email-snapshot-body');
+  if (body) body.innerHTML = perClientHtml.join('') || '<div style="font-size:12px;color:#9898a6;">No company record found.</div>';
 }
 
 function emailAddCustomFinding(svc) {
