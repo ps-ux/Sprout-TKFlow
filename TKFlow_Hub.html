@@ -20001,15 +20001,23 @@ function generateEmail() {
   }
   // Variance's "Previous Attendance" coverage is NOT the same period as the Payroll cut-off
   // field's coverage above -- that field shows the period containing the CURRENT cut-off, while
-  // Variance reports on the most recently COMPLETED period, which is one cycle behind (see
-  // findMostRecentlyCompletedPeriodIdx's own comment -- "completed" means the payout has
-  // actually happened, not just that the attendance window ended, so it isn't reliably just
-  // "the period right before current" either). Confirmed by the user: current Aug 16-31 should
-  // show Aug 1-15 for Variance, not the same Aug 16-31 the other services show.
+  // Variance reports on the period immediately before it. Originally used
+  // findMostRecentlyCompletedPeriodIdx (its "has the payout actually happened" heuristic), which
+  // matched for KN but confirmed WRONG for HDI -- it picked the period that IS current, one too
+  // recent (showed Aug 9-22, actual current, when the user's own definition -- "previous cut-off
+  // than the current," stated identically for both KN and HDI -- calls for July 23-Aug 8, the
+  // period right before it). Switched to deriving directly from findCurrentCutoffStartedIdx, the
+  // SAME "current" computation already confirmed correct for HDI via the Overview/Tasks banner
+  // and the Payroll cut-off field above -- guarantees by construction that this always reads
+  // "whatever's current, minus one," matching the user's own stated rule exactly, for every
+  // client's own real calendar. NOTE: this is a display-only change, scoped to this coverage
+  // label -- it does not touch findMostRecentlyCompletedPeriodIdx itself or the live Variance
+  // task's own period auto-fill (buildVarCard), which are separate, unrelated call sites.
   function coverageForService(svc) {
     if (svc !== 'var') return coverage;
     var periods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
-    var idx = (periods.length && typeof findMostRecentlyCompletedPeriodIdx === 'function') ? findMostRecentlyCompletedPeriodIdx(periods) : -1;
+    var curIdx = (periods.length && typeof findCurrentCutoffStartedIdx === 'function') ? findCurrentCutoffStartedIdx(periods) : -1;
+    var idx = curIdx - 1;
     var p = idx >= 0 ? periods[idx] : null;
     return p ? emailFormatAttCovFull(p.attCov, p.yr) : coverage;
   }
