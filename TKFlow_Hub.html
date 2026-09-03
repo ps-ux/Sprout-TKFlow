@@ -19559,14 +19559,13 @@ async function emailDetectTk() {
       var absentDates = (r.evidence || []).filter(function(e){ return e.flagType === 'absent'; }).map(function(e){ return e.date; });
       return { name: r.name, absentDates: absentDates };
     }).filter(function(r){ return r.absentDates.length > 0; });
-    var name = emailClientName(k);
     if (!rowsWithAbsentDates.length) {
-      out.push({ id: 'tk-' + k, text: name + ': No unusual pattern detected among the causes of absences.' });
+      out.push({ id: 'tk-' + k, client: k, text: 'No unusual pattern detected among the causes of absences.' });
     } else {
       // Just the total -- per user feedback, listing every distinct remark type with its own
       // count read as "every reason of findings/absence remarks was written" rather than a
       // useful summary.
-      out.push({ id: 'tk-' + k, text: name + ': About ' + rowsWithAbsentDates.length + ' employee(s) were captured with absences this cut-off.' });
+      out.push({ id: 'tk-' + k, client: k, text: 'About ' + rowsWithAbsentDates.length + ' employee(s) were captured with absences this cut-off.' });
     }
     // Dates where more than 3 employees were absent on the same day -- a pattern worth calling
     // out separately from the plain headcount above.
@@ -19576,7 +19575,7 @@ async function emailDetectTk() {
     });
     var heavyDates = Object.keys(countByDate).filter(function(d) { return countByDate[d] > 3; });
     if (heavyDates.length) {
-      out.push({ id: 'tk-heavy-' + k, text: name + ': More than 3 employees were absent on ' + heavyDates.join(', ') + '.' });
+      out.push({ id: 'tk-heavy-' + k, client: k, text: 'More than 3 employees were absent on ' + heavyDates.join(', ') + '.' });
     }
   });
   return out;
@@ -19632,17 +19631,15 @@ async function emailDetectVar() {
 
   var keysToUse = cks.length ? cks : Object.keys(byClient);
   keysToUse.forEach(function(k) {
-    var name = emailClientName(k);
     (byClient[k] || []).forEach(function(entry) {
       var p = entry.payout;
       var attData = entry.attData || [];
-      var label = name + ' — ' + p;
       var wv = attData.filter(function(e){ return e.hasVar; });
       if (!wv.length) {
-        out.push({ id: 'var-' + k + '-' + p, text: label + ': No variances detected.' });
+        out.push({ id: 'var-' + k + '-' + p, client: k, text: p + ': No variances detected.' });
       } else {
         var names = wv.map(function(e){ return (e.name || e.id).split(',')[0]; });
-        out.push({ id: 'var-' + k + '-' + p, text: label + ': ' + (names.length <= 3 ? names.join(', ') : names.slice(0,3).join(', ') + ', and ' + (names.length - 3) + ' more') + ' have variance(s) detected.' });
+        out.push({ id: 'var-' + k + '-' + p, client: k, text: p + ': ' + (names.length <= 3 ? names.join(', ') : names.slice(0,3).join(', ') + ', and ' + (names.length - 3) + ' more') + ' have variance(s) detected.' });
       }
       // Deductions specifically -- same negative-sum-across-the-diff-columns rule varRenderResultCard
       // itself uses to split additions vs. deductions (see line ~11184), recomputed here since the
@@ -19650,7 +19647,7 @@ async function emailDetectVar() {
       var deductions = wv.filter(function(e){ return (e.row || []).slice(2, 35).reduce(function(s, v){ return s + (v || 0); }, 0) < 0; });
       if (deductions.length) {
         var dNames = deductions.map(function(e){ return (e.name || e.id).split(',')[0]; });
-        out.push({ id: 'var-ded-' + k + '-' + p, text: label + ': ' + deductions.length + ' deduction(s) flagged for ' + (dNames.length <= 3 ? dNames.join(', ') : dNames.slice(0,3).join(', ') + ', and ' + (dNames.length - 3) + ' more') + '.' });
+        out.push({ id: 'var-ded-' + k + '-' + p, client: k, text: p + ': ' + deductions.length + ' deduction(s) flagged for ' + (dNames.length <= 3 ? dNames.join(', ') : dNames.slice(0,3).join(', ') + ', and ' + (dNames.length - 3) + ' more') + '.' });
       }
     });
   });
@@ -19678,29 +19675,35 @@ async function emailDetectVar() {
 function emailDetectDisp() {
   var allDisp = (typeof allDisputes !== 'undefined') ? allDisputes : [];
   var cks = emailClientKeys();
-  var clientDisp = allDisp.filter(function(d){ return cks.indexOf(d.client) >= 0; });
 
   var realPeriods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
   var curIdx = (realPeriods.length && typeof findCurrentCutoffStartedIdx === 'function') ? findCurrentCutoffStartedIdx(realPeriods) : -1;
   var curP = curIdx >= 0 ? realPeriods[curIdx] : null;
   var currentLabel = curP ? (curP.monthName + ' ' + (curP.period === 1 ? '1st' : '2nd')) : '';
 
-  var cd = currentLabel ? clientDisp.filter(function(d) {
-    return (typeof dtmReceivedCutoffLabel === 'function' ? dtmReceivedCutoffLabel(d) : '') === currentLabel;
-  }) : [];
-  var op = cd.filter(function(d){ return d.status !== 'dst-closed'; }).length;
-  var closed = cd.filter(function(d){ return d.status === 'dst-closed'; }).length;
-  // "Open as a whole" is NOT scoped to the current cut-off -- unlike the other two counts, this
-  // one is meant to span every ticket on file for these clients, not just the ones received
-  // this cut-off. There's no stored timestamp for when a ticket's status actually flipped to
-  // Closed, so "closed this cut-off" above is scoped to this cut-off's own tickets (received
-  // this cut-off AND now Closed) rather than a literal "closed during this date range" count --
-  // per the user, this approximation is fine.
-  var openOverall = clientDisp.filter(function(d){ return d.status !== 'dst-closed'; }).length;
-  return [
-    { id: 'disp-count', text: 'A total of ' + cd.length + ' ticket' + (cd.length !== 1 ? 's were' : ' was') + ' received this cut-off, ' + closed + ' ticket' + (closed !== 1 ? 's were' : ' was') + ' closed this cut-off, and ' + op + ' ticket' + (op !== 1 ? 's remain' : ' remains') + ' open from this cut-off.' },
-    { id: 'disp-open-overall', text: openOverall + ' ticket' + (openOverall !== 1 ? 's remain' : ' remains') + ' open overall across all cut-offs.' }
-  ];
+  // Per-client, not one combined figure across the whole group -- a group email needs each
+  // sub's own received/closed/open counts called out separately (confirmed live: KNI and KNLSI
+  // have entirely different ticket volumes, and a single blended number was meaningless for
+  // deciding which sub actually needs attention).
+  var out = [];
+  cks.forEach(function(k) {
+    var kDisp = allDisp.filter(function(d){ return d.client === k; });
+    var cd = currentLabel ? kDisp.filter(function(d) {
+      return (typeof dtmReceivedCutoffLabel === 'function' ? dtmReceivedCutoffLabel(d) : '') === currentLabel;
+    }) : [];
+    var op = cd.filter(function(d){ return d.status !== 'dst-closed'; }).length;
+    var closed = cd.filter(function(d){ return d.status === 'dst-closed'; }).length;
+    // "Open as a whole" is NOT scoped to the current cut-off -- unlike the other two counts, this
+    // one is meant to span every ticket on file for this client, not just the ones received this
+    // cut-off. There's no stored timestamp for when a ticket's status actually flipped to Closed,
+    // so "closed this cut-off" above is scoped to this cut-off's own tickets (received this
+    // cut-off AND now Closed) rather than a literal "closed during this date range" count -- per
+    // the user, this approximation is fine.
+    var openOverall = kDisp.filter(function(d){ return d.status !== 'dst-closed'; }).length;
+    out.push({ id: 'disp-' + k, client: k, text: 'A total of ' + cd.length + ' ticket' + (cd.length !== 1 ? 's were' : ' was') + ' received this cut-off, ' + closed + ' ticket' + (closed !== 1 ? 's were' : ' was') + ' closed this cut-off, and ' + op + ' ticket' + (op !== 1 ? 's remain' : ' remains') + ' open from this cut-off.' });
+    out.push({ id: 'disp-open-overall-' + k, client: k, text: openOverall + ' ticket' + (openOverall !== 1 ? 's remain' : ' remains') + ' open overall across all cut-offs.' });
+  });
+  return out;
 }
 
 function emailDetectNh() {
@@ -19740,10 +19743,16 @@ function emailFindingsSectionHtml(svc, findings) {
   // wording can be tweaked in place while writing the email instead of only being addable-to
   // via the separate custom-note input below. Looks like plain text until focused (transparent
   // border/background) so the row doesn't read as a form field until you actually click into it.
+  // Client name is a separate label rendered here, NOT baked into f.text -- so grouping/merging
+  // findings by client in the generated body (see emailGroupFindingsByClient) never has to guess
+  // at a name prefix by parsing the text, and so a hand-edit of the text can't accidentally
+  // delete or duplicate the attribution.
   var rowsHtml = findings.map(function(f, i) {
     var textVal = String(f.text || '').replace(/"/g, '&quot;');
+    var clientLabel = f.client ? '<span style="font-size:11px;font-weight:600;color:#6b6b80;white-space:nowrap;padding-top:5px;flex-shrink:0;">' + emailClientName(f.client) + ':</span>' : '';
     return '<div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:4px;">'
       + '<input type="checkbox" ' + (f.checked ? 'checked' : '') + ' onchange="emailToggleFinding(' + "'" + svc + "'" + ',' + i + ',this.checked)" style="cursor:pointer;margin-top:5px;flex-shrink:0;">'
+      + clientLabel
       + '<input type="text" value="' + textVal + '" oninput="emailUpdateFindingText(' + "'" + svc + "'" + ',' + i + ',this.value)" '
       + 'style="flex:1;font-size:12px;color:#1a1a2e;font-family:Rubik,sans-serif;border:1px solid transparent;border-radius:6px;padding:3px 6px;background:transparent;outline:none;" '
       + 'onfocus="this.style.borderColor=\'#EBEBEF\';this.style.background=\'#fff\';" onblur="this.style.borderColor=\'transparent\';this.style.background=\'transparent\';">'
@@ -19785,7 +19794,7 @@ async function emailRefreshFindings() {
     var customLines = prevState.filter(function(f){ return (f.id + '').indexOf('custom-') === 0; });
     var findings = candidates.map(function(c) {
       var prev = prevMap[c.id];
-      return { id: c.id, text: (prev && prev.edited) ? prev.text : c.text, checked: prev ? prev.checked : true, edited: prev ? !!prev.edited : false };
+      return { id: c.id, client: c.client || null, text: (prev && prev.edited) ? prev.text : c.text, checked: prev ? prev.checked : true, edited: prev ? !!prev.edited : false };
     }).concat(customLines);
     window._emailFindings[svc] = findings;
     sections.push(emailFindingsSectionHtml(svc, findings));
@@ -19910,6 +19919,26 @@ function emailServiceDescriptor(svc, cutoff, coverage) {
   return EMAIL_SERVICE_LABELS[svc] || svc;
 }
 
+// Groups a service's checked findings by client, merging same-client findings into one combined
+// block (their texts joined with a space -- each is already a complete sentence on its own, so
+// this is purely mechanical concatenation, never invented wording). Per the user's own sample
+// email (KNI's Validation absence-count and heavy-date findings read as one flowing block, not
+// two separate bullets), this is the shape the generated body should produce; findings with no
+// client attribution (New Hires, Leave Credits Validation, custom notes) pass through
+// individually afterward, unmerged, same as before this existed.
+function emailGroupFindingsByClient(findings) {
+  var order = [], byClient = {}, ungrouped = [];
+  findings.forEach(function(f) {
+    if (f.client) {
+      if (!byClient[f.client]) { byClient[f.client] = []; order.push(f.client); }
+      byClient[f.client].push(f.text);
+    } else {
+      ungrouped.push({ client: null, text: f.text });
+    }
+  });
+  return order.map(function(k){ return { client: k, text: byClient[k].join(' ') }; }).concat(ungrouped);
+}
+
 function generateEmail() {
   var poc      = (document.getElementById('email-poc')      || {value:''}).value.trim() || 'there';
   var greeting = (document.getElementById('email-greeting') || {value:''}).value.trim();
@@ -19926,7 +19955,10 @@ function generateEmail() {
   }
 
   function findingsFor(svc) {
-    return (window._emailFindings[svc] || []).filter(function(f){ return f.checked; }).map(function(f){ return f.text; });
+    return (window._emailFindings[svc] || []).filter(function(f){ return f.checked; });
+  }
+  function groupLabel(g) {
+    return g.client ? emailClientName(g.client) + ': ' + g.text : g.text;
   }
 
   var greetLine = greeting ? greeting + '\n\n' : '';
@@ -19941,22 +19973,22 @@ function generateEmail() {
     // One service — plain paragraph intro, then either a single note sentence or a short
     // bullet list if there's more than one finding, matching the single-service emails.
     var svc = services[0];
-    var findings = findingsFor(svc);
+    var groups = emailGroupFindingsByClient(findingsFor(svc));
     var intro = 'Please see the attached ' + emailServiceDescriptor(svc, cutoff, '') + ' for ' + cutoff + (coverage ? ' (Attendance coverage of ' + coverage + ')' : '') + '.';
     body = 'Hi ' + poc + ',\n\n' + greetLine + intro;
-    if (findings.length === 1) {
-      body += '\n\n' + findings[0];
-    } else if (findings.length > 1) {
-      body += '\n\nKindly note of the following:\n' + findings.map(function(f){ return '   \u2022 ' + f; }).join('\n');
+    if (groups.length === 1) {
+      body += '\n\n' + groupLabel(groups[0]);
+    } else if (groups.length > 1) {
+      body += '\n\nKindly note of the following:\n' + groups.map(function(g){ return '   \u2022 ' + groupLabel(g); }).join('\n');
     }
     body += '\n\n' + closing;
   } else {
     // Multiple services — bulleted list, bold-equivalent service name, indented findings.
     var intro2 = 'Please see the attached timekeeping files for ' + cutoff + ' below:';
     var bullets = services.map(function(svc) {
-      var findings = findingsFor(svc);
+      var groups = emailGroupFindingsByClient(findingsFor(svc));
       var head = '\u2022 ' + emailServiceDescriptor(svc, cutoff, coverage);
-      var sub = findings.length ? findings.map(function(f){ return '   \u25e6 ' + f; }).join('\n') : '   \u25e6 No notable findings this cut-off.';
+      var sub = groups.length ? groups.map(function(g){ return '   \u25e6 ' + groupLabel(g); }).join('\n') : '   \u25e6 No notable findings this cut-off.';
       return head + '\n' + sub;
     }).join('\n');
     body = 'Hi ' + poc + ',\n\n' + greetLine + intro2 + '\n\n' + bullets + '\n\n' + closing;
