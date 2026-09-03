@@ -3552,7 +3552,10 @@ function switchTab(tab) {
 
 function openWorkspace(key, keepSwitcher) {
   // Clear task body cache when switching clients
-  if (window.currentWsClient !== key) { _emailSave(); clearAllTaskCache(); window._policyFilterSub = null; }
+  if (window.currentWsClient !== key) {
+    _emailSave(); clearAllTaskCache(); window._policyFilterSub = null;
+    if (typeof emailCloseSnapshotPanel === 'function') emailCloseSnapshotPanel();
+  }
   if (currentUser.roleType !== 'admin' && !currentUser.assignedClients.includes(key)) { showLockToast(); return; }
   if (!clients[key]) {
     // key resolved to something that isn't an actual client (e.g. a group
@@ -19838,6 +19841,24 @@ function emailToggleSnapshotPanel() {
   // initial attribute set, so there's no specificity fight.
   panel.style.transform = willOpen ? 'translateX(0)' : 'translateX(100%)';
   if (willOpen) emailRenderSnapshotPanel();
+}
+
+// Confidentiality guard, not just tidiness: nothing closed this panel on its own when switching
+// to a DIFFERENT client's workspace -- it's a plain CSS transform toggle with no lifecycle tie
+// to which workspace is showing, so leaving it open in one client and navigating to another
+// (even a completely unrelated one, e.g. HDI to Nippon) left the previous client's real task
+// data visibly on screen over the new client's workspace. Confirmed live by the user. Called
+// from openWorkspace's per-client-switch block, the single choke point every client-open path
+// (sidebar, group workspace, switcher, Archives restore, Coverage Pass-Off) already funnels
+// through. Also blanks the panel's rendered body, not just hiding it, so no stale HTML from a
+// previous client sits in the DOM waiting for a slow re-render to overwrite it.
+function emailCloseSnapshotPanel() {
+  var panel = document.getElementById('email-snapshot-panel');
+  if (!panel) return;
+  panel.classList.remove('open');
+  panel.style.transform = 'translateX(100%)';
+  var body = document.getElementById('email-snapshot-body');
+  if (body) body.innerHTML = '';
 }
 
 async function emailRenderSnapshotPanel() {
