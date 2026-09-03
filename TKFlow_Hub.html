@@ -19511,12 +19511,32 @@ function emailFormatMeetingNote(d) {
 }
 
 // ---- Auto-detection per service — each returns candidate {id, text} finding lines ----
-function emailDetectTk() {
+// async for the same reason emailDetectVar is: tkReviewRows only ever gets (re)populated by
+// actually opening/running the Validation task modal THIS session, so a client with a safely
+// finalized, saved Validation run looks like "no absences" here if the modal wasn't reopened --
+// confirmed live (KN showed 8 employees absent Aug 28 in the Task Snapshots panel, which reads
+// the saved task_cutoff_review_state row directly, but nothing in the Findings panel, which
+// only read live tkReviewRows). Falls back per-client to that exact same saved row
+// (archiveBuildValidationSnapshotHtml/data.tkReviewRows is the same field the Snapshots panel
+// itself renders) whenever a client has nothing live in memory.
+async function emailDetectTk() {
   var out = [];
   var tkRows = (typeof tkReviewRows !== 'undefined') ? tkReviewRows : [];
   var cks = emailClientKeys();
   var byClient = {};
   tkRows.forEach(function(r){ var k = r.clientKey || cks[0] || ''; if (!byClient[k]) byClient[k] = []; byClient[k].push(r); });
+  var cksNeedingFetch = cks.filter(function(k){ return !(byClient[k] && byClient[k].length); });
+  for (var i = 0; i < cksNeedingFetch.length; i++) {
+    var k = cksNeedingFetch[i];
+    var companyId = clients[k] && clients[k].companyId;
+    if (!companyId) continue;
+    try {
+      var res = await supabaseClient.from('task_cutoff_review_state').select('*')
+        .eq('company_id', companyId).eq('task_key', 'validation').eq('cutoff_label', getCurrentCutoffLabel(k)).maybeSingle();
+      var saved = (!res.error && res.data && res.data.data && res.data.data.tkReviewRows) || [];
+      if (saved.length) byClient[k] = saved;
+    } catch (err) { /* leave byClient[k] unset -- falls through to "no unusual pattern" below */ }
+  }
   var keysToUse = cks.length ? cks : Object.keys(byClient);
   keysToUse.forEach(function(k) {
     var rows = (byClient[k] || []).filter(function(r){ return r.dates && r.dates.length > 0; });
