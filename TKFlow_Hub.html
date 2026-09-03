@@ -19466,11 +19466,16 @@ function emailPrefillFromClient() {
     greetEl.value = now.getDay() === 5 ? 'Happy Friday!' : (now.getHours() < 12 ? 'Good morning!' : 'Good afternoon!');
   }
 
-  // Payroll cut-off + Attendance coverage dates: from the period containing today -- the same
-  // "current" every task except Variance means (findCurrentCalendarPeriodIdx), not Variance's
-  // own staggered "most recently completed" period.
+  // Payroll cut-off + Attendance coverage dates: from the cutoff that has actually STARTED
+  // (its own first milestone deadline has begun), same rule the Overview/Tasks banner and
+  // getCurrentCutoffLabel (which the Task Snapshots panel below keys off) already use --
+  // NOT findCurrentCalendarPeriodIdx's plain "today falls in this period's raw attendance-
+  // coverage date range" check, which jumps ahead to the next cutoff as soon as its calendar
+  // dates technically overlap today even though that cutoff hasn't really begun yet (confirmed
+  // live on KN: Sept 2nd's attendance range already covered Sept 3rd, but Tasks/Overview
+  // correctly still showed Sept 1st since Sept 2nd's first deadline hadn't started).
   var periods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
-  var idx = (periods.length && typeof findCurrentCalendarPeriodIdx === 'function') ? findCurrentCalendarPeriodIdx(periods) : -1;
+  var idx = (periods.length && typeof findCurrentCutoffStartedIdx === 'function') ? findCurrentCutoffStartedIdx(periods) : -1;
   var p = idx >= 0 ? periods[idx] : null;
   if (p) {
     var cutoffEl = document.getElementById('email-cutoff');
