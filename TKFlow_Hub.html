@@ -3160,7 +3160,7 @@ function openGroupWorkspace(grpKey) {
   window.currentWsGroup = grpKey;
 
   if (subs.length <= 1) {
-    openWorkspace(subs[0] || grpKey);
+    openWorkspace(subs[0] || grpKey, false, true);
     return;
   }
 
@@ -3175,7 +3175,7 @@ function openGroupWorkspace(grpKey) {
   // which the block below then only half-corrected -- it reset CSS classes but never the
   // inline display:block/none styles switchTab() had already set, so the stale tab's content
   // stayed visibly on screen underneath the "corrected" Overview tab button.
-  openWorkspace(subs[0]);
+  openWorkspace(subs[0], false, true);
 
   // Directly activate overview tab and render group overview
   // Do NOT use switchTab (avoids any hook that might override with wrong key)
@@ -3550,10 +3550,21 @@ function switchTab(tab) {
   currentWsTab = tab;
 }
 
-function openWorkspace(key, keepSwitcher) {
+// skipEmailSave: openGroupWorkspace already calls _emailSave() itself, BEFORE it flips
+// window.currentWsGroup to the group being entered -- that's the correct moment to save,
+// since _emailSave() derives its cache key from currentWsGroup/currentWsClient as they stand
+// AT SAVE TIME. If this function's own guard below were to save again after being called from
+// openGroupWorkspace, it would run with currentWsGroup ALREADY pointing at the NEW group while
+// the on-screen fields still hold the OLD group's stale values (nothing has cleared/re-rendered
+// them yet) -- silently overwriting the new group's _emailStore slot with the previous client's
+// real data. Confirmed live: HDI's Email Generator showing Kuehne + Nagel's greeting name,
+// cut-off, and findings; a nickname from Nippon showing up under HDI. Both were this same bug,
+// just surfacing through whichever group happened to be opened right before.
+function openWorkspace(key, keepSwitcher, skipEmailSave) {
   // Clear task body cache when switching clients
   if (window.currentWsClient !== key) {
-    _emailSave(); clearAllTaskCache(); window._policyFilterSub = null;
+    if (!skipEmailSave) _emailSave();
+    clearAllTaskCache(); window._policyFilterSub = null;
     if (typeof emailCloseSnapshotPanel === 'function') emailCloseSnapshotPanel();
   }
   if (currentUser.roleType !== 'admin' && !currentUser.assignedClients.includes(key)) { showLockToast(); return; }
