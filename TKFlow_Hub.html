@@ -7907,6 +7907,7 @@ function renderClientProfile(key) {
         + '<div style="width:36px;height:36px;border-radius:50%;background:#DCFCE7;color:#32CE13;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;">'
         + p.name.split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase() + '</div>'
         + '<div style="flex:1;"><div style="font-size:13px;font-weight:500;color:#1a1a2e;">' + p.name
+        + (p.nickname ? ' <span style="font-size:11px;font-weight:400;color:#9898a6;">(' + p.nickname + ')</span>' : '')
         + (p.contactType ? ' <span style="font-size:10px;font-weight:600;background:#DCFCE7;color:#1F7A0A;padding:2px 8px;border-radius:20px;margin-left:4px;">' + p.contactType + '</span>' : '')
         + '</div>'
         + '<div style="font-size:11px;color:#9898a6;margin-top:2px;">' + p.role + '</div>'
@@ -19450,20 +19451,25 @@ function emailPrefillFromClient() {
 
   // Greeting name: prefer a Primary Contact POC (group-shared list first, then each sub's own
   // list, matching the display order in Client Profile), else just the first POC on file.
+  // Prefers the POC's own nickname over their full name -- per the user, addressing someone by
+  // their entire legal name in a "Hi ___," greeting reads stiffly; nickname is optional per POC
+  // (see the POC modal), so this falls back to the full name whenever one isn't set.
   var pocEl = document.getElementById('email-poc');
   if (pocEl && !pocEl.value) {
     var candidates = (typeof _pocGet === 'function' ? _pocGet() : []).slice();
     cks.forEach(function(ck){ candidates = candidates.concat((clients[ck] && clients[ck].pocs) || []); });
     var chosen = candidates.filter(function(p){ return p.contactType === 'Primary Contact'; })[0] || candidates[0];
-    if (chosen && chosen.name) pocEl.value = chosen.name;
+    if (chosen && (chosen.nickname || chosen.name)) pocEl.value = chosen.nickname || chosen.name;
   }
 
-  // Greeting line: simple time-of-day/day-of-week default -- freely editable before sending,
-  // same as every other prefilled field here.
+  // Greeting line: in the morning, greet with the day of the week (any day, not just Friday);
+  // in the afternoon, just "Good afternoon!" -- per the user, "Happy Tuesday!" reads fine as a
+  // morning greeting but "Happy Tuesday!" at 3pm doesn't. Freely editable before sending, same
+  // as every other prefilled field here.
   var greetEl = document.getElementById('email-greeting');
   if (greetEl && !greetEl.value) {
     var now = new Date();
-    greetEl.value = now.getDay() === 5 ? 'Happy Friday!' : (now.getHours() < 12 ? 'Good morning!' : 'Good afternoon!');
+    greetEl.value = now.getHours() < 12 ? ('Happy ' + EMAIL_WEEKDAY_NAMES[now.getDay()] + '!') : 'Good afternoon!';
   }
 
   // Payroll cut-off + Attendance coverage dates: from the cutoff that has actually STARTED
@@ -19573,9 +19579,10 @@ async function emailDetectTk() {
     rowsWithAbsentDates.forEach(function(r) {
       r.absentDates.forEach(function(d) { countByDate[d] = (countByDate[d] || 0) + 1; });
     });
-    var heavyDates = Object.keys(countByDate).filter(function(d) { return countByDate[d] > 3; });
+    var heavyDates = Object.keys(countByDate).filter(function(d) { return countByDate[d] > 4; });
     if (heavyDates.length) {
-      out.push({ id: 'tk-heavy-' + k, client: k, text: 'More than 3 employees were absent on ' + heavyDates.join(', ') + '.' });
+      var heavyText = heavyDates.map(function(d){ return countByDate[d] + ' employees were absent on ' + d; }).join('; ') + '.';
+      out.push({ id: 'tk-heavy-' + k, client: k, text: heavyText });
     }
   });
   return out;
@@ -19960,6 +19967,20 @@ function generateEmail() {
   function groupLabel(g) {
     return g.client ? emailClientName(g.client) + ': ' + g.text : g.text;
   }
+  // Variance's "Previous Attendance" coverage is NOT the same period as the Payroll cut-off
+  // field's coverage above -- that field shows the period containing the CURRENT cut-off, while
+  // Variance reports on the most recently COMPLETED period, which is one cycle behind (see
+  // findMostRecentlyCompletedPeriodIdx's own comment -- "completed" means the payout has
+  // actually happened, not just that the attendance window ended, so it isn't reliably just
+  // "the period right before current" either). Confirmed by the user: current Aug 16-31 should
+  // show Aug 1-15 for Variance, not the same Aug 16-31 the other services show.
+  function coverageForService(svc) {
+    if (svc !== 'var') return coverage;
+    var periods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
+    var idx = (periods.length && typeof findMostRecentlyCompletedPeriodIdx === 'function') ? findMostRecentlyCompletedPeriodIdx(periods) : -1;
+    var p = idx >= 0 ? periods[idx] : null;
+    return p ? emailFormatAttCovFull(p.attCov, p.yr) : coverage;
+  }
 
   var greetLine = greeting ? greeting + '\n\n' : '';
   var closingParts = [];
@@ -19974,7 +19995,8 @@ function generateEmail() {
     // bullet list if there's more than one finding, matching the single-service emails.
     var svc = services[0];
     var groups = emailGroupFindingsByClient(findingsFor(svc));
-    var intro = 'Please see the attached ' + emailServiceDescriptor(svc, cutoff, '') + ' for ' + cutoff + (coverage ? ' (Attendance coverage of ' + coverage + ')' : '') + '.';
+    var svcCoverage = coverageForService(svc);
+    var intro = 'Please see the attached ' + emailServiceDescriptor(svc, cutoff, '') + ' for ' + cutoff + (svcCoverage ? ' (Attendance coverage of ' + svcCoverage + ')' : '') + '.';
     body = 'Hi ' + poc + ',\n\n' + greetLine + intro;
     if (groups.length === 1) {
       body += '\n\n' + groupLabel(groups[0]);
@@ -19987,7 +20009,7 @@ function generateEmail() {
     var intro2 = 'Please see the attached timekeeping files for ' + cutoff + ' below:';
     var bullets = services.map(function(svc) {
       var groups = emailGroupFindingsByClient(findingsFor(svc));
-      var head = '\u2022 ' + emailServiceDescriptor(svc, cutoff, coverage);
+      var head = '\u2022 ' + emailServiceDescriptor(svc, cutoff, coverageForService(svc));
       var sub = groups.length ? groups.map(function(g){ return '   \u25e6 ' + groupLabel(g); }).join('\n') : '   \u25e6 No notable findings this cut-off.';
       return head + '\n' + sub;
     }).join('\n');
@@ -20404,6 +20426,7 @@ function searchInDoc() {
         <div><label class="task-field-label">Full name *</label><input class="task-input" type="text" id="poc-name" placeholder="e.g. France Reyes"></div>
         <div><label class="task-field-label">Position / title</label><input class="task-input" type="text" id="poc-position" placeholder="e.g. Timekeeping Officer"></div>
       </div>
+      <div style="margin-bottom:12px;"><label class="task-field-label">Nickname</label><input class="task-input" type="text" id="poc-nickname" placeholder="e.g. France -- used in email greetings instead of the full name" style="width:100%;"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
         <div><label class="task-field-label">Email address *</label><input class="task-input" type="email" id="poc-email" placeholder="email@company.com"></div>
         <div><label class="task-field-label">Phone / mobile</label><input class="task-input" type="text" id="poc-phone" placeholder="+63 9XX XXX XXXX"></div>
@@ -20672,7 +20695,7 @@ function _pocTypeOtherToggle() {
 }
 
 function openAddPOCModal() {
-  ['poc-name','poc-position','poc-email','poc-phone','poc-notes','poc-type-other'].forEach(id => {
+  ['poc-name','poc-nickname','poc-position','poc-email','poc-phone','poc-notes','poc-type-other'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
@@ -20692,6 +20715,7 @@ function openEditPOCModal(scope, key, idx) {
   var poc = scope === 'group' ? (window._pocStore[key] || [])[idx] : ((clients[key] || {}).pocs || [])[idx];
   if (!poc) return;
   document.getElementById('poc-name').value = poc.name || '';
+  document.getElementById('poc-nickname').value = poc.nickname || '';
   document.getElementById('poc-position').value = poc.role || '';
   document.getElementById('poc-email').value = poc.email || '';
   document.getElementById('poc-phone').value = poc.phone || '';
@@ -20747,6 +20771,7 @@ function _replacePocInMemory(id, freshData, newScope, newKey) {
 
 async function savePOC() {
   const name        = document.getElementById('poc-name').value.trim();
+  const nickname    = document.getElementById('poc-nickname').value.trim();
   const position    = document.getElementById('poc-position').value.trim();
   const email       = document.getElementById('poc-email').value.trim();
   const phone       = document.getElementById('poc-phone').value.trim();
@@ -20764,7 +20789,7 @@ async function savePOC() {
   var grpKey = window.currentWsGroup;
   var grp = grpKey && clientGroups[grpKey];
   var row = {
-    name: name, role: position, phone: phone, phone_channel: phoneChannel, contact_type: type,
+    name: name, nickname: nickname || null, role: position, phone: phone, phone_channel: phoneChannel, contact_type: type,
     email: email, notes: notes, scope_type: isGroupScope ? 'group' : 'company',
     company_id: isGroupScope ? null : ((clients[scopeVal] || {}).companyId || null),
     group_id: isGroupScope ? ((grp && grp.groupId) || null) : null
@@ -20772,7 +20797,7 @@ async function savePOC() {
   if (isGroupScope && !row.group_id) { showToast('This client has no group to share a POC across', '#e67e00'); return; }
   if (!isGroupScope && !row.company_id) { showToast('Could not resolve that subcompany', '#e67e00'); return; }
 
-  var localPoc = { name: name, role: position, phone: phone, phoneChannel: phoneChannel, contactType: type, email: email, notes: notes };
+  var localPoc = { name: name, nickname: nickname, role: position, phone: phone, phoneChannel: phoneChannel, contactType: type, email: email, notes: notes };
   var newKey = isGroupScope ? _calKey() : scopeVal;
 
   if (editId) {
@@ -26590,7 +26615,7 @@ async function loadPocsFromSupabase() {
   var byCompanySk = {}, byGroupCode = {};
   (res.data || []).forEach(function(row) {
     var poc = {
-      _id: row.id, name: row.name, role: row.role || '', phone: row.phone || '',
+      _id: row.id, name: row.name, nickname: row.nickname || '', role: row.role || '', phone: row.phone || '',
       phoneChannel: row.phone_channel || '', contactType: row.contact_type || '',
       email: row.email || '', notes: row.notes || ''
     };
