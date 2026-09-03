@@ -19549,21 +19549,30 @@ async function emailDetectTk() {
   }
   var keysToUse = cks.length ? cks : Object.keys(byClient);
   keysToUse.forEach(function(k) {
-    var rows = (byClient[k] || []).filter(function(r){ return r.dates && r.dates.length > 0; });
+    // r.dates mixes in late/undertime-only dates -- runValidation pushes into the SAME dates
+    // array whenever isLate || isUndertime (line ~15671), independent of whether that day was
+    // also an actual absence (line ~15709 pushes again for that). Only r.evidence[].flagType
+    // distinguishes 'absent' from 'late_undertime', so absence-counting has to filter through
+    // evidence, not just check whether dates is non-empty -- confirmed live: without this, an
+    // employee who was only ever late/undertime (never absent) still counted here.
+    var rowsWithAbsentDates = (byClient[k] || []).map(function(r) {
+      var absentDates = (r.evidence || []).filter(function(e){ return e.flagType === 'absent'; }).map(function(e){ return e.date; });
+      return { name: r.name, absentDates: absentDates };
+    }).filter(function(r){ return r.absentDates.length > 0; });
     var name = emailClientName(k);
-    if (!rows.length) {
+    if (!rowsWithAbsentDates.length) {
       out.push({ id: 'tk-' + k, text: name + ': No unusual pattern detected among the causes of absences.' });
     } else {
       // Just the total -- per user feedback, listing every distinct remark type with its own
       // count read as "every reason of findings/absence remarks was written" rather than a
       // useful summary.
-      out.push({ id: 'tk-' + k, text: name + ': About ' + rows.length + ' employee(s) were captured with absences this cut-off.' });
+      out.push({ id: 'tk-' + k, text: name + ': About ' + rowsWithAbsentDates.length + ' employee(s) were captured with absences this cut-off.' });
     }
     // Dates where more than 3 employees were absent on the same day -- a pattern worth calling
     // out separately from the plain headcount above.
     var countByDate = {};
-    rows.forEach(function(r) {
-      (r.dates || []).forEach(function(d) { countByDate[d] = (countByDate[d] || 0) + 1; });
+    rowsWithAbsentDates.forEach(function(r) {
+      r.absentDates.forEach(function(d) { countByDate[d] = (countByDate[d] || 0) + 1; });
     });
     var heavyDates = Object.keys(countByDate).filter(function(d) { return countByDate[d] > 3; });
     if (heavyDates.length) {
