@@ -19524,6 +19524,16 @@ function emailDetectTk() {
       // useful summary.
       out.push({ id: 'tk-' + k, text: name + ': About ' + rows.length + ' employee(s) were captured with absences this cut-off.' });
     }
+    // Dates where more than 3 employees were absent on the same day -- a pattern worth calling
+    // out separately from the plain headcount above.
+    var countByDate = {};
+    rows.forEach(function(r) {
+      (r.dates || []).forEach(function(d) { countByDate[d] = (countByDate[d] || 0) + 1; });
+    });
+    var heavyDates = Object.keys(countByDate).filter(function(d) { return countByDate[d] > 3; });
+    if (heavyDates.length) {
+      out.push({ id: 'tk-heavy-' + k, text: name + ': More than 3 employees were absent on ' + heavyDates.join(', ') + '.' });
+    }
   });
   return out;
 }
@@ -19555,12 +19565,21 @@ async function emailDetectVar() {
     window.varResults = vr;
   }
   Object.keys(vr).forEach(function(p) {
-    var wv = (vr[p].attData || []).filter(function(e){ return e.hasVar; });
+    var attData = vr[p].attData || [];
+    var wv = attData.filter(function(e){ return e.hasVar; });
     if (!wv.length) {
       out.push({ id: 'var-' + p, text: p + ': No variances detected.' });
     } else {
       var names = wv.map(function(e){ return (e.name || e.id).split(',')[0]; });
       out.push({ id: 'var-' + p, text: p + ': ' + (names.length <= 3 ? names.join(', ') : names.slice(0,3).join(', ') + ', and ' + (names.length - 3) + ' more') + ' have variance(s) detected.' });
+    }
+    // Deductions specifically -- same negative-sum-across-the-diff-columns rule varRenderResultCard
+    // itself uses to split additions vs. deductions (see line ~11184), recomputed here since the
+    // Supabase-fallback fetch path above only rebuilds attData, not the additions/deductions split.
+    var deductions = wv.filter(function(e){ return (e.row || []).slice(2, 35).reduce(function(s, v){ return s + (v || 0); }, 0) < 0; });
+    if (deductions.length) {
+      var dNames = deductions.map(function(e){ return (e.name || e.id).split(',')[0]; });
+      out.push({ id: 'var-ded-' + p, text: p + ': ' + deductions.length + ' deduction(s) flagged for ' + (dNames.length <= 3 ? dNames.join(', ') : dNames.slice(0,3).join(', ') + ', and ' + (dNames.length - 3) + ' more') + '.' });
     }
   });
   if (!out.length) out.push({ id: 'var-none', text: 'No variance data available yet for this client.' });
@@ -19576,9 +19595,21 @@ async function emailDetectVar() {
 function emailDetectDisp() {
   var allDisp = (typeof allDisputes !== 'undefined') ? allDisputes : [];
   var cks = emailClientKeys();
-  var cd = allDisp.filter(function(d){ return cks.indexOf(d.client) >= 0 && d.attendancePeriod === 'current'; });
+  var clientDisp = allDisp.filter(function(d){ return cks.indexOf(d.client) >= 0; });
+  var cd = clientDisp.filter(function(d){ return d.attendancePeriod === 'current'; });
   var op = cd.filter(function(d){ return d.status !== 'dst-closed'; }).length;
-  return [{ id: 'disp-count', text: 'A total of ' + cd.length + ' ticket' + (cd.length !== 1 ? 's were' : ' was') + ' received this cut-off, and ' + op + ' ticket' + (op !== 1 ? 's remain' : ' remains') + ' open.' }];
+  var closed = cd.filter(function(d){ return d.status === 'dst-closed'; }).length;
+  // "Open as a whole" is NOT scoped to attendancePeriod === 'current' -- unlike the other two
+  // counts, this one is meant to span every ticket on file for these clients, not just the ones
+  // about this cut-off. There's no stored timestamp for when a ticket's status actually flipped
+  // to Closed, so "closed this cut-off" above is scoped to this cut-off's own tickets (received
+  // this cut-off AND now Closed) rather than a literal "closed during this date range" count --
+  // per the user, this approximation is fine.
+  var openOverall = clientDisp.filter(function(d){ return d.status !== 'dst-closed'; }).length;
+  return [
+    { id: 'disp-count', text: 'A total of ' + cd.length + ' ticket' + (cd.length !== 1 ? 's were' : ' was') + ' received this cut-off, ' + closed + ' ticket' + (closed !== 1 ? 's were' : ' was') + ' closed this cut-off, and ' + op + ' ticket' + (op !== 1 ? 's remain' : ' remains') + ' open from this cut-off.' },
+    { id: 'disp-open-overall', text: openOverall + ' ticket' + (openOverall !== 1 ? 's remain' : ' remains') + ' open overall across all cut-offs.' }
+  ];
 }
 
 function emailDetectNh() {
