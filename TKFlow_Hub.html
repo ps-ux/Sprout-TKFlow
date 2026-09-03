@@ -19511,20 +19511,30 @@ function emailFormatMeetingNote(d) {
 }
 
 // ---- Auto-detection per service — each returns candidate {id, text} finding lines ----
-// async for the same reason emailDetectVar is: tkReviewRows only ever gets (re)populated by
-// actually opening/running the Validation task modal THIS session, so a client with a safely
-// finalized, saved Validation run looks like "no absences" here if the modal wasn't reopened --
-// confirmed live (KN showed 8 employees absent Aug 28 in the Task Snapshots panel, which reads
-// the saved task_cutoff_review_state row directly, but nothing in the Findings panel, which
-// only read live tkReviewRows). Falls back per-client to that exact same saved row
-// (archiveBuildValidationSnapshotHtml/data.tkReviewRows is the same field the Snapshots panel
-// itself renders) whenever a client has nothing live in memory.
+// async for the same reason emailDetectVar is: needs a Supabase fallback for a client with a
+// safely finalized, saved Validation run that hasn't been reopened THIS session (see the
+// tkBatchGroups fallback loop below) -- confirmed live (KN showed 8 employees absent Aug 28 in
+// the Task Snapshots panel, which reads the saved task_cutoff_review_state row directly, but
+// nothing in the Findings panel).
+//
+// Sources live data from tkBatchGroups, NOT the flat shared tkReviewRows array -- tkReviewRows
+// is a single scratch buffer shared across every subcompany's batch group (only ever holding
+// whichever ONE group is currently "active"), and its individual row objects carry no clientKey
+// at all. The old code defaulted every unattributed row to cks[0] (the group's FIRST sub), which
+// silently mislabeled whichever sub's data actually happened to be live -- confirmed live on KN:
+// KNLSI's own absence data was showing up in the Findings panel labeled "KNI" simply because KNI
+// is listed first in clientGroups.KN.subs. tkBatchGroups doesn't have this problem: each entry
+// carries its OWN clientKey, and renderTKReview() keeps tkBatchGroups[activeIdx].tkReviewRows
+// continuously synced to the live array on every edit (see its own comment), so every
+// subcompany batch-processed or reviewed this session is correctly attributed here.
 async function emailDetectTk() {
   var out = [];
-  var tkRows = (typeof tkReviewRows !== 'undefined') ? tkReviewRows : [];
   var cks = emailClientKeys();
   var byClient = {};
-  tkRows.forEach(function(r){ var k = r.clientKey || cks[0] || ''; if (!byClient[k]) byClient[k] = []; byClient[k].push(r); });
+  var tkGroups = (typeof tkBatchGroups !== 'undefined') ? tkBatchGroups : [];
+  tkGroups.forEach(function(g) {
+    if (g.clientKey && g.tkReviewRows && g.tkReviewRows.length) byClient[g.clientKey] = g.tkReviewRows;
+  });
   var cksNeedingFetch = cks.filter(function(k){ return !(byClient[k] && byClient[k].length); });
   for (var i = 0; i < cksNeedingFetch.length; i++) {
     var k = cksNeedingFetch[i];
@@ -19563,49 +19573,77 @@ async function emailDetectTk() {
   return out;
 }
 
-// window.varResults only ever gets (re)populated by actually opening/restoring the Variance
-// Analysis task modal this session (varRenderResultCard) -- going straight from a reload to
-// the Email tab without doing that left this looking empty even when a finalized Variance run
-// was safely sitting in Supabase, wrongly reporting "no variance data available" and making it
-// look like reprocessing was needed. Falls back to fetching directly from the same
-// task_cutoff_review_state rows Variance itself restores from, scoped per sub's own companyId
-// (Variance snapshots are saved per individual sub, not per group).
+// Sources live data from varBatchGroups' own per-cutoff co._attData/co._payout/co._finalized,
+// NOT window.varResults -- that global is keyed ONLY by payout-period label, shared across
+// every client in the workspace, with no client attribution on the object OR on individual
+// attData rows. Two subs in the same group are typically on the same payroll calendar, so it's
+// entirely normal for KNI and KNLSI to both finalize a run under the identical payout label --
+// when that happens, the second client processed simply overwrote the first's entry in the
+// shared object, silently dropping that client's findings with no visible sign anything was
+// wrong (same underlying flaw as the tk cross-contamination bug above, just harder to notice
+// since nothing gets mislabeled -- it just vanishes). varBatchGroups doesn't have this problem:
+// each entry carries its OWN clientKey, and each of its cutoffs caches its OWN _attData
+// independent of every other group's.
 async function emailDetectVar() {
   var out = [];
-  var vr = window.varResults || {};
-  if (!Object.keys(vr).length) {
-    var cks = emailClientKeys();
-    for (var i = 0; i < cks.length; i++) {
-      var companyId = clients[cks[i]] && clients[cks[i]].companyId;
-      if (!companyId) continue;
+  var cks = emailClientKeys();
+  var byClient = {}; // k -> [{payout, attData}, ...]
+  var varGroups = (typeof varBatchGroups !== 'undefined') ? varBatchGroups : [];
+  varGroups.forEach(function(g) {
+    if (!g.clientKey) return;
+    (g.cutoffs || []).forEach(function(co) {
+      if (co._attData === undefined || !co._finalized) return;
+      if (!byClient[g.clientKey]) byClient[g.clientKey] = [];
+      byClient[g.clientKey].push({ payout: co._payout, attData: co._attData });
+    });
+  });
+  // window.varResults only ever gets (re)populated by actually opening/restoring the Variance
+  // Analysis task modal this session -- going straight from a reload to the Email tab without
+  // doing that left this looking empty even when a finalized Variance run was safely sitting in
+  // Supabase. Falls back per-client (own companyId, own byClient[k] bucket -- never merged with
+  // any other client's rows) to the same task_cutoff_review_state rows Variance itself restores
+  // from.
+  var cksNeedingFetch = cks.filter(function(k){ return !(byClient[k] && byClient[k].length); });
+  for (var i = 0; i < cksNeedingFetch.length; i++) {
+    var k = cksNeedingFetch[i];
+    var companyId = clients[k] && clients[k].companyId;
+    if (!companyId) continue;
+    try {
       var res = await supabaseClient.from('task_cutoff_review_state').select('*')
         .eq('company_id', companyId).eq('task_key', 'variance');
       if (res.error || !res.data) continue;
       res.data.forEach(function(row) {
         var data = row.data || {};
         if (!data.finalized) return;
-        vr[row.cutoff_label] = { attData: data.attData || [], finalized: true };
+        if (!byClient[k]) byClient[k] = [];
+        byClient[k].push({ payout: row.cutoff_label, attData: data.attData || [] });
       });
-    }
-    window.varResults = vr;
+    } catch (err) { /* leave byClient[k] unset for this client */ }
   }
-  Object.keys(vr).forEach(function(p) {
-    var attData = vr[p].attData || [];
-    var wv = attData.filter(function(e){ return e.hasVar; });
-    if (!wv.length) {
-      out.push({ id: 'var-' + p, text: p + ': No variances detected.' });
-    } else {
-      var names = wv.map(function(e){ return (e.name || e.id).split(',')[0]; });
-      out.push({ id: 'var-' + p, text: p + ': ' + (names.length <= 3 ? names.join(', ') : names.slice(0,3).join(', ') + ', and ' + (names.length - 3) + ' more') + ' have variance(s) detected.' });
-    }
-    // Deductions specifically -- same negative-sum-across-the-diff-columns rule varRenderResultCard
-    // itself uses to split additions vs. deductions (see line ~11184), recomputed here since the
-    // Supabase-fallback fetch path above only rebuilds attData, not the additions/deductions split.
-    var deductions = wv.filter(function(e){ return (e.row || []).slice(2, 35).reduce(function(s, v){ return s + (v || 0); }, 0) < 0; });
-    if (deductions.length) {
-      var dNames = deductions.map(function(e){ return (e.name || e.id).split(',')[0]; });
-      out.push({ id: 'var-ded-' + p, text: p + ': ' + deductions.length + ' deduction(s) flagged for ' + (dNames.length <= 3 ? dNames.join(', ') : dNames.slice(0,3).join(', ') + ', and ' + (dNames.length - 3) + ' more') + '.' });
-    }
+
+  var keysToUse = cks.length ? cks : Object.keys(byClient);
+  keysToUse.forEach(function(k) {
+    var name = emailClientName(k);
+    (byClient[k] || []).forEach(function(entry) {
+      var p = entry.payout;
+      var attData = entry.attData || [];
+      var label = name + ' — ' + p;
+      var wv = attData.filter(function(e){ return e.hasVar; });
+      if (!wv.length) {
+        out.push({ id: 'var-' + k + '-' + p, text: label + ': No variances detected.' });
+      } else {
+        var names = wv.map(function(e){ return (e.name || e.id).split(',')[0]; });
+        out.push({ id: 'var-' + k + '-' + p, text: label + ': ' + (names.length <= 3 ? names.join(', ') : names.slice(0,3).join(', ') + ', and ' + (names.length - 3) + ' more') + ' have variance(s) detected.' });
+      }
+      // Deductions specifically -- same negative-sum-across-the-diff-columns rule varRenderResultCard
+      // itself uses to split additions vs. deductions (see line ~11184), recomputed here since the
+      // Supabase-fallback fetch path above only rebuilds attData, not the additions/deductions split.
+      var deductions = wv.filter(function(e){ return (e.row || []).slice(2, 35).reduce(function(s, v){ return s + (v || 0); }, 0) < 0; });
+      if (deductions.length) {
+        var dNames = deductions.map(function(e){ return (e.name || e.id).split(',')[0]; });
+        out.push({ id: 'var-ded-' + k + '-' + p, text: label + ': ' + deductions.length + ' deduction(s) flagged for ' + (dNames.length <= 3 ? dNames.join(', ') : dNames.slice(0,3).join(', ') + ', and ' + (dNames.length - 3) + ' more') + '.' });
+      }
+    });
   });
   if (!out.length) out.push({ id: 'var-none', text: 'No variance data available yet for this client.' });
   return out;
