@@ -19661,20 +19661,39 @@ async function emailDetectVar() {
 // "This cut-off" was counting every ticket ever logged for the client, with zero regard for
 // which reporting period the ticket was actually about -- a client's dispute count only ever
 // grew, never resetting between cut-offs, and mixed tickets from genuinely different periods
-// into one number. Scoped to attendancePeriod === 'current', same convention Payroll
-// Instructions already uses to split current-vs-previous-period tickets (attendancePeriod
-// defaults to 'previous' unless a ticket is explicitly marked current).
+// into one number.
+//
+// Was scoped to attendancePeriod === 'current', on the assumption that was "the same
+// convention Payroll Instructions already uses to split current-vs-previous-period tickets" --
+// true when this was written, but Payroll Instructions was fully rebuilt per-line since
+// (a0e01bd-88aa17e, 2026-09-01): a ticket's PI lines each carry their OWN attendancePeriod now
+// (which payout THAT line's correction targets), and the old ticket-level d.attendancePeriod
+// field it replaced is no longer the thing driving current-vs-previous anywhere else in the
+// app (see dsPiRowsForTicket's own comment) -- confirmed live, this was producing wrong
+// received/closed counts. attendancePeriod was never actually "which cut-off was this ticket
+// received in" anyway, even before that rework -- it's a payroll-scoping concept, not an
+// intake-timing one. dtmReceivedCutoffLabel(d) is the real, already-established answer to
+// "which cut-off was this ticket received in": it derives the period from the ticket's own
+// Email Received timestamp against the real calendar, exactly the fact this finding needs.
 function emailDetectDisp() {
   var allDisp = (typeof allDisputes !== 'undefined') ? allDisputes : [];
   var cks = emailClientKeys();
   var clientDisp = allDisp.filter(function(d){ return cks.indexOf(d.client) >= 0; });
-  var cd = clientDisp.filter(function(d){ return d.attendancePeriod === 'current'; });
+
+  var realPeriods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
+  var curIdx = (realPeriods.length && typeof findCurrentCutoffStartedIdx === 'function') ? findCurrentCutoffStartedIdx(realPeriods) : -1;
+  var curP = curIdx >= 0 ? realPeriods[curIdx] : null;
+  var currentLabel = curP ? (curP.monthName + ' ' + (curP.period === 1 ? '1st' : '2nd')) : '';
+
+  var cd = currentLabel ? clientDisp.filter(function(d) {
+    return (typeof dtmReceivedCutoffLabel === 'function' ? dtmReceivedCutoffLabel(d) : '') === currentLabel;
+  }) : [];
   var op = cd.filter(function(d){ return d.status !== 'dst-closed'; }).length;
   var closed = cd.filter(function(d){ return d.status === 'dst-closed'; }).length;
-  // "Open as a whole" is NOT scoped to attendancePeriod === 'current' -- unlike the other two
-  // counts, this one is meant to span every ticket on file for these clients, not just the ones
-  // about this cut-off. There's no stored timestamp for when a ticket's status actually flipped
-  // to Closed, so "closed this cut-off" above is scoped to this cut-off's own tickets (received
+  // "Open as a whole" is NOT scoped to the current cut-off -- unlike the other two counts, this
+  // one is meant to span every ticket on file for these clients, not just the ones received
+  // this cut-off. There's no stored timestamp for when a ticket's status actually flipped to
+  // Closed, so "closed this cut-off" above is scoped to this cut-off's own tickets (received
   // this cut-off AND now Closed) rather than a literal "closed during this date range" count --
   // per the user, this approximation is fine.
   var openOverall = clientDisp.filter(function(d){ return d.status !== 'dst-closed'; }).length;
