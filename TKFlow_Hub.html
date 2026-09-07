@@ -23915,11 +23915,15 @@ function lcvRebuildComputed() {
     if (!t.confirmed || !t.confirmedDays) return;
     var normTicket = lcvNormId(t.empNo);
     if (!normTicket) return;
+    // Prefer the analyst's own remark (e.g. the dates this VL covers) over the raw ticket
+    // number for anything that ends up in the Summary tab's Remarks column -- an auto-
+    // generated id like "INV-74mdft" means nothing to whoever reads the final export.
+    var display = (t.remarks && t.remarks.trim()) || t.id;
     d.rawEmployees.forEach(function(e) {
       if (lcvNormId(e.id) === normTicket) {
         addbackByEmp[e.id] = (addbackByEmp[e.id] || 0) + t.confirmedDays;
         if (!ticketIdsByEmp[e.id]) ticketIdsByEmp[e.id] = [];
-        if (t.id) ticketIdsByEmp[e.id].push(t.id);
+        if (display) ticketIdsByEmp[e.id].push(display);
       }
     });
   });
@@ -24082,6 +24086,17 @@ function lcvUnconfirmManualVL(idx) {
   d.manualVLTickets[idx].confirmed = false;
   lcvRebuildComputed();
   lcvSwitchPreviewTab('manualvl');
+}
+
+// Free-text remark per Manual VL entry (e.g. which dates it covers) — this is what shows up
+// in the Summary tab's Remarks column once confirmed, in place of the auto-generated ticket
+// number, which is meaningless to anyone reading the final export. Deliberately only calls
+// lcvRebuildComputed() (not a full tab re-render) so typing doesn't lose input focus.
+function lcvUpdateManualVLRemarks(idx, value) {
+  var d = window._lcvPreviewData;
+  if (!d || !d.manualVLTickets || !d.manualVLTickets[idx]) return;
+  d.manualVLTickets[idx].remarks = value;
+  lcvRebuildComputed();
 }
 
 // ── Consolidated Report (multiple subcompanies in one file) ────────────────────────────────
@@ -24658,6 +24673,8 @@ function lcvSwitchPreviewTab(tab) {
               + '</div>'
               + '<div style="font-size:11px;color:#6b6b80;margin-bottom:8px;">' + (t.details || '') + '</div>'
               + '<div style="font-size:11px;color:#1a1a2e;margin-bottom:8px;"><strong>VLs Filed (raw):</strong> ' + (t.rawAmount || '\u2014') + (t.suggestedDays === null ? ' <span style="color:#e67e00;">\u2014 ambiguous, enter manually</span>' : '') + '</div>'
+              + '<div style="margin-bottom:8px;"><label style="font-size:11px;color:#6b6b80;display:block;margin-bottom:3px;">Remarks (e.g. which dates this VL covers) \u2014 shown in the Summary tab\'s Remarks column instead of the ticket number:</label>'
+                + '<input type="text" value="' + (t.remarks || '').replace(/"/g, '&quot;') + '" oninput="lcvUpdateManualVLRemarks(' + idx + ', this.value)" placeholder="e.g. Aug 3\u20134, 2026" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #EBEBEF;border-radius:7px;font-size:12px;font-family:Rubik,sans-serif;"></div>'
               + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
               + (t.confirmed
                   ? '<span style="font-size:12px;color:#1F7A0A;font-weight:600;"><i class="ti ti-circle-check" style="font-size:13px;"></i> Confirmed: +' + t.confirmedDays + ' day(s) added back</span>'
