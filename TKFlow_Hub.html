@@ -1800,7 +1800,7 @@ function signInWithGoogle() {
               </div>
               <div>
                 <div class="field-label">Factor Rate per Payroll</div>
-                <input type="number" id="lcv-factorrate" class="modal-input" style="width:100%;" placeholder="e.g. 24" value="24">
+                <input type="number" id="lcv-factorrate" class="modal-input" style="width:100%;" placeholder="e.g. 261" value="261">
               </div>
               <div>
                 <div class="field-label">Nontaxable Threshold (days)</div>
@@ -24129,7 +24129,7 @@ function lcvOpenConsolUploadModal() {
       + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:10px;">'
       + '<div><div class="field-label">Year</div><input type="number" id="lcv-c-year-' + sk + '" class="modal-input" style="width:100%;" value="' + year + '"></div>'
       + '<div><div class="field-label">Cut-off</div><input type="date" id="lcv-c-cutoff-' + sk + '" class="modal-input" style="width:100%;"></div>'
-      + '<div><div class="field-label">Factor Rate</div><input type="number" id="lcv-c-factorrate-' + sk + '" class="modal-input" style="width:100%;" value="24"></div>'
+      + '<div><div class="field-label">Factor Rate</div><input type="number" id="lcv-c-factorrate-' + sk + '" class="modal-input" style="width:100%;" value="261"></div>'
       + '<div><div class="field-label">Threshold</div><input type="number" id="lcv-c-threshold-' + sk + '" class="modal-input" style="width:100%;" value="10"></div>'
       + '</div>'
       + '<div class="task-dz" id="lcv-c-dz-leave-' + sk + '" onclick="document.getElementById(\'lcv-c-f-leave-' + sk + '\').click()" ondragover="return dzDragOver(event)" ondragleave="dzDragLeave(event)" ondrop="dzDrop(event,\'lcv-c-f-leave-' + sk + '\')" style="margin-bottom:6px;">'
@@ -24190,7 +24190,7 @@ function lcvRunConsolPreview() {
     var f = window._lcvConsolFiles[sk];
     var fields = {
       year: parseFloat(document.getElementById('lcv-c-year-' + sk).value) || new Date().getFullYear(),
-      factorRate: parseFloat(document.getElementById('lcv-c-factorrate-' + sk).value) || 24,
+      factorRate: parseFloat(document.getElementById('lcv-c-factorrate-' + sk).value) || 261,
       threshold: parseFloat(document.getElementById('lcv-c-threshold-' + sk).value) || 10,
     };
     return lcvParseFilesFor(f.emp, f.leave, f.att).then(function(parsed) {
@@ -24446,7 +24446,7 @@ function lcvRunPreview() {
   var selectedSubKey = document.getElementById('lcv-company').value || lcvCurrentClientKey();
   var company = (clients[selectedSubKey] && clients[selectedSubKey].name) || selectedSubKey || 'Client';
   var year = document.getElementById('lcv-year').value || new Date().getFullYear();
-  var factorRate = parseFloat(document.getElementById('lcv-factorrate').value) || 24;
+  var factorRate = parseFloat(document.getElementById('lcv-factorrate').value) || 261;
   var threshold = parseFloat(document.getElementById('lcv-threshold').value) || 10;
 
   var btn = document.getElementById('lcv-preview-btn');
