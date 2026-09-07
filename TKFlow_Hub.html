@@ -1796,15 +1796,7 @@ function signInWithGoogle() {
               </div>
               <div>
                 <div class="field-label">Year</div>
-                <input type="number" id="lcv-year" class="modal-input" style="width:100%;" placeholder="2025" value="2025">
-              </div>
-              <div>
-                <div class="field-label">Cut-off for Leave Filing</div>
-                <input type="date" id="lcv-cutoff" class="modal-input" style="width:100%;">
-              </div>
-              <div>
-                <div class="field-label">Payout Date</div>
-                <input type="date" id="lcv-payout" class="modal-input" style="width:100%;">
+                <input type="number" id="lcv-year" class="modal-input" style="width:100%;">
               </div>
               <div>
                 <div class="field-label">Factor Rate per Payroll</div>
@@ -1814,10 +1806,6 @@ function signInWithGoogle() {
                 <div class="field-label">Nontaxable Threshold (days)</div>
                 <input type="number" id="lcv-threshold" class="modal-input" style="width:100%;" placeholder="10" value="10">
               </div>
-            </div>
-            <div style="margin-bottom:14px;">
-              <div class="field-label">Nominated Password for Zipped File</div>
-              <input type="text" id="lcv-zippass" class="modal-input" style="width:100%;" placeholder="Password to share with client POC">
             </div>
 
             <div class="task-dz" id="lcv-dz-leave" onclick="document.getElementById('lcv-f-leave').click()" ondragover="return dzDragOver(event)" ondragleave="dzDragLeave(event)" ondrop="dzDrop(event,'lcv-f-leave')">
@@ -23170,6 +23158,8 @@ function lcvOpenUploadModal() {
       return '<option value="' + sk + '"' + (sk === currentSub ? ' selected' : '') + '>' + display + '</option>';
     }).join('');
   }
+  var yearEl = document.getElementById('lcv-year');
+  if (yearEl) yearEl.value = new Date().getFullYear();
   window.lcvFiles = { leave: null, att: null, emp: null };
   ['leave','att','emp'].forEach(function(k){
     var dz = document.getElementById('lcv-dz-' + k);
@@ -24811,14 +24801,11 @@ function lcvRenderCreditCheck() {
 }
 
 // Builds and downloads a zip containing one CSV per tab, named per the file-naming
-// convention from the reference process. Note: true password-protected zips need a
-// server-side or native tool — JSZip can package files but can't apply a ZIP password in
-// the browser, so the nominated password is recorded for the team to apply manually.
+// convention from the reference process.
 function lcvFinalize() {
   var data = window._lcvPreviewData;
   if (!data) return;
   var ck = lcvCurrentClientKey();
-  var zipPass = document.getElementById('lcv-zippass') ? document.getElementById('lcv-zippass').value : '';
   var baseName = (data.company || 'Company').replace(/[^a-z0-9]+/gi,'_') + '_' + data.year + '_Leave_Conversion_Validation_File';
 
   var vlConvHeaders = ['Employee ID','Last Name','First Name','Middle Name','Employment Status','Leave Type','Hire Date','Department','Total Available Balance (YTD)','For Conversion','For Carryover','','Basic Salary','Factor Rate Per Payroll','Daily Rate','VL Conversion Days','VL Conversion Amount','Sprout Remarks'];
@@ -24897,7 +24884,7 @@ function lcvFinalize() {
 
   lcvClosePreviewModal();
   lcvRenderHome();
-  if (typeof showToast === 'function') showToast(eligibleCountFinal + ' eligible of ' + data.employees.length + ' total \u2014 file downloaded' + (zipPass ? ' \u2014 zip + password it yourself before sending to the client POC' : ''));
+  if (typeof showToast === 'function') showToast(eligibleCountFinal + ' eligible of ' + data.employees.length + ' total \u2014 file downloaded');
 }
 
 // Render permissions when Settings page opens
