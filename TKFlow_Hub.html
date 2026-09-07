@@ -1909,6 +1909,30 @@ function signInWithGoogle() {
           </div>
         </div>
 
+        <!-- Add Manual VL modal — one row shown by default, "+ Add another row" for bulk entry;
+             mirrors Leave Monitoring's lm-manual-add-modal pattern. Each row still lands as an
+             unconfirmed entry in the Manual VLs list — same "nothing touches the balance until
+             confirmed" rule as ticket-sourced and historical-imported entries. -->
+        <div id="lcv-manual-add-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:2100;align-items:center;justify-content:center;overflow-y:auto;padding:24px 0;">
+          <div style="background:#fff;border-radius:16px;width:min(760px,95vw);max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.2);padding:24px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+              <div style="font-size:15px;font-weight:600;color:#1a1a2e;">Add Manual VL</div>
+              <div onclick="lcvCloseManualAddModal()" style="cursor:pointer;color:#9898a6;font-size:18px;">&times;</div>
+            </div>
+            <div style="font-size:12px;color:#9898a6;margin-bottom:14px;">Add one entry, or keep clicking "Add another row" to enter several at once. Each still needs to be confirmed below before it affects a balance.</div>
+            <div style="display:grid;grid-template-columns:1fr 100px 1.4fr minmax(150px,1fr) 28px;gap:8px;margin-bottom:4px;">
+              <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;">Employee ID</div>
+              <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;">VL Days</div>
+              <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;">Reason</div>
+              <div style="font-size:10px;font-weight:600;color:#9898a6;text-transform:uppercase;">Date</div>
+              <div></div>
+            </div>
+            <div id="lcv-manual-rows"></div>
+            <div onclick="lcvAddManualVLRowField()" style="text-align:center;padding:8px;font-size:12px;color:#32CE13;cursor:pointer;border:1.5px dashed #BBF7D0;border-radius:12px;margin:8px 0 16px;"><i class="ti ti-plus"></i> Add another row</div>
+            <button class="task-run-btn" onclick="lcvSubmitManualVLRows()"><i class="ti ti-user-plus"></i> Add All</button>
+          </div>
+        </div>
+
         <div id="adhoc-tailored-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:2000;align-items:center;justify-content:center;overflow-y:auto;padding:24px 0;">
           <div style="background:#fff;border-radius:16px;width:min(480px,94vw);max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.2);padding:24px;">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
@@ -23666,6 +23690,68 @@ function lcvImportSelectedHistorical() {
   if (typeof showToast === 'function') showToast(selected.length + ' historical ticket(s) added \u2014 confirm each one\'s VL days to include it in the balance');
 }
 
+// Add Manual VL \u2014 lets the analyst add entries directly (not sourced from a Disputes ticket),
+// one row or several at once via "Add another row". Mirrors Leave Monitoring's manual-add-rows
+// modal (lmOpenManualAddModal/lmAddManualRowField/lmSubmitManualRows) field-for-field in spirit.
+function lcvOpenManualAddModal() {
+  var container = document.getElementById('lcv-manual-rows');
+  if (container) container.innerHTML = '';
+  lcvAddManualVLRowField();
+  var modal = document.getElementById('lcv-manual-add-modal');
+  if (modal) modal.style.display = 'flex';
+}
+function lcvCloseManualAddModal() {
+  var modal = document.getElementById('lcv-manual-add-modal');
+  if (modal) modal.style.display = 'none';
+}
+function lcvAddManualVLRowField() {
+  var container = document.getElementById('lcv-manual-rows');
+  if (!container) return;
+  var row = document.createElement('div');
+  row.className = 'lcv-manual-row';
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 100px 1.4fr minmax(150px,1fr) 28px;gap:8px;margin-bottom:6px;align-items:center;';
+  row.innerHTML = ''
+    + '<input type="text" placeholder="Employee ID" class="modal-input lcv-manual-empid" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;">'
+    + '<input type="number" step="0.5" placeholder="e.g. 2" class="modal-input lcv-manual-days" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;">'
+    + '<input type="text" placeholder="Reason" class="modal-input lcv-manual-reason" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;">'
+    + '<input type="date" class="modal-input lcv-manual-date" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;">'
+    + '<div onclick="this.closest(\'.lcv-manual-row\').remove()" title="Remove row" style="cursor:pointer;color:#9898a6;text-align:center;"><i class="ti ti-x"></i></div>';
+  container.appendChild(row);
+}
+function lcvSubmitManualVLRows() {
+  var d = window._lcvPreviewData;
+  if (!d) return;
+  var rowEls = document.querySelectorAll('#lcv-manual-rows .lcv-manual-row');
+  if (!d.manualVLTickets) d.manualVLTickets = [];
+  var added = 0, skipped = 0;
+  rowEls.forEach(function(rowEl) {
+    var empNo = rowEl.querySelector('.lcv-manual-empid').value.trim();
+    var daysVal = parseFloat(rowEl.querySelector('.lcv-manual-days').value);
+    var reason = rowEl.querySelector('.lcv-manual-reason').value.trim();
+    var dateVal = rowEl.querySelector('.lcv-manual-date').value;
+    if (!empNo && isNaN(daysVal) && !reason && !dateVal) return; // fully blank row, silently skip
+    if (!empNo || isNaN(daysVal)) { skipped++; return; }
+    var matched = (d.rawEmployees || []).find(function(e){ return lcvNormId(e.id) === lcvNormId(empNo) && lcvNormId(empNo); });
+    d.manualVLTickets.push({
+      id: 'MAN-' + Math.random().toString(36).slice(2,8),
+      dateSubmitted: dateVal || lcvFormatDate(new Date()),
+      empNo: empNo, name: matched ? lcvFullName(matched) : '',
+      nature: 'Manual Leave Application', details: reason,
+      rawAmount: daysVal + ' Days', suggestedDays: daysVal, confirmedDays: null, confirmed: false,
+      isManual: true,
+    });
+    added++;
+  });
+  if (!added) {
+    if (typeof showToast === 'function') showToast(skipped ? 'Each row needs an Employee ID and a VL day count' : 'Nothing to add', '#e67e00');
+    return;
+  }
+  lcvCloseManualAddModal();
+  lcvRebuildComputed();
+  lcvSwitchPreviewTab('manualvl');
+  if (typeof showToast === 'function') showToast(added + ' manual VL entr' + (added===1?'y':'ies') + ' added' + (skipped ? ' (' + skipped + ' skipped \u2014 missing Employee ID or days)' : '') + ' \u2014 confirm each to include it in the balance');
+}
+
 function lcvFindManualVLTickets(subKey) {
   if (typeof allDisputes === 'undefined') return [];
   return allDisputes.filter(function(d) {
@@ -23695,6 +23781,10 @@ function lcvRebuildComputed() {
   var d = window._lcvPreviewData;
   if (!d || !d.rawEmployees) return;
   if (!d.statusOverrides) d.statusOverrides = {};
+  // Which employees have already had a "Send to Manual VLs for investigation" fired from the
+  // Credits Check tab -- durable across rebuilds (same lifecycle as statusOverrides above) so a
+  // still-flagged gap doesn't get offered "Send" again while it's already being worked.
+  if (!d.investigationSentIds) d.investigationSentIds = {};
 
   var addbackByEmp = {};
   var ticketIdsByEmp = {};
@@ -23717,6 +23807,7 @@ function lcvRebuildComputed() {
 
   var computed = d.rawEmployees.map(function(e) {
     var addback = addbackByEmp[e.id] || 0;
+    var actualLeavesForYear = addback + (e.leavesUsedDuringRange || 0);
     var adjustedAvail = e.avail + addback;
     var forConversion = Math.min(adjustedAvail, d.threshold);
     var forCarryover = Math.max(adjustedAvail - forConversion, 0);
@@ -23754,9 +23845,14 @@ function lcvRebuildComputed() {
           // mistaken for a real gap.
           vlEntitlementCheck = { noRecord: true, expected: vlEntitlement, flagged: true };
         } else {
-          var vlShouldBe = vlEntitlement - (e.leavesUsedDuringRange || 0);
+          // actualLeavesForYear (not the raw file column) so a confirmed Manual VL immediately
+          // closes or shrinks the gap here too, same as it already does for Summary/VL Conversion.
+          var vlShouldBe = vlEntitlement - actualLeavesForYear;
           var vlGap = Math.round(((e.avail || 0) - vlShouldBe) * 100) / 100;
-          vlEntitlementCheck = { expected: vlEntitlement, shouldBe: vlShouldBe, gap: vlGap, flagged: vlGap !== 0 };
+          vlEntitlementCheck = {
+            expected: vlEntitlement, shouldBe: vlShouldBe, gap: vlGap, flagged: vlGap !== 0,
+            investigationSent: !!d.investigationSentIds[e.id],
+          };
         }
 
         // Sick Leave (when enabled) only tops up once an employee reaches their 1-year mark --
@@ -23782,7 +23878,7 @@ function lcvRebuildComputed() {
       eligible: lcvStatusEligible(d, e.employmentStatus),
       manualAddback: addback,
       manualVLTicketIds: ticketIdsByEmp[e.id] || [],
-      actualLeavesForYear: addback + (e.leavesUsedDuringRange || 0),
+      actualLeavesForYear: actualLeavesForYear,
       availAdjusted: adjustedAvail,
       forConversion: forConversion,
       forCarryover: forCarryover,
@@ -24416,7 +24512,10 @@ function lcvSwitchPreviewTab(tab) {
     body.innerHTML = groupsHtml || '<div style="padding:16px;font-size:12px;color:#9898a6;">No employees found.</div>';
   } else if (tab === 'manualvl') {
     var tickets = data.manualVLTickets || [];
-    var importBtnHtml = '<div style="padding:0 12px 12px;"><button onclick="lcvOpenHistoricalImportModal()" style="padding:7px 14px;background:#fff;border:1px solid #A6EB93;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-upload"></i> Import Historical Manual VLs</button></div>';
+    var importBtnHtml = '<div style="padding:0 12px 12px;display:flex;gap:8px;flex-wrap:wrap;">'
+      + '<button onclick="lcvOpenManualAddModal()" style="padding:7px 14px;background:#fff;border:1px solid #A6EB93;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-plus"></i> Add Manual VL</button>'
+      + '<button onclick="lcvOpenHistoricalImportModal()" style="padding:7px 14px;background:#fff;border:1px solid #A6EB93;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-upload"></i> Import Historical Manual VLs</button>'
+      + '</div>';
     if (!tickets.length) {
       body.innerHTML = importBtnHtml + '<div style="padding:24px;text-align:center;color:#9898a6;font-size:12px;">'
         + '<i class="ti ti-ticket" style="font-size:22px;color:#c8c8d4;display:block;margin-bottom:8px;"></i>'
@@ -24430,7 +24529,7 @@ function lcvSwitchPreviewTab(tab) {
             var borderColor = t.confirmed ? '#32CE13' : (t.suggestedDays === null ? '#F59E0B' : '#EBEBEF');
             return '<div style="margin:0 12px 10px;padding:12px 14px;border:1.5px solid ' + borderColor + ';border-radius:14px;background:' + (t.confirmed ? '#F0FDF4' : '#fff') + ';">'
               + '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px;">'
-              + '<div><strong style="font-size:12px;color:#1a1a2e;">' + (t.name || t.empNo) + '</strong> <span style="font-size:11px;color:#9898a6;">(' + (t.empNo || 'no ID') + ')</span>' + (matched ? '' : ' <span style="font-size:10px;color:#e67e00;background:#fff4e6;padding:1px 6px;border-radius:14px;">no roster match</span>') + (t.isHistorical ? ' <span style="font-size:10px;color:#6b6b80;background:#F4F4F8;padding:1px 6px;border-radius:14px;">Historical import</span>' : '') + '</div>'
+              + '<div><strong style="font-size:12px;color:#1a1a2e;">' + (t.name || t.empNo) + '</strong> <span style="font-size:11px;color:#9898a6;">(' + (t.empNo || 'no ID') + ')</span>' + (matched ? '' : ' <span style="font-size:10px;color:#e67e00;background:#fff4e6;padding:1px 6px;border-radius:14px;">no roster match</span>') + (t.isHistorical ? ' <span style="font-size:10px;color:#6b6b80;background:#F4F4F8;padding:1px 6px;border-radius:14px;">Historical import</span>' : '') + (t.isManual ? ' <span style="font-size:10px;color:#6b6b80;background:#F4F4F8;padding:1px 6px;border-radius:14px;">Manually added</span>' : '') + (t.isInvestigation ? ' <span style="font-size:10px;color:#8435EB;background:#F3E8FF;padding:1px 6px;border-radius:14px;">From Credits Check</span>' : '') + '</div>'
               + '<div style="font-size:11px;color:#9898a6;">Ticket ' + (t.id || '\u2014') + ' \u00b7 ' + (t.dateSubmitted || '') + '</div>'
               + '</div>'
               + '<div style="font-size:11px;color:#6b6b80;margin-bottom:8px;">' + (t.details || '') + '</div>'
@@ -24447,6 +24546,63 @@ function lcvSwitchPreviewTab(tab) {
           }).join('');
     }
   }
+}
+
+// Pushes one flagged employee's VL gap into Manual VLs as an investigation lead. Caller is
+// responsible for lcvRebuildComputed()/switching tabs afterward (the bulk sender batches these).
+function lcvPushInvestigationEntry(d, e) {
+  if (!d.manualVLTickets) d.manualVLTickets = [];
+  var gap = e.vlEntitlementCheck.gap;
+  d.manualVLTickets.push({
+    id: 'INV-' + Math.random().toString(36).slice(2,8),
+    dateSubmitted: lcvFormatDate(new Date()),
+    empNo: e.id, name: lcvFullName(e),
+    nature: 'Manual Leave Application',
+    details: 'Flagged by Credits Check — VL gap of ' + gap.toFixed(2) + ' vs ' + e.vlEntitlementCheck.expected.toFixed(2) + ' expected.',
+    rawAmount: Math.abs(gap) + ' Days', suggestedDays: Math.abs(gap), confirmedDays: null, confirmed: false,
+    isInvestigation: true,
+  });
+  d.investigationSentIds[e.id] = true;
+}
+
+// One flagged employee's VL gap, sent from the Credits Check tab — creates an unconfirmed
+// Manual VLs entry so an analyst can investigate and, if it turns out to be a real unticketed
+// manual leave, confirm it the same way as any other Manual VL entry.
+function lcvSendToInvestigation(empId) {
+  var d = window._lcvPreviewData;
+  if (!d) return;
+  if (!d.investigationSentIds) d.investigationSentIds = {};
+  if (d.investigationSentIds[empId]) {
+    if (typeof showToast === 'function') showToast('Already sent — check the Manual VLs tab', '#e67e00');
+    lcvSwitchPreviewTab('manualvl');
+    return;
+  }
+  var e = (d.employees || []).find(function(emp){ return emp.id === empId; });
+  if (!e || !e.vlEntitlementCheck || !e.vlEntitlementCheck.flagged) return;
+  lcvPushInvestigationEntry(d, e);
+  lcvRebuildComputed();
+  lcvSwitchPreviewTab('manualvl');
+  if (typeof showToast === 'function') showToast('Sent to Manual VLs for investigation — ' + lcvFullName(e));
+}
+
+// Bulk version — every currently-flagged, not-yet-sent VL gap (skips "no record"/"no hire date"
+// rows, since those need a data fix rather than a Manual VL entry).
+function lcvSendAllFlaggedToInvestigation() {
+  var d = window._lcvPreviewData;
+  if (!d) return;
+  if (!d.investigationSentIds) d.investigationSentIds = {};
+  var candidates = (d.employees || []).filter(function(e) {
+    var c = e.vlEntitlementCheck;
+    return c && c.flagged && !c.noRecord && !c.noHireDate && !d.investigationSentIds[e.id];
+  });
+  if (!candidates.length) {
+    if (typeof showToast === 'function') showToast('Nothing new to send — every VL gap is already sent or resolved', '#e67e00');
+    return;
+  }
+  candidates.forEach(function(e) { lcvPushInvestigationEntry(d, e); });
+  lcvRebuildComputed();
+  lcvSwitchPreviewTab('manualvl');
+  if (typeof showToast === 'function') showToast(candidates.length + ' flagged employee(s) sent to Manual VLs for investigation');
 }
 
 // Renders the Credits Check tab — flags employees whose (available balance + leaves used
@@ -24471,9 +24627,17 @@ function lcvRenderCreditCheck() {
     return '<span style="color:#c0392b;font-weight:700;"><i class="ti ti-alert-triangle" style="font-size:12px;"></i> ' + sign + check.gap.toFixed(2) + '</span>';
   }
   function numCell(v) { return (v === undefined || v === null) ? '—' : v.toFixed(2); }
+  // VL-only — a real, still-open gap gets a "Send" button; an already-sent one shows where it
+  // went instead; anything else (matches, no record, no hire date) has nothing to action here.
+  function actionCell(e) {
+    var c = e.vlEntitlementCheck;
+    if (!c || !c.flagged || c.noRecord || c.noHireDate) return '<span style="color:#c8c8d4;">—</span>';
+    if (c.investigationSent) return '<span style="color:#8435EB;font-size:11px;font-weight:600;"><i class="ti ti-arrow-forward" style="font-size:12px;"></i> Sent — see Manual VLs</span>';
+    return '<button onclick="lcvSendToInvestigation(\'' + e.id + '\')" style="padding:4px 10px;background:#fff;border:1px solid #EBEBEF;border-radius:8px;font-size:11px;font-weight:600;color:#8435EB;cursor:pointer;font-family:Rubik,sans-serif;white-space:nowrap;">Send to Manual VLs</button>';
+  }
 
   var headers = ['Employee ID', 'Name', 'Employment Status', 'Hire Date',
-    'VL Expected', 'VL Avail', 'VL Used', 'VL Gap'];
+    'VL Expected', 'VL Avail', 'VL Used', 'VL Gap', 'Action'];
   if (showSick) headers = headers.concat(['SL Expected', 'SL Avail', 'SL Used', 'SL Gap']);
 
   var rows = employees.slice().sort(function(a, b) {
@@ -24483,20 +24647,21 @@ function lcvRenderCreditCheck() {
     return a.lastName.localeCompare(b.lastName);
   });
 
-  var flaggedCount = 0, noRecordCount = 0, gapCount = 0;
+  var flaggedCount = 0, noRecordCount = 0, gapCount = 0, sendableCount = 0;
   rows.forEach(function(e) {
     var vc = e.vlEntitlementCheck, sc = e.slEntitlementCheck;
     if (!((vc && vc.flagged) || (sc && sc.flagged))) return;
     flaggedCount++;
     if ((vc && vc.noRecord) || (sc && sc.noRecord)) noRecordCount++;
     else gapCount++;
+    if (vc && vc.flagged && !vc.noRecord && !vc.noHireDate && !vc.investigationSent) sendableCount++;
   });
 
   var bodyRows = rows.map(function(e) {
     var flagged = (e.vlEntitlementCheck && e.vlEntitlementCheck.flagged) || (e.slEntitlementCheck && e.slEntitlementCheck.flagged);
     var cells = [e.id, lcvFullName(e), e.employmentStatus, e.hireDate,
       e.vlEntitlementCheck ? numCell(e.vlEntitlementCheck.expected) : '—',
-      numCell(e.avail), numCell(e.leavesUsedDuringRange), gapCell(e.vlEntitlementCheck)];
+      numCell(e.avail), numCell(e.leavesUsedDuringRange), gapCell(e.vlEntitlementCheck), actionCell(e)];
     if (showSick) {
       cells = cells.concat([
         e.slEntitlementCheck ? numCell(e.slEntitlementCheck.expected) : '—',
@@ -24518,7 +24683,11 @@ function lcvRenderCreditCheck() {
         : 'All ' + rows.length + ' employee(s) check out — available balance + leaves used matches this year’s tenure-based entitlement.')
     + '</div>';
 
-  body.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+  var toolbar = sendableCount > 0
+    ? '<div style="padding:10px 12px 0;"><button onclick="lcvSendAllFlaggedToInvestigation()" style="padding:7px 14px;background:#fff;border:1px solid #E9D5FF;color:#8435EB;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-arrow-forward"></i> Send all ' + sendableCount + ' flagged to Manual VLs</button></div>'
+    : '';
+
+  body.innerHTML = toolbar + '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
     + '<thead><tr style="background:#F8F8FA;">' + headers.map(function(h) {
         return '<th style="text-align:left;padding:9px 12px;color:#6b6b80;font-weight:600;border-bottom:1px solid #EBEBEF;white-space:nowrap;position:sticky;top:0;background:#F8F8FA;">' + h + '</th>';
       }).join('') + '</tr></thead>'
