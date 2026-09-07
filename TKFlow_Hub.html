@@ -24574,15 +24574,14 @@ function lcvSendToInvestigation(empId) {
   if (!d.investigationSentIds) d.investigationSentIds = {};
   if (d.investigationSentIds[empId]) {
     if (typeof showToast === 'function') showToast('Already sent — check the Manual VLs tab', '#e67e00');
-    lcvSwitchPreviewTab('manualvl');
     return;
   }
   var e = (d.employees || []).find(function(emp){ return emp.id === empId; });
   if (!e || !e.vlEntitlementCheck || !e.vlEntitlementCheck.flagged) return;
   lcvPushInvestigationEntry(d, e);
   lcvRebuildComputed();
-  lcvSwitchPreviewTab('manualvl');
-  if (typeof showToast === 'function') showToast('Sent to Manual VLs for investigation — ' + lcvFullName(e));
+  lcvSwitchPreviewTab('creditcheck');
+  if (typeof showToast === 'function') showToast('Sent to Manual VLs for investigation — ' + lcvFullName(e) + ' (check the Manual VLs tab when ready)');
 }
 
 // Bulk version — every currently-flagged, not-yet-sent VL gap (skips "no record"/"no hire date"
@@ -24601,8 +24600,8 @@ function lcvSendAllFlaggedToInvestigation() {
   }
   candidates.forEach(function(e) { lcvPushInvestigationEntry(d, e); });
   lcvRebuildComputed();
-  lcvSwitchPreviewTab('manualvl');
-  if (typeof showToast === 'function') showToast(candidates.length + ' flagged employee(s) sent to Manual VLs for investigation');
+  lcvSwitchPreviewTab('creditcheck');
+  if (typeof showToast === 'function') showToast(candidates.length + ' flagged employee(s) sent to Manual VLs for investigation (check the Manual VLs tab when ready)');
 }
 
 // Renders the Credits Check tab — flags employees whose (available balance + leaves used
