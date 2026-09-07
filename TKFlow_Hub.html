@@ -1953,6 +1953,7 @@ function signInWithGoogle() {
               <div class="radio-opt" id="lcv-ptab-manualvl" onclick="lcvSwitchPreviewTab('manualvl')" style="padding:7px 14px;font-size:12px;">Manual VLs<span id="lcv-manualvl-badge" style="display:none;margin-left:6px;background:#F59E0B;color:#fff;border-radius:14px;padding:1px 7px;font-size:10px;font-weight:700;"></span></div>
               <div class="radio-opt" id="lcv-ptab-summary" onclick="lcvSwitchPreviewTab('summary')" style="padding:7px 14px;font-size:12px;">Summary</div>
               <div class="radio-opt selected" id="lcv-ptab-vlconv" onclick="lcvSwitchPreviewTab('vlconv')" style="padding:7px 14px;font-size:12px;">VL Conversion</div>
+              <div class="radio-opt" id="lcv-ptab-creditcheck" onclick="lcvSwitchPreviewTab('creditcheck')" style="padding:7px 14px;font-size:12px;">Credits Check<span id="lcv-creditcheck-badge" style="display:none;margin-left:6px;background:#F59E0B;color:#fff;border-radius:14px;padding:1px 7px;font-size:10px;font-weight:700;"></span></div>
             </div>
 
             <div id="lcv-preview-body" style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;overflow:auto;max-height:62vh;margin-bottom:16px;"></div>
@@ -7777,6 +7778,24 @@ function setLeaveCreditsValidationEnabled(subKeysCsv, enabled) {
   if (typeof showToast === 'function') showToast('Leave Credits Validation ' + (enabled ? 'enabled' : 'disabled'));
 }
 
+// Nested under Leave Credits Validation — whether the Credits Check tab also flags Sick Leave
+// mismatches, not just Vacation Leave. Off by default so existing clients (e.g. KN, VL-only)
+// aren't affected by just having this feature ship.
+function setLcvValidateSickEnabled(subKeysCsv, enabled) {
+  subKeysCsv.split(',').forEach(function(sk) {
+    if (!clients[sk]) return;
+    if (!clients[sk].taskConfig) clients[sk].taskConfig = {};
+    clients[sk].taskConfig.lcv_validate_sick = !!enabled;
+    if (typeof _persistTaskConfig === 'function') _persistTaskConfig(sk);
+  });
+  if (typeof renderClientProfile === 'function' && window.currentWsGroup) {
+    renderClientProfile(window.currentWsGroup);
+  } else if (typeof renderClientProfile === 'function' && window.currentWsClient) {
+    renderClientProfile(window.currentWsClient);
+  }
+  if (typeof showToast === 'function') showToast('Sick Leave validation ' + (enabled ? 'enabled' : 'disabled'));
+}
+
 function setEmailSupportEnabled(subKeysCsv, enabled) {
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk]) return;
@@ -8156,6 +8175,7 @@ function renderClientProfile(key) {
     // this preserves current behavior unless explicitly turned off.
     var emailSupportEnabled = !(clients[subs[0]] && clients[subs[0]].taskConfig && clients[subs[0]].taskConfig.email_support === false);
     var lcvEnabled = !!(clients[subs[0]] && clients[subs[0]].taskConfig && clients[subs[0]].taskConfig.leave_credits_validation);
+    var lcvValidateSick = !!(clients[subs[0]] && clients[subs[0]].taskConfig && clients[subs[0]].taskConfig.lcv_validate_sick);
 
     function expandedToggleRow(label, desc, checked, onchangeFn) {
       return '<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid #F4F4F8;">'
@@ -8209,6 +8229,7 @@ function renderClientProfile(key) {
       + ticketingModeRow
       + expandedToggleRow('Leave Credits Monitoring', 'Tenure-bucket leave credit tracking (0-1yr accrual, 1-4yr top-up, 5+yr increments). When on, a \u201cLeave Monitoring\u201d tab appears in this client\u2019s workspace.', lmEnabled, 'setLeaveMonitoringEnabled(\'' + subs.join(',') + '\', this.checked)')
       + expandedToggleRow('Leave Credits Validation', 'Leave monetization validation \u2014 reconciles VL conversion against the Leave and Attendance reports. Part of Section I\u2019s scope, but not every client avails it. When on, a \u201cLeave Credits Validation\u201d tab appears in this client\u2019s workspace.', lcvEnabled, 'setLeaveCreditsValidationEnabled(\'' + subs.join(',') + '\', this.checked)')
+      + (lcvEnabled ? expandedToggleRow('Validate Sick Leave Credits Too', 'When on, the Credits Check tab also flags Sick Leave balance/used mismatches, not just Vacation Leave. Off by default \u2014 most clients (e.g. KN) only want VL checked.', lcvValidateSick, 'setLcvValidateSickEnabled(\'' + subs.join(',') + '\', this.checked)') : '')
       + '</div>' + lmSetupBanner + '</div>';
   }
 
@@ -23389,11 +23410,14 @@ function lcvParseFilesFor(empFile, leaveFile, attFile) {
       salary: lcvColIndex(h, 'base salary'),
     };
 
-    // Leave-balance lookup by Employee ID — restricted to Vacation-type rows only. Leave
-    // Summary reports typically have one row per employee per leave type (Vacation, Sick,
-    // Maternity, Magna Carta, etc.); we only want the Vacation row for VL conversion, so
-    // any non-Vacation row is skipped rather than overwriting the map with the wrong type.
+    // Leave-balance lookup by Employee ID — Vacation rows go in leaveByEmpId (used for VL
+    // conversion, as before); Sick rows go in a separate sickByEmpId lookup for the Credits
+    // Check tab's entitlement validation (only surfaced when a client has that enabled).
+    // Leave Summary reports typically have one row per employee per leave type (Vacation,
+    // Sick, Maternity, Magna Carta, etc.); anything else (Maternity/Magna Carta/etc.) is still
+    // skipped rather than overwriting either map with the wrong type.
     var leaveByEmpId = {};
+    var sickByEmpId = {};
     if (leaveWb) {
       var leaveSheetName = leaveWb.SheetNames.find(function(n){ return /with filed leaves|leave summary/i.test(n); }) || leaveWb.SheetNames[0];
       var leaveRows = XLSX.utils.sheet_to_json(leaveWb.Sheets[leaveSheetName], { header: 1, defval: '' });
@@ -23411,12 +23435,14 @@ function lcvParseFilesFor(empFile, leaveFile, attFile) {
           var lid = (lrow[lcol.id] + '').trim();
           if (!lid) continue;
           var ltype = lcol.type >= 0 ? (lrow[lcol.type] + '').trim() : '';
-          if (ltype && ltype.toLowerCase().indexOf('vacation') < 0) continue; // skip Sick/Maternity/Magna Carta/etc.
-          leaveByEmpId[lid] = {
+          var entry = {
             type: ltype || 'Vacation',
             avail: lcol.avail >= 0 ? (parseFloat(lrow[lcol.avail]) || 0) : 0,
             usedDuringRange: lcol.usedDuringRange >= 0 ? (parseFloat(lrow[lcol.usedDuringRange]) || 0) : 0,
           };
+          var ltypeLower = ltype.toLowerCase();
+          if (!ltype || ltypeLower.indexOf('vacation') >= 0) leaveByEmpId[lid] = entry;
+          else if (ltypeLower.indexOf('sick') >= 0) sickByEmpId[lid] = entry;
         }
       }
     }
@@ -23427,6 +23453,7 @@ function lcvParseFilesFor(empFile, leaveFile, attFile) {
       var id = (row[col.id] + '').trim();
       if (!id) continue; // skip blank/trailing rows
       var lv = leaveByEmpId[id]; // undefined if this employee has no Vacation row in the Leave Report
+      var sv = sickByEmpId[id]; // undefined if this employee has no Sick row in the Leave Report
       employees.push({
         id: id,
         lastName: col.last >= 0 ? (row[col.last] + '').trim() : '',
@@ -23436,9 +23463,14 @@ function lcvParseFilesFor(empFile, leaveFile, attFile) {
         leaveType: lv ? lv.type : 'Vacation',
         hasVacationRecord: !!lv,
         hireDate: col.hire >= 0 ? lcvFormatDate(row[col.hire]) : '',
+        // Real Date (vs. the display-formatted `hireDate` string above) for tenure math —
+        // e.g. the Credits Check entitlement lookup needs .getFullYear().
+        hireDateObj: col.hire >= 0 ? _xlsDate(row[col.hire]) : null,
         department: col.dept >= 0 ? (row[col.dept] + '').trim() : '',
         avail: lv ? lv.avail : 0,
         leavesUsedDuringRange: lv ? lv.usedDuringRange : 0,
+        sickAvail: sv ? sv.avail : 0,
+        sickUsedDuringRange: sv ? sv.usedDuringRange : 0,
         baseSalary: col.salary >= 0 ? (parseFloat(row[col.salary]) || 0) : 0,
       });
     }
@@ -23672,12 +23704,52 @@ function lcvRebuildComputed() {
     });
   });
 
+  var lcvCk = d.subKey || lcvCurrentClientKey();
+  var lcvCreditConfig = (typeof lmGetCreditConfig === 'function') ? lmGetCreditConfig(lcvCk) : null;
+  var lcvValidateSick = !!(clients[lcvCk] && clients[lcvCk].taskConfig && clients[lcvCk].taskConfig.lcv_validate_sick);
+
   var computed = d.rawEmployees.map(function(e) {
     var addback = addbackByEmp[e.id] || 0;
     var adjustedAvail = e.avail + addback;
     var forConversion = Math.min(adjustedAvail, d.threshold);
     var forCarryover = Math.max(adjustedAvail - forConversion, 0);
     var dailyRate = (e.baseSalary * 12) / d.factorRate;
+
+    // Credits Check — flags employees whose (available balance + leaves used this year)
+    // doesn't match what they should've received this year based on tenure, usually because
+    // a manual leave application never got reflected in the system. Compared against this
+    // year's fresh entitlement only (no prior-year carryover assumed), reusing the same
+    // tenure-based credit table Leave Monitoring already has configured for this client.
+    var vlEntitlementCheck = null, slEntitlementCheck = null;
+    if (lcvCreditConfig) {
+      if (!e.hireDateObj) {
+        vlEntitlementCheck = { noHireDate: true, flagged: false };
+      } else {
+        var yearsOfService = (d.year || new Date().getFullYear()) - e.hireDateObj.getFullYear();
+        if (yearsOfService < 1) {
+          // Hasn't reached their 1st-year anniversary yet this cycle — first-year credits
+          // accrue monthly rather than as a flat annual entitlement, and there's no data here
+          // to compute that partial accrual, so skip rather than guarantee a false flag.
+          vlEntitlementCheck = { notYetTenured: true, flagged: false };
+        } else {
+          var vlEntitlement = lmCreditsForYear(lcvCreditConfig, yearsOfService);
+          var vlShouldBe = vlEntitlement - (e.leavesUsedDuringRange || 0);
+          var vlGap = Math.round(((e.avail || 0) - vlShouldBe) * 100) / 100;
+          vlEntitlementCheck = { expected: vlEntitlement, shouldBe: vlShouldBe, gap: vlGap, flagged: vlGap !== 0 };
+
+          if (lcvValidateSick && lcvCreditConfig.sickEnabled !== false) {
+            var sickConfigForTier = lcvCreditConfig.sickEscalates && lcvCreditConfig.sickCreditsTable
+              ? { baseCredits: lcvCreditConfig.sickBaseCredits, creditsTable: lcvCreditConfig.sickCreditsTable }
+              : { baseCredits: lcvCreditConfig.sickBaseCredits, creditsTable: {} };
+            var slEntitlement = lmCreditsForYear(sickConfigForTier, yearsOfService);
+            var slShouldBe = slEntitlement - (e.sickUsedDuringRange || 0);
+            var slGap = Math.round(((e.sickAvail || 0) - slShouldBe) * 100) / 100;
+            slEntitlementCheck = { expected: slEntitlement, shouldBe: slShouldBe, gap: slGap, flagged: slGap !== 0 };
+          }
+        }
+      }
+    }
+
     return Object.assign({}, e, {
       eligible: lcvStatusEligible(d, e.employmentStatus),
       manualAddback: addback,
@@ -23686,6 +23758,8 @@ function lcvRebuildComputed() {
       availAdjusted: adjustedAvail,
       forConversion: forConversion,
       forCarryover: forCarryover,
+      vlEntitlementCheck: vlEntitlementCheck,
+      slEntitlementCheck: slEntitlementCheck,
       factorRate: d.factorRate,
       dailyRate: Math.round(dailyRate * 100) / 100,
       vlConversionDays: forConversion,
@@ -23710,6 +23784,15 @@ function lcvRebuildComputed() {
     var unconfirmedCount = (d.manualVLTickets || []).filter(function(t){ return !t.confirmed; }).length;
     if (unconfirmedCount > 0) { badge.style.display = 'inline-block'; badge.textContent = unconfirmedCount; }
     else badge.style.display = 'none';
+  }
+
+  var creditCheckBadge = document.getElementById('lcv-creditcheck-badge');
+  if (creditCheckBadge) {
+    var flaggedCount = computed.filter(function(e) {
+      return (e.vlEntitlementCheck && e.vlEntitlementCheck.flagged) || (e.slEntitlementCheck && e.slEntitlementCheck.flagged);
+    }).length;
+    if (flaggedCount > 0) { creditCheckBadge.style.display = 'inline-block'; creditCheckBadge.textContent = flaggedCount; }
+    else creditCheckBadge.style.display = 'none';
   }
 }
 
@@ -24172,12 +24255,19 @@ function lcvFullName(e) {
 
 function lcvSwitchPreviewTab(tab) {
   window._lcvPreviewTab = tab;
-  ['summary','leavetx','att','vlconv','manualvl'].forEach(function(t) {
+  ['summary','leavetx','att','vlconv','manualvl','creditcheck'].forEach(function(t) {
     var el = document.getElementById('lcv-ptab-' + t);
     if (el) el.classList.toggle('selected', t === tab);
   });
   if (tab === 'vlconv' && window._lcvConsolMode) {
     lcvRenderConsolVlConv();
+    return;
+  }
+  if (tab === 'creditcheck') {
+    // Same Consolidated-mode limitation as the Summary/Leave Transaction/etc. tabs below —
+    // shows whichever single subcompany is currently selected (window._lcvPreviewData), not a
+    // combined view across every sub the way 'vlconv' gets via lcvRenderConsolVlConv.
+    lcvRenderCreditCheck();
     return;
   }
   var data = window._lcvPreviewData;
@@ -24329,6 +24419,74 @@ function lcvSwitchPreviewTab(tab) {
           }).join('');
     }
   }
+}
+
+// Renders the Credits Check tab — flags employees whose (available balance + leaves used
+// this year) doesn't equal what they should've received this year per the tenure-based
+// credit table (Leave Monitoring's config, reused via lcvRebuildComputed). A gap almost
+// always means a manual leave application never got reflected in the system; this is a
+// read-only diagnostic list for the analyst to go investigate, not an editable workflow.
+function lcvRenderCreditCheck() {
+  var data = window._lcvPreviewData;
+  var body = document.getElementById('lcv-preview-body');
+  if (!body || !data) return;
+
+  var employees = data.employees || [];
+  var showSick = employees.some(function(e){ return !!e.slEntitlementCheck; });
+
+  function gapCell(check) {
+    if (!check) return '<span style="color:#c8c8d4;">—</span>';
+    if (check.noHireDate) return '<span style="color:#9898a6;font-size:11px;">No hire date</span>';
+    if (check.notYetTenured) return '<span style="color:#9898a6;font-size:11px;">Not yet 1 yr</span>';
+    if (!check.flagged) return '<span style="color:#32CE13;"><i class="ti ti-circle-check" style="font-size:12px;"></i> Matches</span>';
+    var sign = check.gap > 0 ? '+' : '';
+    return '<span style="color:#c0392b;font-weight:700;"><i class="ti ti-alert-triangle" style="font-size:12px;"></i> ' + sign + check.gap.toFixed(2) + '</span>';
+  }
+  function numCell(v) { return (v === undefined || v === null) ? '—' : v.toFixed(2); }
+
+  var headers = ['Employee ID', 'Name', 'Employment Status', 'Hire Date',
+    'VL Expected', 'VL Avail', 'VL Used', 'VL Gap'];
+  if (showSick) headers = headers.concat(['SL Expected', 'SL Avail', 'SL Used', 'SL Gap']);
+
+  var rows = employees.slice().sort(function(a, b) {
+    var af = (a.vlEntitlementCheck && a.vlEntitlementCheck.flagged) || (a.slEntitlementCheck && a.slEntitlementCheck.flagged);
+    var bf = (b.vlEntitlementCheck && b.vlEntitlementCheck.flagged) || (b.slEntitlementCheck && b.slEntitlementCheck.flagged);
+    if (af !== bf) return af ? -1 : 1;
+    return a.lastName.localeCompare(b.lastName);
+  });
+
+  var flaggedCount = rows.filter(function(e) {
+    return (e.vlEntitlementCheck && e.vlEntitlementCheck.flagged) || (e.slEntitlementCheck && e.slEntitlementCheck.flagged);
+  }).length;
+
+  var bodyRows = rows.map(function(e) {
+    var flagged = (e.vlEntitlementCheck && e.vlEntitlementCheck.flagged) || (e.slEntitlementCheck && e.slEntitlementCheck.flagged);
+    var cells = [e.id, lcvFullName(e), e.employmentStatus, e.hireDate,
+      e.vlEntitlementCheck ? numCell(e.vlEntitlementCheck.expected) : '—',
+      numCell(e.avail), numCell(e.leavesUsedDuringRange), gapCell(e.vlEntitlementCheck)];
+    if (showSick) {
+      cells = cells.concat([
+        e.slEntitlementCheck ? numCell(e.slEntitlementCheck.expected) : '—',
+        numCell(e.sickAvail), numCell(e.sickUsedDuringRange), gapCell(e.slEntitlementCheck)
+      ]);
+    }
+    return '<tr style="' + (flagged ? 'background:#FEF3F2;' : '') + '">' + cells.map(function(c) {
+      return '<td style="padding:8px 12px;border-bottom:1px solid #F4F4F8;color:#1a1a2e;white-space:nowrap;">' + c + '</td>';
+    }).join('') + '</tr>';
+  }).join('');
+
+  var summary = '<div style="padding:10px 12px;font-size:11px;color:#9898a6;">'
+    + (flaggedCount > 0
+        ? '<strong style="color:#c0392b;">' + flaggedCount + ' of ' + rows.length + ' employee(s) flagged</strong> — their available balance + leaves used this year doesn’t match what they should’ve received based on tenure. Usually means a manual leave application wasn’t reflected in the system — worth investigating.'
+        : 'All ' + rows.length + ' employee(s) check out — available balance + leaves used matches this year’s tenure-based entitlement.')
+    + '</div>';
+
+  body.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+    + '<thead><tr style="background:#F8F8FA;">' + headers.map(function(h) {
+        return '<th style="text-align:left;padding:9px 12px;color:#6b6b80;font-weight:600;border-bottom:1px solid #EBEBEF;white-space:nowrap;position:sticky;top:0;background:#F8F8FA;">' + h + '</th>';
+      }).join('') + '</tr></thead>'
+    + '<tbody>' + (bodyRows || '') + '</tbody></table>'
+    + (rows.length ? summary : '<div style="padding:24px;text-align:center;color:#9898a6;font-size:12px;">No employees found.</div>');
 }
 
 // Builds and downloads a zip containing one CSV per tab, named per the file-naming
