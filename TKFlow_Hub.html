@@ -23444,6 +23444,12 @@ function lcvParseFilesFor(empFile, leaveFile, attFile) {
           if (!ltype || ltypeLower.indexOf('vacation') >= 0) leaveByEmpId[lid] = entry;
           else if (ltypeLower.indexOf('sick') >= 0) sickByEmpId[lid] = entry;
         }
+      } else if (typeof showToast === 'function') {
+        // Silently leaving leaveByEmpId/sickByEmpId empty here means every employee's balance
+        // and usage default to 0 with no explanation -- worth flagging loudly, since this is
+        // exactly what a wrong file in the Leave Report slot (e.g. the Employee List Report
+        // uploaded twice) looks like.
+        showToast('Leave Report: couldn’t find an "Employee ID"/"Leave Type" header row — check you uploaded the right file. Every balance will show as 0 until this is fixed.', '#e67e00');
       }
     }
 
