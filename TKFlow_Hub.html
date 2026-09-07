@@ -1933,6 +1933,28 @@ function signInWithGoogle() {
           </div>
         </div>
 
+        <!-- Search Tickets for Manual VLs — scans Disputes tickets logged under other Nature
+             values (Leave Application / Others) for VL-related keywords in their details,
+             since "Manual Leave Application" only recently became a real, selectable Nature.
+             Nothing here is auto-included; the analyst checks which rows actually qualify. -->
+        <div id="lcv-ticket-search-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:2100;align-items:center;justify-content:center;overflow-y:auto;padding:24px 0;">
+          <div style="background:#fff;border-radius:16px;width:min(720px,95vw);max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.2);padding:24px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+              <div style="font-size:15px;font-weight:600;color:#1a1a2e;">Search Tickets for Manual VLs</div>
+              <div onclick="lcvCloseTicketSearchModal()" style="cursor:pointer;color:#9898a6;font-size:18px;">&times;</div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+              <div style="font-size:11px;color:#9898a6;">Tickets logged under a different Nature but that read like an untracked manual VL. Check only the rows that actually qualify.</div>
+              <div style="display:flex;gap:8px;flex-shrink:0;">
+                <button onclick="lcvTicketSearchSelectAll(true)" style="padding:4px 10px;background:#F8F8FA;border:1px solid #EBEBEF;border-radius:6px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;">Select all</button>
+                <button onclick="lcvTicketSearchSelectAll(false)" style="padding:4px 10px;background:#F8F8FA;border:1px solid #EBEBEF;border-radius:6px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;">Clear all</button>
+              </div>
+            </div>
+            <div id="lcv-ticket-search-list" style="max-height:50vh;overflow-y:auto;border:1px solid #EBEBEF;border-radius:14px;"></div>
+            <button onclick="lcvImportSelectedTicketMatches()" style="width:100%;padding:10px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;margin-top:12px;"><i class="ti ti-download"></i> Import Selected Rows</button>
+          </div>
+        </div>
+
         <div id="adhoc-tailored-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:2000;align-items:center;justify-content:center;overflow-y:auto;padding:24px 0;">
           <div style="background:#fff;border-radius:16px;width:min(480px,94vw);max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.2);padding:24px;">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
@@ -23768,6 +23790,99 @@ function lcvFindManualVLTickets(subKey) {
   });
 }
 
+// "Manual Leave Application" is a real, selectable Nature value now, but plenty of tickets
+// logged before it existed (or logged under "Others" by habit) are genuinely untracked manual
+// VLs hiding under a different Nature. This scans those other tickets for VL-ish language in
+// their details and surfaces matches for the analyst to review — nothing here is ever
+// auto-included, same as the Historical Import flow already does for this identical problem.
+var LCV_MANUAL_VL_KEYWORDS = ['manual vl', 'manual leave', 'manually filed', 'manually applied', 'walk-in leave', 'walk in leave', 'not reflected in the system', 'not logged in the system', 'not captured in the system', 'offline leave'];
+function lcvFindPossibleManualVLTickets(subKey) {
+  if (typeof allDisputes === 'undefined') return [];
+  var d = window._lcvPreviewData;
+  var alreadyIn = {};
+  ((d && d.manualVLTickets) || []).forEach(function(t) { if (t.id) alreadyIn[t.id] = true; });
+  return allDisputes.filter(function(disp) {
+    if (disp.client !== subKey) return false;
+    if (disp.id && alreadyIn[disp.id]) return false;
+    var nature = (disp.nature || '').trim().toLowerCase();
+    if (nature === 'manual leave application') return false; // already auto-included elsewhere
+    if (nature !== 'leave application' && nature !== 'others' && nature !== '') return false;
+    var text = (disp.fullDetails || '').toLowerCase();
+    return LCV_MANUAL_VL_KEYWORDS.some(function(k) { return text.indexOf(k) >= 0; });
+  }).map(function(disp) {
+    return {
+      id: disp.id || '', dateSubmitted: disp.dateSubmitted || '', empNo: disp.empNo || '', name: disp.name || '',
+      nature: disp.nature || '', details: disp.fullDetails || '', dateAction: disp.dateAction || '',
+      actionMade: disp.findings || '', recommendedResolution: disp.recommendedResolution || '',
+      payoutCutoff: disp.cutoff || disp.payoutCutoff || '', rawAmount: disp.amount || '',
+      disputeDates: disp.disputeDates || '', coveredDates: lcvParseDateList(disp.disputeDates || ''),
+      suggestedDays: lcvParseVLDaysSuggestion(disp.amount), confirmedDays: null, confirmed: false,
+      included: false,
+    };
+  });
+}
+
+function lcvOpenTicketSearchModal() {
+  var d = window._lcvPreviewData;
+  if (!d) return;
+  var subKey = d.subKey || lcvCurrentClientKey();
+  window._lcvTicketSearchResults = lcvFindPossibleManualVLTickets(subKey);
+  lcvRenderTicketSearchReview();
+  var modal = document.getElementById('lcv-ticket-search-modal');
+  if (modal) modal.style.display = 'flex';
+}
+function lcvCloseTicketSearchModal() {
+  var modal = document.getElementById('lcv-ticket-search-modal');
+  if (modal) modal.style.display = 'none';
+}
+function lcvRenderTicketSearchReview() {
+  var list = document.getElementById('lcv-ticket-search-list');
+  if (!list) return;
+  var rows = window._lcvTicketSearchResults || [];
+  if (!rows.length) {
+    list.innerHTML = '<div style="padding:24px;text-align:center;color:#9898a6;font-size:12px;">No other tickets look like untracked manual VLs — nothing outside “Manual Leave Application” matched.</div>';
+    return;
+  }
+  list.innerHTML = rows.map(function(r, idx) {
+    return '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 14px;border-bottom:1px solid #F4F4F8;">'
+      + '<input type="checkbox" ' + (r.included ? 'checked' : '') + ' onchange="lcvTicketSearchToggleRow(' + idx + ', this.checked)" style="margin-top:2px;cursor:pointer;">'
+      + '<div style="flex:1;">'
+      + '<div style="font-size:12px;font-weight:600;color:#1a1a2e;">' + (r.name || r.empNo) + ' <span style="font-weight:400;color:#9898a6;">(' + (r.empNo || 'no ID') + ')</span></div>'
+      + '<div style="font-size:11px;color:#6b6b80;margin-top:2px;">Ticket ' + (r.id || '—') + ' · ' + (r.nature || '') + ' · ' + (r.dateSubmitted || '') + '</div>'
+      + '<div style="font-size:11px;color:#9898a6;margin-top:2px;">' + (r.details || '') + '</div>'
+      + '</div></div>';
+  }).join('');
+}
+function lcvTicketSearchToggleRow(idx, checked) {
+  if (window._lcvTicketSearchResults && window._lcvTicketSearchResults[idx]) window._lcvTicketSearchResults[idx].included = checked;
+}
+function lcvTicketSearchSelectAll(val) {
+  (window._lcvTicketSearchResults || []).forEach(function(r) { r.included = val; });
+  lcvRenderTicketSearchReview();
+}
+function lcvImportSelectedTicketMatches() {
+  var selected = (window._lcvTicketSearchResults || []).filter(function(r) { return r.included; });
+  if (!selected.length) { if (typeof showToast === 'function') showToast('Check at least one row to import', '#e67e00'); return; }
+  var d = window._lcvPreviewData;
+  if (!d) return;
+  if (!d.manualVLTickets) d.manualVLTickets = [];
+  selected.forEach(function(r) {
+    d.manualVLTickets.push({
+      id: r.id, dateSubmitted: r.dateSubmitted, empNo: r.empNo, name: r.name,
+      nature: r.nature, details: r.details, dateAction: r.dateAction,
+      actionMade: r.actionMade, recommendedResolution: r.recommendedResolution,
+      payoutCutoff: r.payoutCutoff, rawAmount: r.rawAmount,
+      disputeDates: r.disputeDates, coveredDates: r.coveredDates,
+      suggestedDays: r.suggestedDays, confirmedDays: null, confirmed: false,
+      isKeywordMatch: true,
+    });
+  });
+  lcvCloseTicketSearchModal();
+  lcvRebuildComputed();
+  lcvSwitchPreviewTab('manualvl');
+  if (typeof showToast === 'function') showToast(selected.length + ' ticket(s) added — confirm each one\'s VL days to include it in the balance');
+}
+
 // Recomputes every derived number (adjusted balance, conversion math, status groups) from
 // the raw parsed roster plus whichever Manual VL tickets have been confirmed so far. Called
 // after initial parse and again every time a ticket gets confirmed/unconfirmed, so the VL
@@ -24515,6 +24630,7 @@ function lcvSwitchPreviewTab(tab) {
     var importBtnHtml = '<div style="padding:0 12px 12px;display:flex;gap:8px;flex-wrap:wrap;">'
       + '<button onclick="lcvOpenManualAddModal()" style="padding:7px 14px;background:#fff;border:1px solid #A6EB93;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-plus"></i> Add Manual VL</button>'
       + '<button onclick="lcvOpenHistoricalImportModal()" style="padding:7px 14px;background:#fff;border:1px solid #A6EB93;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-upload"></i> Import Historical Manual VLs</button>'
+      + '<button onclick="lcvOpenTicketSearchModal()" style="padding:7px 14px;background:#fff;border:1px solid #A6EB93;color:#32CE13;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;"><i class="ti ti-search"></i> Search Tickets for Manual VLs</button>'
       + '</div>';
     if (!tickets.length) {
       body.innerHTML = importBtnHtml + '<div style="padding:24px;text-align:center;color:#9898a6;font-size:12px;">'
@@ -24529,7 +24645,7 @@ function lcvSwitchPreviewTab(tab) {
             var borderColor = t.confirmed ? '#32CE13' : (t.suggestedDays === null ? '#F59E0B' : '#EBEBEF');
             return '<div style="margin:0 12px 10px;padding:12px 14px;border:1.5px solid ' + borderColor + ';border-radius:14px;background:' + (t.confirmed ? '#F0FDF4' : '#fff') + ';">'
               + '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px;">'
-              + '<div><strong style="font-size:12px;color:#1a1a2e;">' + (t.name || t.empNo) + '</strong> <span style="font-size:11px;color:#9898a6;">(' + (t.empNo || 'no ID') + ')</span>' + (matched ? '' : ' <span style="font-size:10px;color:#e67e00;background:#fff4e6;padding:1px 6px;border-radius:14px;">no roster match</span>') + (t.isHistorical ? ' <span style="font-size:10px;color:#6b6b80;background:#F4F4F8;padding:1px 6px;border-radius:14px;">Historical import</span>' : '') + (t.isManual ? ' <span style="font-size:10px;color:#6b6b80;background:#F4F4F8;padding:1px 6px;border-radius:14px;">Manually added</span>' : '') + (t.isInvestigation ? ' <span style="font-size:10px;color:#8435EB;background:#F3E8FF;padding:1px 6px;border-radius:14px;">From Credits Check</span>' : '') + '</div>'
+              + '<div><strong style="font-size:12px;color:#1a1a2e;">' + (t.name || t.empNo) + '</strong> <span style="font-size:11px;color:#9898a6;">(' + (t.empNo || 'no ID') + ')</span>' + (matched ? '' : ' <span style="font-size:10px;color:#e67e00;background:#fff4e6;padding:1px 6px;border-radius:14px;">no roster match</span>') + (t.isHistorical ? ' <span style="font-size:10px;color:#6b6b80;background:#F4F4F8;padding:1px 6px;border-radius:14px;">Historical import</span>' : '') + (t.isManual ? ' <span style="font-size:10px;color:#6b6b80;background:#F4F4F8;padding:1px 6px;border-radius:14px;">Manually added</span>' : '') + (t.isInvestigation ? ' <span style="font-size:10px;color:#8435EB;background:#F3E8FF;padding:1px 6px;border-radius:14px;">From Credits Check</span>' : '') + (t.isKeywordMatch ? ' <span style="font-size:10px;color:#1679FA;background:#E8F1FF;padding:1px 6px;border-radius:14px;">Found by ticket search</span>' : '') + '</div>'
               + '<div style="font-size:11px;color:#9898a6;">Ticket ' + (t.id || '\u2014') + ' \u00b7 ' + (t.dateSubmitted || '') + '</div>'
               + '</div>'
               + '<div style="font-size:11px;color:#6b6b80;margin-bottom:8px;">' + (t.details || '') + '</div>'
@@ -25401,7 +25517,7 @@ function openDisputeTicket(id, clientContext) {
   // Employee name lives in its own always-visible input above the accordion now (dtm-employee-
   // name), not in this grid -- kept out of fieldSpecs so it isn't edited in two places.
   document.getElementById('dtm-employee-name').value = d.name || '';
-  var dtmRequestTypes = ['Payroll Dispute', 'Leave Application', 'Missing / Incorrect Logs', 'Others'];
+  var dtmRequestTypes = ['Payroll Dispute', 'Leave Application', 'Manual Leave Application', 'Missing / Incorrect Logs', 'Others'];
   var fieldSpecs = [
     ['Employee No.',     'empNo',           d.empNo],
     ['Employee Email',   'empEmail',        d.empEmail],
@@ -26535,7 +26651,7 @@ function dtmExtractFromPasteText() {
   if (parsed.entity)  { d.entity = dtmResolveEntityName(d.client, parsed.entity); filledAny = true; }
   if (parsed.manager) { d.manager = parsed.manager; filledAny = true; }
   if (parsed.nature) {
-    var knownNatures = ['Payroll Dispute', 'Leave Application', 'Missing / Incorrect Logs', 'Others'];
+    var knownNatures = ['Payroll Dispute', 'Leave Application', 'Manual Leave Application', 'Missing / Incorrect Logs', 'Others'];
     d.nature = knownNatures.indexOf(parsed.nature) >= 0 ? parsed.nature : 'Others';
     filledAny = true;
   }
