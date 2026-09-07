@@ -24673,8 +24673,6 @@ function lcvSwitchPreviewTab(tab) {
               + '</div>'
               + '<div style="font-size:11px;color:#6b6b80;margin-bottom:8px;">' + (t.details || '') + '</div>'
               + '<div style="font-size:11px;color:#1a1a2e;margin-bottom:8px;"><strong>VLs Filed (raw):</strong> ' + (t.rawAmount || '\u2014') + (t.suggestedDays === null ? ' <span style="color:#e67e00;">\u2014 ambiguous, enter manually</span>' : '') + '</div>'
-              + '<div style="margin-bottom:8px;"><label style="font-size:11px;color:#6b6b80;display:block;margin-bottom:3px;">Remarks (e.g. which dates this VL covers) \u2014 shown in the Summary tab\'s Remarks column instead of the ticket number:</label>'
-                + '<input type="text" value="' + (t.remarks || '').replace(/"/g, '&quot;') + '" oninput="lcvUpdateManualVLRemarks(' + idx + ', this.value)" placeholder="e.g. Aug 3\u20134, 2026" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #EBEBEF;border-radius:7px;font-size:12px;font-family:Rubik,sans-serif;"></div>'
               + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
               + (t.confirmed
                   ? '<span style="font-size:12px;color:#1F7A0A;font-weight:600;"><i class="ti ti-circle-check" style="font-size:13px;"></i> Confirmed: +' + t.confirmedDays + ' day(s) added back</span>'
@@ -24682,6 +24680,7 @@ function lcvSwitchPreviewTab(tab) {
                   : '<label style="font-size:11px;color:#6b6b80;">VL Days:</label>'
                     + '<input type="number" step="0.5" id="lcv-mvl-days-' + idx + '" value="' + (t.suggestedDays !== null ? t.suggestedDays : '') + '" placeholder="e.g. 1" style="width:70px;padding:5px 8px;border:1px solid #EBEBEF;border-radius:7px;font-size:12px;font-family:Rubik,sans-serif;">'
                     + '<button onclick="lcvConfirmManualVL(' + idx + ')" style="padding:5px 12px;background:#32CE13;color:#fff;border:none;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-circle-check" style="font-size:12px;"></i> Confirm</button>')
+              + '<input type="text" value="' + (t.remarks || '').replace(/"/g, '&quot;') + '" oninput="lcvUpdateManualVLRemarks(' + idx + ', this.value)" placeholder="Remarks \u2014 e.g. Aug 3\u20134, 2026" title="Shown in the Summary tab\'s Remarks column instead of the ticket number" style="flex:1;min-width:160px;padding:5px 8px;border:1px solid #EBEBEF;border-radius:7px;font-size:12px;font-family:Rubik,sans-serif;">'
               + '</div>'
               + '</div>';
           }).join('');
