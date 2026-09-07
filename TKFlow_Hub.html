@@ -23114,10 +23114,27 @@ function lcvRenderHome() {
         return '<div onclick="' + (hasSnapshot ? 'lcvReopenRun(\'' + ck + '\',' + idx + ')' : '') + '" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid #F4F4F8;' + (hasSnapshot ? 'cursor:pointer;' : '') + '" onmouseover="' + (hasSnapshot ? "this.style.background='#F8F8FA'" : '') + '" onmouseout="this.style.background=\'transparent\'">'
           + '<div><div style="font-size:12px;font-weight:600;color:#1a1a2e;">' + r.company + ' \u2014 ' + r.year + '</div>'
           + '<div style="font-size:11px;color:#9898a6;margin-top:2px;">' + new Date(r.timestamp).toLocaleString() + '</div></div>'
+          + '<div style="display:flex;align-items:center;gap:10px;">'
           + '<span style="font-size:11px;color:#32CE13;font-weight:600;display:flex;align-items:center;gap:6px;"><i class="ti ti-circle-check" style="font-size:12px;"></i> Finalized' + (hasSnapshot ? ' <i class="ti ti-chevron-right" style="font-size:12px;color:#9898a6;"></i>' : '') + '</span>'
+          + '<div onclick="event.stopPropagation();lcvDeleteRun(\'' + ck + '\',' + idx + ')" title="Delete this run" style="cursor:pointer;color:#9898a6;padding:4px;"><i class="ti ti-trash" style="font-size:14px;"></i></div>'
+          + '</div>'
           + '</div>';
       }).join('')
     + '</div>';
+}
+
+// Removes a run from the Past Runs list — window.lcvRuns is in-memory only (never persisted
+// to the database), so this is purely a "get it off my list" action, not an undo of anything
+// that was actually saved anywhere.
+function lcvDeleteRun(ck, idx) {
+  var runs = window.lcvRuns[ck] || [];
+  var run = runs[idx];
+  if (!run) return;
+  appConfirm('Delete this run?', 'Remove "' + run.company + ' — ' + run.year + '" from this list? This only removes it from Past Runs — nothing was saved to the database, so this can\'t be undone by refreshing either.', function() {
+    runs.splice(idx, 1);
+    lcvRenderHome();
+    if (typeof showToast === 'function') showToast('Run deleted');
+  });
 }
 
 // Reopens a past run's preview (with its full computed data) so it can be reviewed again
