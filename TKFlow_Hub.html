@@ -1807,6 +1807,11 @@ function signInWithGoogle() {
                 <input type="number" id="lcv-threshold" class="modal-input" style="width:100%;" placeholder="10" value="10">
                 <div style="font-size:9px;color:#9898a6;margin-top:3px;">Up to 12 days/year is VL tax-exempt - as per BIR RR No. 029-2025</div>
               </div>
+              <div>
+                <div class="field-label">Convertible SL (Days)</div>
+                <input type="number" id="lcv-sl-threshold" class="modal-input" style="width:100%;" placeholder="0" value="0">
+                <div style="font-size:9px;color:#9898a6;margin-top:3px;">Only applied when this client has Sick Leave credit validation enabled</div>
+              </div>
             </div>
 
             <div class="task-dz" id="lcv-dz-leave" onclick="document.getElementById('lcv-f-leave').click()" ondragover="return dzDragOver(event)" ondragleave="dzDragLeave(event)" ondrop="dzDrop(event,'lcv-f-leave')">
@@ -1979,7 +1984,7 @@ function signInWithGoogle() {
             <div id="lcv-consol-sub-selector-row" style="display:none;align-items:center;gap:8px;margin-bottom:12px;">
               <label style="font-size:11px;color:#6b6b80;font-weight:600;">Viewing subcompany (per-sub tabs):</label>
               <select id="lcv-consol-sub-selector" class="modal-input" style="width:auto;padding:6px 10px;font-size:12px;" onchange="lcvConsolSwitchSub(this.value)"></select>
-              <span style="font-size:10px;color:#9898a6;">VL Conversion always shows all subcompanies combined.</span>
+              <span style="font-size:10px;color:#9898a6;">VL/SL Conversion always show all subcompanies combined.</span>
             </div>
 
             <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;">
@@ -1988,6 +1993,7 @@ function signInWithGoogle() {
               <div class="radio-opt" id="lcv-ptab-manualvl" onclick="lcvSwitchPreviewTab('manualvl')" style="padding:7px 14px;font-size:12px;">Manual VLs<span id="lcv-manualvl-badge" style="display:none;margin-left:6px;background:#F59E0B;color:#fff;border-radius:14px;padding:1px 7px;font-size:10px;font-weight:700;"></span></div>
               <div class="radio-opt" id="lcv-ptab-summary" onclick="lcvSwitchPreviewTab('summary')" style="padding:7px 14px;font-size:12px;">Summary</div>
               <div class="radio-opt selected" id="lcv-ptab-vlconv" onclick="lcvSwitchPreviewTab('vlconv')" style="padding:7px 14px;font-size:12px;">VL Conversion</div>
+              <div class="radio-opt" id="lcv-ptab-slconv" onclick="lcvSwitchPreviewTab('slconv')" style="padding:7px 14px;font-size:12px;">SL Conversion</div>
               <div class="radio-opt" id="lcv-ptab-creditcheck" onclick="lcvSwitchPreviewTab('creditcheck')" style="padding:7px 14px;font-size:12px;">Credits Check<span id="lcv-creditcheck-badge" style="display:none;margin-left:6px;background:#F59E0B;color:#fff;border-radius:14px;padding:1px 7px;font-size:10px;font-weight:700;"></span></div>
             </div>
 
@@ -23946,6 +23952,7 @@ function lcvRebuildComputed() {
     // year's fresh entitlement only (no prior-year carryover assumed), reusing the same
     // tenure-based credit table Leave Monitoring already has configured for this client.
     var vlEntitlementCheck = null, slEntitlementCheck = null;
+    var slForConversion = 0, slForCarryover = 0, slConversionAmount = 0, slEligibleForConversion = false;
     if (lcvCreditConfig) {
       if (!e.hireDateObj) {
         vlEntitlementCheck = { noHireDate: true, flagged: false };
@@ -23996,6 +24003,14 @@ function lcvRebuildComputed() {
             var slShouldBe = slEntitlement - (e.sickUsedDuringRange || 0);
             var slGap = Math.round(((e.sickAvail || 0) - slShouldBe) * 100) / 100;
             slEntitlementCheck = { expected: slEntitlement, shouldBe: slShouldBe, gap: slGap, flagged: slGap !== 0 };
+
+            // SL conversion, same mechanics as VL's forConversion/forCarryover above but capped
+            // by its own configurable threshold (d.slThreshold) -- there's no Manual SL ticket
+            // flow to add back, so this reads straight off the Leave Report's Sick balance.
+            slForConversion = Math.min(e.sickAvail || 0, d.slThreshold || 0);
+            slForCarryover = Math.max((e.sickAvail || 0) - slForConversion, 0);
+            slConversionAmount = Math.round(dailyRate * slForConversion * 100) / 100;
+            slEligibleForConversion = true;
           }
         }
       }
@@ -24015,6 +24030,11 @@ function lcvRebuildComputed() {
       dailyRate: Math.round(dailyRate * 100) / 100,
       vlConversionDays: forConversion,
       vlConversionAmount: Math.round(dailyRate * forConversion * 100) / 100,
+      slForConversion: slForConversion,
+      slForCarryover: slForCarryover,
+      slConversionDays: slForConversion,
+      slConversionAmount: slConversionAmount,
+      slEligibleForConversion: slEligibleForConversion,
     });
   });
 
@@ -24029,6 +24049,7 @@ function lcvRebuildComputed() {
   });
   d.employees = [].concat.apply([], statusGroups.map(function(g){ return g.employees; }));
   d.statusGroups = statusGroups;
+  d.validateSick = !!(lcvValidateSick && lcvCreditConfig && lcvCreditConfig.sickEnabled !== false);
 
   var badge = document.getElementById('lcv-manualvl-badge');
   if (badge) {
@@ -24057,7 +24078,7 @@ function lcvToggleStatusEligibility(status, checked) {
   if (!d.statusOverrides) d.statusOverrides = {};
   d.statusOverrides[status] = checked;
   lcvRebuildComputed();
-  lcvSwitchPreviewTab('vlconv');
+  lcvSwitchPreviewTab(window._lcvPreviewTab === 'slconv' ? 'slconv' : 'vlconv');
 }
 
 // Confirming (or unconfirming) a ticket is the only thing that lets its VL days affect an
@@ -24142,11 +24163,12 @@ function lcvOpenConsolUploadModal() {
     window._lcvConsolFiles[sk] = { emp: null, leave: null, att: null };
     return '<div style="border:1px solid #EBEBEF;border-radius:16px;padding:14px;margin-bottom:14px;">'
       + '<div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px;">' + name + ' <span style="color:#9898a6;font-weight:400;">(' + sk + ')</span></div>'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:10px;">'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;margin-bottom:10px;">'
       + '<div><div class="field-label">Year</div><input type="number" id="lcv-c-year-' + sk + '" class="modal-input" style="width:100%;" value="' + year + '"></div>'
       + '<div><div class="field-label">Cut-off</div><input type="date" id="lcv-c-cutoff-' + sk + '" class="modal-input" style="width:100%;"></div>'
       + '<div><div class="field-label">Factor Rate</div><input type="number" id="lcv-c-factorrate-' + sk + '" class="modal-input" style="width:100%;" value="261"></div>'
-      + '<div><div class="field-label">Threshold</div><input type="number" id="lcv-c-threshold-' + sk + '" class="modal-input" style="width:100%;" value="10"></div>'
+      + '<div><div class="field-label">VL Threshold</div><input type="number" id="lcv-c-threshold-' + sk + '" class="modal-input" style="width:100%;" value="10"></div>'
+      + '<div><div class="field-label">SL Threshold</div><input type="number" id="lcv-c-sl-threshold-' + sk + '" class="modal-input" style="width:100%;" value="0"></div>'
       + '</div>'
       + '<div class="task-dz" id="lcv-c-dz-leave-' + sk + '" onclick="document.getElementById(\'lcv-c-f-leave-' + sk + '\').click()" ondragover="return dzDragOver(event)" ondragleave="dzDragLeave(event)" ondrop="dzDrop(event,\'lcv-c-f-leave-' + sk + '\')" style="margin-bottom:6px;">'
       + '<div class="task-dz-icon" style="background:#DCFCE7;color:#32CE13;"><i class="ti ti-calendar-stats"></i></div>'
@@ -24208,11 +24230,12 @@ function lcvRunConsolPreview() {
       year: parseFloat(document.getElementById('lcv-c-year-' + sk).value) || new Date().getFullYear(),
       factorRate: parseFloat(document.getElementById('lcv-c-factorrate-' + sk).value) || 261,
       threshold: parseFloat(document.getElementById('lcv-c-threshold-' + sk).value) || 10,
+      slThreshold: parseFloat(document.getElementById('lcv-c-sl-threshold-' + sk).value) || 0,
     };
     return lcvParseFilesFor(f.emp, f.leave, f.att).then(function(parsed) {
       var subData = {
         company: (clients[sk] && clients[sk].name) || sk, subKey: sk,
-        year: fields.year, factorRate: fields.factorRate, threshold: fields.threshold,
+        year: fields.year, factorRate: fields.factorRate, threshold: fields.threshold, slThreshold: fields.slThreshold,
         rawEmployees: parsed.employees, leaveTransactions: parsed.leaveTransactions,
         attendanceBlocks: parsed.attendanceBlocks, manualVLTickets: lcvFindManualVLTickets(sk),
         statusOverrides: {},
@@ -24239,6 +24262,8 @@ function lcvRunConsolPreview() {
     window._lcvPreviewData = subDatas[0];
     var titleEl = document.getElementById('lcv-preview-title');
     if (titleEl) titleEl.textContent = 'Consolidated \u2014 ' + subDatas.map(function(s){ return s.company; }).join(', ');
+    var slTab = document.getElementById('lcv-ptab-slconv');
+    if (slTab) slTab.style.display = subDatas.some(function(s){ return s.validateSick; }) ? '' : 'none';
 
     lcvCloseConsolUploadModal();
     var modal = document.getElementById('lcv-preview-modal');
@@ -24295,7 +24320,7 @@ function lcvConsolToggleStatusEligibility(status, checked) {
   if (!cd.statusOverrides) cd.statusOverrides = {};
   cd.statusOverrides[status] = checked;
   lcvConsolRebuildCombined();
-  lcvSwitchPreviewTab('vlconv');
+  lcvSwitchPreviewTab(window._lcvPreviewTab === 'slconv' ? 'slconv' : 'vlconv');
 }
 
 // Renders the combined VL Conversion view — same Breakdown/Computation partition as the
@@ -24345,6 +24370,54 @@ function lcvRenderConsolVlConv() {
       + '<table style="width:100%;border-collapse:collapse;"><thead>' + groupRow + headerRow + '</thead><tbody>' + bodyRows + '</tbody></table>';
   }).join('');
   body.innerHTML = groupsHtml || '<div style="padding:16px;font-size:12px;color:#9898a6;">No employees found.</div>';
+}
+
+// Renders the combined SL Conversion view — same layout as lcvRenderConsolVlConv, reading the
+// sl* fields instead. Status eligibility is toggled from the VL Conversion tab (shared
+// statusOverrides), so no checkbox is duplicated here.
+function lcvRenderConsolSlConv() {
+  var cd = window._lcvConsolData;
+  var body = document.getElementById('lcv-preview-body');
+  if (!cd || !body) return;
+  var headers2 = ['Subcompany','Employee ID','Last Name','First Name','Middle Name','Employment Status','Leave Type','Hire Date','Department','Total Available Balance (YTD)','For Conversion','For Carryover','','Basic Salary','Factor Rate Per Payroll','Daily Rate','SL Conversion Days','SL Conversion Amount','Sprout Remarks'];
+  var stickyCount = 5;
+  var colWidths = [100,85,120,110,110,110,90,95,110,150,105,105,20,105,120,95,115,130,140];
+  function leftOffset(i){ var s = 0; for (var k=0;k<i;k++) s += (colWidths[k]||100); return s; }
+  function cellStyle(i, isHeader) {
+    var w = 'width:' + colWidths[i] + 'px;min-width:' + colWidths[i] + 'px;';
+    if (i >= stickyCount) return w;
+    var bg = isHeader ? '#F8F8FA' : '#fff';
+    return w + 'position:sticky;left:' + leftOffset(i) + 'px;z-index:' + (isHeader ? 4 : 1) + ';background:' + bg + ';' + (i === stickyCount - 1 ? 'box-shadow:2px 0 4px rgba(0,0,0,0.06);' : '');
+  }
+  var groupRow = '<tr style="background:#EEF2F7;">'
+    + '<th colspan="9" style="border-bottom:1px solid #EBEBEF;position:sticky;top:0;z-index:3;background:#EEF2F7;"></th>'
+    + '<th colspan="3" style="text-align:center;padding:6px;font-size:11px;font-weight:700;color:#1679FA;border-bottom:1px solid #EBEBEF;border-left:2px solid #1679FA;border-right:2px solid #1679FA;position:sticky;top:0;z-index:3;background:#EEF2F7;">Breakdown</th>'
+    + '<th style="border-bottom:1px solid #EBEBEF;position:sticky;top:0;z-index:3;background:#EEF2F7;"></th>'
+    + '<th colspan="5" style="text-align:center;padding:6px;font-size:11px;font-weight:700;color:#8435EB;border-bottom:1px solid #EBEBEF;border-left:2px solid #8435EB;border-right:2px solid #8435EB;position:sticky;top:0;z-index:3;background:#EEF2F7;">Computation</th>'
+    + '<th style="border-bottom:1px solid #EBEBEF;position:sticky;top:0;z-index:3;background:#EEF2F7;"></th>'
+    + '</tr>';
+  var headerRow = '<tr style="background:#F8F8FA;">' + headers2.map(function(h, i){
+      return '<th style="text-align:left;padding:9px 8px;color:#6b6b80;font-weight:600;border-bottom:1px solid #EBEBEF;white-space:nowrap;position:sticky;top:29px;z-index:2;font-size:11px;' + cellStyle(i, true) + '">' + h + '</th>';
+    }).join('') + '</tr>';
+
+  var groupsHtml = (cd.combinedStatusGroups || []).map(function(g) {
+    var headerColor = g.eligible ? '#1F7A0A' : '#e67e00';
+    var headerBg = g.eligible ? '#DCFCE7' : '#fff4e6';
+    var bodyRows = g.employees.map(function(e) {
+      var r = [e.subName || e.subKey, e.id, e.lastName, e.firstName, e.middleName, e.employmentStatus, 'Sick', e.hireDate, e.department,
+        (e.sickAvail || 0).toFixed(2), e.slForConversion.toFixed(2), e.slForCarryover.toFixed(2), '',
+        e.baseSalary.toLocaleString(), e.factorRate, e.dailyRate.toFixed(2), e.slConversionDays.toFixed(2),
+        '₱' + e.slConversionAmount.toLocaleString(undefined,{minimumFractionDigits:2}), ''];
+      return '<tr>' + r.map(function(c, i){ return '<td style="padding:7px 8px;border-bottom:1px solid #F4F4F8;color:#1a1a2e;white-space:nowrap;font-size:12px;' + cellStyle(i, false) + '">' + c + '</td>'; }).join('') + '</tr>';
+    }).join('');
+    return '<div style="margin-top:16px;padding:8px 12px;background:' + headerBg + ';border-radius:12px 8px 0 0;display:flex;align-items:center;gap:10px;">'
+      + '<span style="font-size:12px;font-weight:700;color:' + headerColor + ';">' + g.status + '</span>'
+      + '<span style="font-size:11px;color:' + headerColor + ';">(' + g.employees.length + ')</span>'
+      + '</div>'
+      + '<table style="width:100%;border-collapse:collapse;"><thead>' + groupRow + headerRow + '</thead><tbody>' + bodyRows + '</tbody></table>';
+  }).join('');
+  body.innerHTML = (groupsHtml || '<div style="padding:16px;font-size:12px;color:#9898a6;">No employees found.</div>')
+    + '<div style="padding:10px 12px;font-size:11px;color:#9898a6;">Employees with no Sick Leave record, or under 1 year tenure, show 0 — see Credits Check for entitlement gaps.</div>';
 }
 
 function lcvBackToEditDispatch() {
@@ -24443,6 +24516,28 @@ function lcvConsolFinalize() {
   ];
   XLSX.utils.book_append_sheet(wb, wsVlConv, 'VL Conversion');
 
+  // Combined SL Conversion — only when at least one subcompany has Sick Leave validation on.
+  if (cd.subs.some(function(sd){ return sd.validateSick; })) {
+    var slConvHeaders = ['Subcompany','Employee ID','Last Name','First Name','Middle Name','Employment Status','Leave Type','Hire Date','Department','Total Available Balance (YTD)','For Conversion','For Carryover','','Basic Salary','Factor Rate Per Payroll','Daily Rate','SL Conversion Days','SL Conversion Amount','Sprout Remarks'];
+    var slPartitionRow = ['','','','','','','','','','Breakdown','','','','Computation','','','','',''];
+    var slConvRows = [slPartitionRow, slConvHeaders];
+    (cd.combinedStatusGroups || []).forEach(function(g, gi) {
+      if (gi > 0) slConvRows.push(slConvHeaders.map(function(){ return ''; }));
+      g.employees.forEach(function(e) {
+        slConvRows.push([e.subName || e.subKey, e.id, e.lastName, e.firstName, e.middleName, e.employmentStatus, 'Sick', e.hireDate, e.department,
+          (e.sickAvail || 0), e.slForConversion.toFixed(2), e.slForCarryover.toFixed(2), '',
+          e.baseSalary, e.factorRate, e.dailyRate.toFixed(2), e.slConversionDays.toFixed(2), e.slConversionAmount.toFixed(2), '']);
+      });
+    });
+    var wsSlConv = XLSX.utils.aoa_to_sheet(slConvRows);
+    wsSlConv['!cols'] = [16,12,14,14,14,16,12,12,16,20,14,14,3,14,16,12,16,18,20].map(function(w){ return {wch:w}; });
+    wsSlConv['!merges'] = [
+      { s: { r: 0, c: 9 },  e: { r: 0, c: 11 } },
+      { s: { r: 0, c: 13 }, e: { r: 0, c: 17 } },
+    ];
+    XLSX.utils.book_append_sheet(wb, wsSlConv, 'SL Conversion');
+  }
+
   xlsxDownloadWrapped(wb, baseName + '.xlsx');
 
   var ck = lcvCurrentClientKey();
@@ -24464,6 +24559,7 @@ function lcvRunPreview() {
   var year = document.getElementById('lcv-year').value || new Date().getFullYear();
   var factorRate = parseFloat(document.getElementById('lcv-factorrate').value) || 261;
   var threshold = parseFloat(document.getElementById('lcv-threshold').value) || 10;
+  var slThreshold = parseFloat(document.getElementById('lcv-sl-threshold').value) || 0;
 
   var btn = document.getElementById('lcv-preview-btn');
   if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Reading files\u2026'; }
@@ -24477,7 +24573,7 @@ function lcvRunPreview() {
   lcvParseFiles().then(function(parsed) {
     var manualVLTickets = lcvFindManualVLTickets(selectedSubKey);
 
-    window._lcvPreviewData = { company: company, subKey: selectedSubKey, year: year, factorRate: factorRate, threshold: threshold, rawEmployees: parsed.employees, leaveTransactions: parsed.leaveTransactions, attendanceBlocks: parsed.attendanceBlocks, manualVLTickets: manualVLTickets };
+    window._lcvPreviewData = { company: company, subKey: selectedSubKey, year: year, factorRate: factorRate, threshold: threshold, slThreshold: slThreshold, rawEmployees: parsed.employees, leaveTransactions: parsed.leaveTransactions, attendanceBlocks: parsed.attendanceBlocks, manualVLTickets: manualVLTickets };
     lcvRebuildComputed();
 
     var data = window._lcvPreviewData;
@@ -24485,6 +24581,8 @@ function lcvRunPreview() {
     var ineligibleCount = data.employees.length - eligibleCount;
     var titleEl = document.getElementById('lcv-preview-title');
     if (titleEl) titleEl.textContent = company + ' \u2014 ' + year + ' Leave Conversion Validation (' + eligibleCount + ' eligible, ' + ineligibleCount + ' other status)';
+    var slTab = document.getElementById('lcv-ptab-slconv');
+    if (slTab) slTab.style.display = data.validateSick ? '' : 'none';
 
     lcvCloseUploadModal();
     var modal = document.getElementById('lcv-preview-modal');
@@ -24517,12 +24615,16 @@ function lcvFullName(e) {
 
 function lcvSwitchPreviewTab(tab) {
   window._lcvPreviewTab = tab;
-  ['summary','leavetx','att','vlconv','manualvl','creditcheck'].forEach(function(t) {
+  ['summary','leavetx','att','vlconv','slconv','manualvl','creditcheck'].forEach(function(t) {
     var el = document.getElementById('lcv-ptab-' + t);
     if (el) el.classList.toggle('selected', t === tab);
   });
   if (tab === 'vlconv' && window._lcvConsolMode) {
     lcvRenderConsolVlConv();
+    return;
+  }
+  if (tab === 'slconv' && window._lcvConsolMode) {
+    lcvRenderConsolSlConv();
     return;
   }
   if (tab === 'creditcheck') {
@@ -24558,8 +24660,8 @@ function lcvSwitchPreviewTab(tab) {
   // VL Conversion gets its own two-row header (partition labels + column names) to match
   // the Breakdown / Computation grouping in the real submitted file, with a spacer column
   // between them. Employee ID/Last/First/Middle stay frozen while scrolling sideways.
-  function vlConvTable(rows) {
-    var headers2 = ['Employee ID','Last Name','First Name','Middle Name','Employment Status','Leave Type','Hire Date','Department','Total Available Balance (YTD)','For Conversion','For Carryover','','Basic Salary','Factor Rate Per Payroll','Daily Rate','VL Conversion Days','VL Conversion Amount','Sprout Remarks'];
+  function vlConvTable(rows, headers2) {
+    headers2 = headers2 || ['Employee ID','Last Name','First Name','Middle Name','Employment Status','Leave Type','Hire Date','Department','Total Available Balance (YTD)','For Conversion','For Carryover','','Basic Salary','Factor Rate Per Payroll','Daily Rate','VL Conversion Days','VL Conversion Amount','Sprout Remarks'];
     var stickyCount = 4;
     var colWidths = [85,120,110,110,110,90,95,110,150,105,105,20,105,120,95,115,130,140];
     function leftOffset(i){ var s=0; for (var k=0;k<i;k++) s+=(colWidths[k]||100); return s; }
@@ -24648,6 +24750,24 @@ function lcvSwitchPreviewTab(tab) {
           }));
     }).join('');
     body.innerHTML = groupsHtml || '<div style="padding:16px;font-size:12px;color:#9898a6;">No employees found.</div>';
+  } else if (tab === 'slconv') {
+    var slHeaders = ['Employee ID','Last Name','First Name','Middle Name','Employment Status','Leave Type','Hire Date','Department','Total Available Balance (YTD)','For Conversion','For Carryover','','Basic Salary','Factor Rate Per Payroll','Daily Rate','SL Conversion Days','SL Conversion Amount','Sprout Remarks'];
+    var slGroupsHtml = (data.statusGroups || []).map(function(g) {
+      var headerColor = g.eligible ? '#1F7A0A' : '#e67e00';
+      var headerBg = g.eligible ? '#DCFCE7' : '#fff4e6';
+      return '<div style="margin-top:16px;padding:8px 12px;background:' + headerBg + ';border-radius:12px 8px 0 0;display:flex;align-items:center;gap:10px;">'
+        + '<span style="font-size:12px;font-weight:700;color:' + headerColor + ';">' + g.status + '</span>'
+        + '<span style="font-size:11px;color:' + headerColor + ';">(' + g.employees.length + ')</span>'
+        + '</div>'
+        + vlConvTable(g.employees.map(function(e){
+            return [e.id, e.lastName, e.firstName, e.middleName, e.employmentStatus, 'Sick', e.hireDate, e.department,
+              (e.sickAvail || 0).toFixed(2), e.slForConversion.toFixed(2), e.slForCarryover.toFixed(2), '',
+              e.baseSalary.toLocaleString(), e.factorRate, e.dailyRate.toFixed(2), e.slConversionDays.toFixed(2),
+              '₱' + e.slConversionAmount.toLocaleString(undefined,{minimumFractionDigits:2}), ''];
+          }), slHeaders);
+    }).join('');
+    body.innerHTML = (slGroupsHtml || '<div style="padding:16px;font-size:12px;color:#9898a6;">No employees found.</div>')
+      + '<div style="padding:10px 12px;font-size:11px;color:#9898a6;">Employees with no Sick Leave record, or under 1 year tenure, show 0 — see Credits Check for entitlement gaps.</div>';
   } else if (tab === 'manualvl') {
     var tickets = data.manualVLTickets || [];
     var importBtnHtml = '<div style="padding:0 12px 12px;display:flex;gap:8px;flex-wrap:wrap;">'
@@ -24909,6 +25029,27 @@ function lcvFinalize() {
     { s: { r: 0, c: 12 }, e: { r: 0, c: 16 } }, // "Computation" over Basic Salary..VL Conversion Amount
   ];
   XLSX.utils.book_append_sheet(wb, wsVlConv, 'VL Conversion');
+
+  if (data.validateSick) {
+    var slConvHeaders = ['Employee ID','Last Name','First Name','Middle Name','Employment Status','Leave Type','Hire Date','Department','Total Available Balance (YTD)','For Conversion','For Carryover','','Basic Salary','Factor Rate Per Payroll','Daily Rate','SL Conversion Days','SL Conversion Amount','Sprout Remarks'];
+    var slConvPartitionRow = ['','','','','','','','','Breakdown','','','','Computation','','','','',''];
+    var slConvRows = [slConvPartitionRow, slConvHeaders];
+    (data.statusGroups || []).forEach(function(g, gi) {
+      if (gi > 0) slConvRows.push(slConvHeaders.map(function(){ return ''; }));
+      g.employees.forEach(function(e) {
+        slConvRows.push([e.id, e.lastName, e.firstName, e.middleName, e.employmentStatus, 'Sick', e.hireDate, e.department,
+          (e.sickAvail || 0), e.slForConversion.toFixed(2), e.slForCarryover.toFixed(2), '',
+          e.baseSalary, e.factorRate, e.dailyRate.toFixed(2), e.slConversionDays.toFixed(2), e.slConversionAmount.toFixed(2), '']);
+      });
+    });
+    var wsSlConv = XLSX.utils.aoa_to_sheet(slConvRows);
+    wsSlConv['!cols'] = [12,14,14,14,16,12,12,16,20,14,14,3,14,16,12,16,18,20].map(function(w){ return {wch:w}; });
+    wsSlConv['!merges'] = [
+      { s: { r: 0, c: 8 },  e: { r: 0, c: 10 } },
+      { s: { r: 0, c: 12 }, e: { r: 0, c: 16 } },
+    ];
+    XLSX.utils.book_append_sheet(wb, wsSlConv, 'SL Conversion');
+  }
 
   xlsxDownloadWrapped(wb, baseName + '.xlsx');
 
