@@ -1789,15 +1789,17 @@ function signInWithGoogle() {
               <div onclick="lcvCloseUploadModal()" style="cursor:pointer;color:#9898a6;font-size:18px;">&times;</div>
             </div>
 
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
               <div>
                 <div class="field-label">Company Name</div>
-                <select id="lcv-company" class="modal-input" style="width:100%;"></select>
+                <select id="lcv-company" class="modal-input" style="width:100%;" onchange="lcvUpdateSlThresholdVisibility()"></select>
               </div>
               <div>
                 <div class="field-label">Year</div>
                 <input type="number" id="lcv-year" class="modal-input" style="width:100%;">
               </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;">
               <div>
                 <div class="field-label">Factor Rate per Payroll</div>
                 <input type="number" id="lcv-factorrate" class="modal-input" style="width:100%;" placeholder="e.g. 261" value="261">
@@ -1807,10 +1809,10 @@ function signInWithGoogle() {
                 <input type="number" id="lcv-threshold" class="modal-input" style="width:100%;" placeholder="10" value="10">
                 <div style="font-size:9px;color:#9898a6;margin-top:3px;">Up to 12 days/year is VL tax-exempt - as per BIR RR No. 029-2025</div>
               </div>
-              <div>
+              <div id="lcv-sl-threshold-wrap" style="display:none;">
                 <div class="field-label">Convertible SL (Days)</div>
                 <input type="number" id="lcv-sl-threshold" class="modal-input" style="width:100%;" placeholder="0" value="0">
-                <div style="font-size:9px;color:#9898a6;margin-top:3px;">Only applied when this client has Sick Leave credit validation enabled</div>
+                <div style="font-size:9px;color:#9898a6;margin-top:3px;">SL credits are taxable when converted</div>
               </div>
             </div>
 
@@ -23191,8 +23193,23 @@ function lcvOpenUploadModal() {
   });
   var btn = document.getElementById('lcv-preview-btn');
   if (btn) btn.disabled = true;
+  lcvUpdateSlThresholdVisibility();
   var modal = document.getElementById('lcv-upload-modal');
   if (modal) modal.style.display = 'flex';
+}
+
+// Shows/hides the Convertible SL (Days) field per the selected subcompany's own
+// "Validate Sick Leave Credits Too" setting -- resets it to 0 when hidden so a stale
+// value typed for a previous (sick-enabled) subcompany can't silently carry over.
+function lcvUpdateSlThresholdVisibility() {
+  var sk = (document.getElementById('lcv-company') || {}).value || lcvCurrentClientKey();
+  var enabled = !!(clients[sk] && clients[sk].taskConfig && clients[sk].taskConfig.lcv_validate_sick);
+  var wrap = document.getElementById('lcv-sl-threshold-wrap');
+  if (wrap) wrap.style.display = enabled ? '' : 'none';
+  if (!enabled) {
+    var input = document.getElementById('lcv-sl-threshold');
+    if (input) input.value = 0;
+  }
 }
 
 function lcvCloseUploadModal() {
@@ -24161,14 +24178,17 @@ function lcvOpenConsolUploadModal() {
   var cardsHtml = checked.map(function(sk) {
     var name = clients[sk] ? clients[sk].name : sk;
     window._lcvConsolFiles[sk] = { emp: null, leave: null, att: null };
+    // SL Threshold field only rendered for subs with Sick Leave validation actually enabled —
+    // taxable-when-converted note lives on its helper text, same as the single-run modal.
+    var slEnabled = !!(clients[sk] && clients[sk].taskConfig && clients[sk].taskConfig.lcv_validate_sick);
     return '<div style="border:1px solid #EBEBEF;border-radius:16px;padding:14px;margin-bottom:14px;">'
       + '<div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px;">' + name + ' <span style="color:#9898a6;font-weight:400;">(' + sk + ')</span></div>'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;margin-bottom:10px;">'
+      + '<div style="display:grid;grid-template-columns:repeat(' + (slEnabled ? 5 : 4) + ',1fr);gap:8px;margin-bottom:10px;">'
       + '<div><div class="field-label">Year</div><input type="number" id="lcv-c-year-' + sk + '" class="modal-input" style="width:100%;" value="' + year + '"></div>'
       + '<div><div class="field-label">Cut-off</div><input type="date" id="lcv-c-cutoff-' + sk + '" class="modal-input" style="width:100%;"></div>'
       + '<div><div class="field-label">Factor Rate</div><input type="number" id="lcv-c-factorrate-' + sk + '" class="modal-input" style="width:100%;" value="261"></div>'
       + '<div><div class="field-label">VL Threshold</div><input type="number" id="lcv-c-threshold-' + sk + '" class="modal-input" style="width:100%;" value="10"></div>'
-      + '<div><div class="field-label">SL Threshold</div><input type="number" id="lcv-c-sl-threshold-' + sk + '" class="modal-input" style="width:100%;" value="0"></div>'
+      + (slEnabled ? '<div><div class="field-label">SL Threshold</div><input type="number" id="lcv-c-sl-threshold-' + sk + '" class="modal-input" style="width:100%;" value="0"><div style="font-size:9px;color:#9898a6;margin-top:3px;">SL credits are taxable when converted</div></div>' : '')
       + '</div>'
       + '<div class="task-dz" id="lcv-c-dz-leave-' + sk + '" onclick="document.getElementById(\'lcv-c-f-leave-' + sk + '\').click()" ondragover="return dzDragOver(event)" ondragleave="dzDragLeave(event)" ondrop="dzDrop(event,\'lcv-c-f-leave-' + sk + '\')" style="margin-bottom:6px;">'
       + '<div class="task-dz-icon" style="background:#DCFCE7;color:#32CE13;"><i class="ti ti-calendar-stats"></i></div>'
@@ -24230,7 +24250,7 @@ function lcvRunConsolPreview() {
       year: parseFloat(document.getElementById('lcv-c-year-' + sk).value) || new Date().getFullYear(),
       factorRate: parseFloat(document.getElementById('lcv-c-factorrate-' + sk).value) || 261,
       threshold: parseFloat(document.getElementById('lcv-c-threshold-' + sk).value) || 10,
-      slThreshold: parseFloat(document.getElementById('lcv-c-sl-threshold-' + sk).value) || 0,
+      slThreshold: parseFloat((document.getElementById('lcv-c-sl-threshold-' + sk) || {}).value) || 0,
     };
     return lcvParseFilesFor(f.emp, f.leave, f.att).then(function(parsed) {
       var subData = {
