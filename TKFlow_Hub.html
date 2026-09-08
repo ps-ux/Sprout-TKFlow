@@ -1799,7 +1799,7 @@ function signInWithGoogle() {
                 <input type="number" id="lcv-year" class="modal-input" style="width:100%;">
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;">
+            <div id="lcv-rate-threshold-row" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
               <div>
                 <div class="field-label">Factor Rate per Payroll</div>
                 <input type="number" id="lcv-factorrate" class="modal-input" style="width:100%;" placeholder="e.g. 261" value="261">
@@ -23206,6 +23206,8 @@ function lcvUpdateSlThresholdVisibility() {
   var enabled = !!(clients[sk] && clients[sk].taskConfig && clients[sk].taskConfig.lcv_validate_sick);
   var wrap = document.getElementById('lcv-sl-threshold-wrap');
   if (wrap) wrap.style.display = enabled ? '' : 'none';
+  var row = document.getElementById('lcv-rate-threshold-row');
+  if (row) row.style.gridTemplateColumns = enabled ? '1fr 1fr 1fr' : '1fr 1fr';
   if (!enabled) {
     var input = document.getElementById('lcv-sl-threshold');
     if (input) input.value = 0;
