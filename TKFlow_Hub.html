@@ -26128,26 +26128,29 @@ function _isDisputeBlank(d) {
 // claimed or persisted until Save is explicitly clicked (see _dtmGraduateDraft, called from
 // dtmSaveAll). This is deliberately simple: no per-keystroke autosave logic to reason about
 // for a not-yet-real ticket, and no way for typing alone to burn a ticket number.
+// The Subcompany field (dtmSubcompanyOptions) only used to save into d.entity, a display-only
+// field -- it never actually moved the ticket between clients, so picking e.g. "KNI" for a
+// ticket really filed under d.client === 'KNLSI' kept it grouped under KNLSI everywhere that
+// keys off d.client (renderDisputes' sections, dashboard badges) despite showing "KNI" right
+// here. When the given name matches a real sibling subcompany in the same group as the
+// ticket's current client, actually reassign d.client to match. Typed "Others" text (not a
+// real sibling name) is left as display-only, same as before. Shared by both the manual
+// Subcompany dropdown (dtmSaveField) and the email-paste parser (dtmExtractFromPasteText),
+// which sets d.entity directly and would otherwise bypass this reassignment entirely.
+function dtmReassignClientForEntity(d, value) {
+  var gk = Object.keys(clientGroups).find(function(g){ return (clientGroups[g].subs || [g]).indexOf(d.client) >= 0; });
+  var subs = gk ? (clientGroups[gk].subs || [d.client]) : [d.client];
+  var matchedKey = subs.find(function(sk){ return clients[sk] && clients[sk].name === value; });
+  if (matchedKey && matchedKey !== d.client) d.client = matchedKey;
+}
+
 function dtmSaveField(field, value) {
   if (!dtmCurrentId) return;
   var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
   if (!d) return;
 
   d[field] = value;
-
-  // The Subcompany dropdown (dtmSubcompanyOptions) only ever saved into d.entity, a display-
-  // only field -- it never actually moved the ticket between clients, so picking e.g. "KNI"
-  // for a ticket really filed under d.client === 'KNLSI' kept it grouped under KNLSI
-  // everywhere that keys off d.client (renderDisputes' sections, dashboard badges) despite
-  // showing "KNI" right here. When the chosen name matches a real sibling subcompany in the
-  // same group as the ticket's current client, actually reassign d.client to match. Typed
-  // "Others" text (not a real sibling name) is left as display-only, same as before.
-  if (field === 'entity') {
-    var gk = Object.keys(clientGroups).find(function(g){ return (clientGroups[g].subs || [g]).indexOf(d.client) >= 0; });
-    var subs = gk ? (clientGroups[gk].subs || [d.client]) : [d.client];
-    var matchedKey = subs.find(function(sk){ return clients[sk] && clients[sk].name === value; });
-    if (matchedKey && matchedKey !== d.client) d.client = matchedKey;
-  }
+  if (field === 'entity') dtmReassignClientForEntity(d, value);
 
   if (d._isDraft) return;
   dtmScheduleDisputeSave(dtmCurrentId);
@@ -26832,7 +26835,15 @@ function dtmExtractFromPasteText() {
     filledAny = true;
   }
   if (parsed.empNo)   { d.empNo = parsed.empNo; filledAny = true; }
-  if (parsed.entity)  { d.entity = dtmResolveEntityName(d.client, parsed.entity); filledAny = true; }
+  if (parsed.entity)  {
+    // Sets d.entity directly rather than going through dtmSaveField, so it needs its own call
+    // to the same client-reassignment logic -- otherwise a parsed email correctly detecting
+    // "KNLSI" leaves the ticket filed under whatever client it was opened/created under (e.g.
+    // KNI), showing "KNLSI" on the ticket while it's actually grouped/headered under KNI.
+    d.entity = dtmResolveEntityName(d.client, parsed.entity);
+    dtmReassignClientForEntity(d, d.entity);
+    filledAny = true;
+  }
   if (parsed.manager) { d.manager = parsed.manager; filledAny = true; }
   if (parsed.nature) {
     var knownNatures = ['Payroll Dispute', 'Leave Application', 'Manual Leave Application', 'Missing / Incorrect Logs', 'Others'];
@@ -26881,6 +26892,11 @@ function dtmExtractFromPasteText() {
   });
   statusEl.style.display = 'none';
   if (gmailTs && typeof recomputeAllDisputeTAT === 'function') recomputeAllDisputeTAT();
+  // Every field above was set directly on d rather than through dtmSaveField, so a draft still
+  // picks all of it up when it graduates (dtmBuildDisputeRow reads current d), but an already-
+  // real ticket needs its own explicit save here -- otherwise re-pasting an email into an
+  // existing ticket (e.g. to correct its Subcompany) would silently never persist.
+  if (!d._isDraft) dtmScheduleDisputeSave(dtmCurrentId);
   openDisputeTicket(dtmCurrentId);
   if (typeof showToast === 'function') showToast('Fields auto-filled from pasted email!');
 }
