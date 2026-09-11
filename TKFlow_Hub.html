@@ -812,6 +812,9 @@ function assignAvClass(shortKey, siblingClasses) {
     });
     if (insRes.error) { console.error('Could not promote pending invite for ' + email, insRes.error); return false; }
     await supabaseClient.from('pending_team_invites').delete().eq('email', invite.email);
+    if (typeof logAudit === 'function') {
+      logAudit({ action: 'member_provisioned', entityType: 'user', entityId: uid, entityLabel: invite.name, description: invite.name + ' provisioned a real account on first Google sign-in' });
+    }
     return true;
   }
 
@@ -5019,6 +5022,9 @@ function regenerateCalendarFeedLink() {
       currentUser.calendarFeedToken = newToken;
       renderCalendarFeedSection();
       if (typeof showToast === 'function') showToast('Calendar link regenerated');
+      if (typeof logAudit === 'function') {
+        logAudit({ action: 'calendar_feed_link_rotated', entityType: 'user', entityId: currentUser.id, entityLabel: currentUser.name, description: currentUser.name + ' rotated their calendar feed link' });
+      }
     });
   }, { okLabel: 'Regenerate' });
 }
@@ -5473,6 +5479,9 @@ async function saveSubcompany() {
   if (typeof renderTeamCapacity === 'function') renderTeamCapacity();
   if (typeof renderClientCards === 'function') renderClientCards();
   if (typeof renderClientProfile === 'function') renderClientProfile(window.currentWsGroup || groupKey);
+  if (typeof logAudit === 'function') {
+    logAudit({ action: 'subcompany_added', entityType: 'client', entityId: code, entityLabel: name, description: 'Added subcompany ' + name + ' (' + code + ') under ' + grp.name });
+  }
 
   var toast = document.createElement('div');
   toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#1a1a2e;color:#fff;padding:12px 20px;border-radius:14px;font-size:13px;font-family:Rubik,sans-serif;z-index:9999;display:flex;align-items:center;gap:8px;box-shadow:0 4px 20px rgba(0,0,0,0.2);';
@@ -5911,6 +5920,9 @@ async function _saveClientConfirmed() {
   if (typeof renderTeamCapacity === 'function') renderTeamCapacity();
 
   renderSidebarClients();
+  if (typeof logAudit === 'function') {
+    logAudit({ action: 'client_created', entityType: 'client_group', entityId: key, entityLabel: clientName, description: 'Created new client ' + clientName + ' (' + key + ')' });
+  }
   const toast = document.createElement('div');
   toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#1a1a2e;color:#fff;padding:12px 20px;border-radius:14px;font-size:13px;font-family:Rubik,sans-serif;z-index:9999;display:flex;align-items:center;gap:8px;box-shadow:0 4px 20px rgba(0,0,0,0.2);';
   toast.innerHTML = '<i class="ti ti-circle-check" style="color:#32CE15;font-size:18px;"></i> ' + (clientName) + ' added successfully!';
@@ -6853,7 +6865,11 @@ function renderProfileColorSwatches(companyOrGroupKey) {
 function setCompanyGroupAvClass(companyOrGroupKey, avClass) {
   var grp = clientGroups[companyOrGroupKey];
   if (!grp) return;
+  var _oldAvClass = grp.avClass;
   grp.avClass = avClass;
+  if (_oldAvClass !== avClass && typeof logAudit === 'function') {
+    logAudit({ action: 'client_profile_edit', entityType: 'client_group', entityId: companyOrGroupKey, entityLabel: grp.name, field: 'avClass', oldValue: _oldAvClass, newValue: avClass });
+  }
   (grp.subs || [companyOrGroupKey]).forEach(function(sk) {
     if (clients[sk]) clients[sk].avClass = avClass;
   });
@@ -6903,6 +6919,8 @@ function saveSubcompanyEdit() {
   if (!name) { if (typeof showToast === 'function') showToast('Entity name is required', '#e67e00'); return; }
 
   var oldPayrollType = c.payrollType || 'Semi-monthly';
+  var oldName = c.name;
+  var oldHc = c.hc;
   c.name = name;
   c.hc = headcount;
 
@@ -6910,6 +6928,10 @@ function saveSubcompanyEdit() {
     supabaseClient.from('companies').update({ name: name, headcount: headcount }).eq('id', c.companyId).then(function(res) {
       if (res.error) { console.warn('Could not save subcompany edit for ' + sk, res.error); if (typeof showToast === 'function') showToast('Could not save changes: ' + res.error.message, '#c0392b'); }
     });
+  }
+  if (typeof logAudit === 'function') {
+    if (oldName !== name) logAudit({ action: 'client_profile_edit', entityType: 'client', entityId: sk, entityLabel: name, field: 'name', oldValue: oldName, newValue: name });
+    if (oldHc !== headcount) logAudit({ action: 'client_profile_edit', entityType: 'client', entityId: sk, entityLabel: name, field: 'headcount', oldValue: oldHc, newValue: headcount });
   }
 
   closeEditSubcompanyModal();
@@ -7307,12 +7329,19 @@ async function saveClientAssignment(groupKey) {
   if (secondId && !checkedSpecialistIds[secondId]) { secondId = null; if (secondSel) secondSel.value = ''; clearedProcessors.push('Second'); }
   var procScopeForSave = (typeof _procScope === 'function') ? _procScope(groupKey) : null;
   if (procScopeForSave) {
+    var _oldMainId = procScopeForSave.obj.mainProcessorUserId;
+    var _oldSecondId = procScopeForSave.obj.secondProcessorUserId;
     procScopeForSave.obj.mainProcessorUserId = mainId;
     procScopeForSave.obj.secondProcessorUserId = secondId;
     var procUpdateRes = procScopeForSave.type === 'group'
       ? await supabaseClient.from('company_groups').update({ main_processor_user_id: mainId, second_processor_user_id: secondId }).eq('id', procScopeForSave.id)
       : await supabaseClient.from('companies').update({ main_processor_user_id: mainId, second_processor_user_id: secondId }).eq('id', procScopeForSave.id);
     if (procUpdateRes.error) { console.warn('Could not save Main/Second processor', procUpdateRes.error); saveErrors.push('Main/Second processor'); }
+    else if (typeof logAudit === 'function') {
+      var _nameForId = function(uid) { var m = Object.keys(USERS).find(function(uk){ return USERS[uk].id === uid; }); return m ? USERS[m].name : null; };
+      if (_oldMainId !== mainId) logAudit({ action: 'client_reassigned', entityType: 'client_group', entityId: groupKey, entityLabel: grp.name, field: 'mainProcessor', oldValue: _nameForId(_oldMainId), newValue: _nameForId(mainId) });
+      if (_oldSecondId !== secondId) logAudit({ action: 'client_reassigned', entityType: 'client_group', entityId: groupKey, entityLabel: grp.name, field: 'secondProcessor', oldValue: _nameForId(_oldSecondId), newValue: _nameForId(secondId) });
+    }
   }
 
   // Log the change to processor history if the Specialist actually changed — closes out
@@ -8055,20 +8084,31 @@ function setTicketingMode(subKeysCsv, mode) {
 }
 
 var _ticketingUrlSaveTimers = {};
+var _ticketingUrlAuditBaseline = {};
 function setTicketingUrl(subKeysCsv, url) {
   var trimmed = url.trim();
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk]) return;
+    // Baseline captured only at the start of a debounce burst (like _cutoffHistorySnapshot)
+    // so a run of keystrokes logs one audit row with the value before/after the whole edit,
+    // not one per keystroke.
+    if (!(sk in _ticketingUrlAuditBaseline)) _ticketingUrlAuditBaseline[sk] = clients[sk].ticketingUrl;
     clients[sk].ticketingUrl = trimmed;
     // Debounced (fires on oninput, not blur) -- one timer per sub-key so a group edit
     // doesn't cancel other sub-keys' pending saves.
     if (_ticketingUrlSaveTimers[sk]) clearTimeout(_ticketingUrlSaveTimers[sk]);
     _ticketingUrlSaveTimers[sk] = setTimeout(function() {
       delete _ticketingUrlSaveTimers[sk];
+      var _oldUrl = _ticketingUrlAuditBaseline[sk];
+      delete _ticketingUrlAuditBaseline[sk];
       supabaseClient.from('companies').update({ ticketing_url: trimmed }).eq('short_key', sk).then(function(res) {
         if (res.error) {
           console.warn('Could not save ticketing URL for ' + sk, res.error);
           if (typeof showToast === 'function') showToast('Could not save ticketing URL: ' + res.error.message, '#c0392b');
+          return;
+        }
+        if (_oldUrl !== trimmed && typeof logAudit === 'function') {
+          logAudit({ action: 'client_profile_edit', entityType: 'client', entityId: sk, entityLabel: clients[sk].name || sk, field: 'ticketingUrl', oldValue: _oldUrl, newValue: trimmed });
         }
       });
     }, 800);
@@ -8684,10 +8724,14 @@ function filterDisputes(chip, filter) {
 async function toggleAdhocDone(id) {
   var entry = _adhocGet().find(function(e){ return e.id === id; });
   if (!entry) return;
+  var oldStatus = entry.status;
   entry.status = entry.status === 'done' ? 'pending' : 'done';
   renderAdhocLogs();
   var res = await supabaseClient.from('adhoc_logs').update({ status: entry.status }).eq('id', id);
   if (res.error) { console.warn('Could not save log status', res.error); if (typeof showToast === 'function') showToast('Could not save status change: ' + res.error.message, '#c0392b'); }
+  if (typeof logAudit === 'function') {
+    logAudit({ action: 'adhoc_log_edit', entityType: 'adhoc_log', entityId: id, entityLabel: entry.emp || id, field: 'status', oldValue: oldStatus, newValue: entry.status });
+  }
 }
 
 function editLog(id) {
@@ -9230,6 +9274,9 @@ async function buildAndInsertAdhocCard(opts) {
   // silent: true for saveBulkLog's per-row loop, which shows its own single summary toast
   // afterward instead of one toast per employee.
   if (!opts.silent && typeof showToast === 'function') showToast(editId ? 'Log updated' : 'Task logged successfully!');
+  if (typeof logAudit === 'function') {
+    logAudit({ action: 'adhoc_log_edit', entityType: 'adhoc_log', entityId: localEntry.id, entityLabel: localEntry.emp, description: (editId ? 'Edited' : 'Added') + ' ad hoc log for ' + localEntry.emp + ' (' + localEntry.type + ')' });
+  }
 }
 
 async function removeAdhocLog(id) {
@@ -9244,6 +9291,10 @@ async function removeAdhocLog(id) {
     if (typeof showToast === 'function') showToast('Could not delete: ' + res.error.message, '#c0392b');
     arr.splice(idx, 0, removed); // put it back -- the delete didn't actually happen
     renderAdhocLogs();
+    return;
+  }
+  if (typeof logAudit === 'function') {
+    logAudit({ action: 'adhoc_log_deleted', entityType: 'adhoc_log', entityId: id, entityLabel: removed.emp, description: 'Deleted ad hoc log for ' + removed.emp + ' (' + removed.type + ')' });
   }
 }
 
@@ -9479,9 +9530,13 @@ function toggleAvatarColorPicker(key) {
 }
 
 function setMemberAvatarColor(key, bg, txt) {
+  var _oldAv = (typeof teamProfiles !== 'undefined' && teamProfiles[key]) ? { bg: teamProfiles[key].avBg, txt: teamProfiles[key].avTxt } : null;
   if (typeof teamProfiles !== 'undefined' && teamProfiles[key]) {
     teamProfiles[key].avBg = bg;
     teamProfiles[key].avTxt = txt;
+  }
+  if (_oldAv && (_oldAv.bg !== bg || _oldAv.txt !== txt) && typeof logAudit === 'function') {
+    logAudit({ action: 'member_profile_edit', entityType: 'user', entityId: key, entityLabel: (teamProfiles[key] && teamProfiles[key].name) || key, field: 'avatarColor', oldValue: _oldAv.bg + '/' + _oldAv.txt, newValue: bg + '/' + txt });
   }
   var picker = document.getElementById('avatar-picker-' + key);
   if (picker) picker.style.display = 'none';
@@ -9680,6 +9735,7 @@ function closeMemberModal() {
 function saveMemberProfile() {
   if (!currentMemberKey) return;
   const m = teamProfiles[currentMemberKey];
+  const _oldM = { name: m.name, role: m.role, email: m.email, phone: m.phone, sproutStarted: m.sproutStarted, hrStarted: m.hrStarted, certifications: (m.certifications || []).join(', ') };
   const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
   m.name           = get('mp-name')           || m.name;
   m.role           = get('mp-role')           || m.role;
@@ -9699,6 +9755,15 @@ function saveMemberProfile() {
   closeMemberModal();
   renderTeamMembers();
   showToast(m.name + ' profile saved!');
+
+  if (typeof logAudit === 'function') {
+    var _newM = { name: m.name, role: m.role, email: m.email, phone: m.phone, sproutStarted: m.sproutStarted, hrStarted: m.hrStarted, certifications: (m.certifications || []).join(', ') };
+    Object.keys(_newM).forEach(function(f) {
+      if (_oldM[f] !== _newM[f]) {
+        logAudit({ action: 'member_profile_edit', entityType: 'user', entityId: currentMemberKey, entityLabel: m.name, field: f, oldValue: _oldM[f], newValue: _newM[f] });
+      }
+    });
+  }
 
   // Persist -- without this, every field above reverted to the hardcoded teamProfiles[] seed
   // on the next reload since nothing ever wrote it back to Supabase.
@@ -10125,6 +10190,13 @@ function copyTaskConfigToOthers(sourceKey, allSubsCsv) {
   else if (typeof renderClientProfile === 'function' && window.currentWsClient) renderClientProfile(window.currentWsClient);
   if (typeof refreshGroupOverviewIfActive === 'function') refreshGroupOverviewIfActive();
   if (typeof showToast === 'function') showToast('Copied ' + ((clients[sourceKey] && clients[sourceKey].name) || sourceKey) + '’s task setup to ' + targets.length + ' other subcompan' + (targets.length > 1 ? 'ies' : 'y'));
+  if (typeof logAudit === 'function') {
+    logAudit({
+      action: 'client_profile_edit', entityType: 'client', entityId: sourceKey,
+      entityLabel: (clients[sourceKey] && clients[sourceKey].name) || sourceKey, field: 'taskConfig',
+      description: 'Copied Applicable Tasks setup from ' + ((clients[sourceKey] && clients[sourceKey].name) || sourceKey) + ' to ' + targets.join(', ')
+    });
+  }
 }
 
 function toggleTaskAndRefreshProfile(clientKey, taskKey, checked) {
@@ -10412,6 +10484,7 @@ async function setCutoffCoverage(key, cutoffLabel, userId) {
   if (!window.cutoffCoverage[repClientKey]) window.cutoffCoverage[repClientKey] = {};
   var storeKey = scope.type + ':' + scope.id + ':' + cutoffLabel;
   var actor = window.currentUser || currentUser;
+  var _oldCoveringMember = (window.cutoffCoverage[repClientKey] && window.cutoffCoverage[repClientKey][cutoffLabel] && window.cutoffCoverage[repClientKey][cutoffLabel].member) || null;
   if (userId) {
     var coveringUser = Object.keys(USERS).map(function(uk){ return USERS[uk]; }).find(function(u){ return u.id === userId; });
     if (!coveringUser) return;
@@ -10436,12 +10509,18 @@ async function setCutoffCoverage(key, cutoffLabel, userId) {
     });
     if (upsertRes.error) console.warn('Could not save cut-off coverage', upsertRes.error);
     if (typeof showToast === 'function') showToast(coveringUser.name + ' assigned to cover ' + cutoffLabel + ' for ' + (scope.obj.name || key));
+    if (typeof logAudit === 'function') {
+      logAudit({ action: 'cutoff_coverage_assigned', entityType: 'client_group', entityId: key, entityLabel: scope.obj.name || key, field: 'coverage:' + cutoffLabel, oldValue: _oldCoveringMember, newValue: coveringUser.name });
+    }
   } else {
     delete window.cutoffCoverage[repClientKey][cutoffLabel];
     delete window._coverageStore[storeKey];
     var delRes = await supabaseClient.from('cutoff_coverage').delete()
       .eq('scope_type', scope.type).eq('scope_id', scope.id).eq('cutoff_label', cutoffLabel);
     if (delRes.error) console.warn('Could not clear cut-off coverage', delRes.error);
+    if (typeof logAudit === 'function' && _oldCoveringMember) {
+      logAudit({ action: 'cutoff_coverage_cleared', entityType: 'client_group', entityId: key, entityLabel: scope.obj.name || key, field: 'coverage:' + cutoffLabel, oldValue: _oldCoveringMember, newValue: null });
+    }
   }
   // Keep the Admin > Coverage Pass-Off view live, regardless of which page/tab is currently
   // open — previously this only refreshed when you explicitly clicked into that tab again.
@@ -17039,7 +17118,10 @@ function _persistLeaveMonitoringYear(ck, year) {
     supabaseClient.from('leave_monitoring_state').upsert({
       scope_type: scope.type, scope_id: scope.id, year: year, data: lmGetStore(ck, year), updated_at: new Date().toISOString()
     }, { onConflict: 'scope_type,scope_id,year' }).then(function(res) {
-      if (res.error) { console.warn('Could not save Leave Monitoring for ' + ck + ' / ' + year, res.error); if (typeof showToast === 'function') showToast('Could not save leave monitoring: ' + res.error.message, '#c0392b'); }
+      if (res.error) { console.warn('Could not save Leave Monitoring for ' + ck + ' / ' + year, res.error); if (typeof showToast === 'function') showToast('Could not save leave monitoring: ' + res.error.message, '#c0392b'); return; }
+      if (typeof logAudit === 'function') {
+        logAudit({ action: 'leave_monitoring_edit', entityType: 'client', entityId: ck, entityLabel: (clients[ck] && clients[ck].name) || ck, description: 'Leave Monitoring data updated for ' + ck + ', ' + year });
+      }
     });
   }, 800);
 }
@@ -20452,6 +20534,9 @@ async function _archivePolicyFile(companyId, clientKey, blob, name, contentType,
     dateAdded: new Date(insRes.data.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   });
   if (typeof renderPolicyFiles === 'function') renderPolicyFiles();
+  if (typeof logAudit === 'function') {
+    logAudit({ action: 'policy_file_added', entityType: 'client', entityId: clientKey, entityLabel: (clients[clientKey] && clients[clientKey].name) || clientKey, description: 'Added ' + name + ' to Policy Bank' });
+  }
 }
 
 function getFileIcon(name) {
@@ -20596,6 +20681,9 @@ async function removePolicyFile(idx) {
   if (delRowRes.error) { console.warn('Could not delete policy file record', delRowRes.error); if (typeof showToast === 'function') showToast('Could not remove file: ' + delRowRes.error.message, '#c0392b'); return; }
   policyFiles.splice(idx, 1);
   renderPolicyFiles();
+  if (typeof logAudit === 'function') {
+    logAudit({ action: 'policy_file_removed', entityType: 'client', entityId: f.clientKey, entityLabel: (clients[f.clientKey] && clients[f.clientKey].name) || f.clientKey, description: 'Removed ' + f.name + ' from Policy Bank' });
+  }
 }
 
 function closeViewer() {
@@ -21168,8 +21256,12 @@ function confirmChurn() {
     var churnedName = isPartial ? (clients[subKeys[0]] && clients[subKeys[0]].name) || subKeys[0] : grp.name;
     subKeys.forEach(function(sk) {
       if (!clients[sk]) return;
+      var _oldStatus = clients[sk].status;
       clients[sk].status = 'Churned';
       clients[sk]._churned = true;
+      if (typeof logAudit === 'function') {
+        logAudit({ action: 'client_churned', entityType: 'client', entityId: sk, entityLabel: clients[sk].name || sk, field: 'status', oldValue: _oldStatus, newValue: 'Churned', description: 'Churned: ' + reason });
+      }
     });
     _persistCompanyStatus(subKeys, 'Churned');
     addToArchives(target.groupKey, subKeys, date, reason, notes, isPartial);
@@ -21208,9 +21300,13 @@ function confirmChurn() {
   // Remove from dashboard — remove the client card and from clients object
   const clientKey = currentWsClient;
   if (clientKey && clients[clientKey]) {
+    var _oldClientStatus = clients[clientKey].status;
     clients[clientKey].status = 'Churned';
     clients[clientKey]._churned = true;
     _persistCompanyStatus(clientKey, 'Churned');
+    if (typeof logAudit === 'function') {
+      logAudit({ action: 'client_churned', entityType: 'client', entityId: clientKey, entityLabel: clients[clientKey].name || clientKey, field: 'status', oldValue: _oldClientStatus, newValue: 'Churned', description: 'Churned: ' + reason });
+    }
   }
 
   // Close workspace and go back to dashboard
@@ -21338,6 +21434,11 @@ function spGetNotes() {
   return meta.scratchpadNotes;
 }
 
+// Baseline snapshots for the audit log -- captured once per note at the start of a debounce
+// burst (same idea as _cutoffHistorySnapshot/ticketingUrl's baseline), flushed as diffs when
+// the shared spPersist() timer actually writes, so a run of keystrokes across possibly several
+// notes logs one row per changed note, not one per keystroke.
+var _spAuditBaseline = {};
 function spPersist() {
   var target = epMetaTargetKey();
   var scope = typeof _calScope === 'function' ? _calScope() : null;
@@ -21350,7 +21451,18 @@ function spPersist() {
       .update({ profile_meta: target.obj.profileMeta })
       .eq('id', scope.id)
       .then(function(res) {
-        if (res.error) { console.warn('Could not save scratchpad note', res.error); if (typeof showToast === 'function') showToast('Could not save note: ' + res.error.message, '#c0392b'); }
+        if (res.error) { console.warn('Could not save scratchpad note', res.error); if (typeof showToast === 'function') showToast('Could not save note: ' + res.error.message, '#c0392b'); return; }
+        if (typeof logAudit === 'function') {
+          var notes = spGetNotes();
+          Object.keys(_spAuditBaseline).forEach(function(id) {
+            var note = notes.filter(function(n){ return n.id === id; })[0];
+            var base = _spAuditBaseline[id];
+            if (note && (note.title !== base.title || note.body !== base.body)) {
+              logAudit({ action: 'scratchpad_note_edit', entityType: 'client', entityId: scope.id, entityLabel: note.title || '(untitled note)', field: 'note', description: 'Scratchpad note "' + (note.title || '(untitled)') + '" edited' });
+            }
+          });
+          _spAuditBaseline = {};
+        }
       });
   }, 800);
 }
@@ -21377,6 +21489,7 @@ function spUpdateNote(id, field, value) {
   var notes = spGetNotes();
   var note = notes.filter(function(n){ return n.id === id; })[0];
   if (!note) return;
+  if (!(id in _spAuditBaseline)) _spAuditBaseline[id] = { title: note.title, body: note.body };
   note[field] = value;
   // Never persist a fully-blank note (no title, no body) -- covers both an untouched "New
   // note" and an existing note edited back down to nothing. The in-memory object is still
@@ -21393,6 +21506,10 @@ function spArchiveNote(id, archived) {
   note.archived = archived;
   spPersist();
   renderScratchpadTab();
+  if (typeof logAudit === 'function') {
+    var _scope = typeof _calScope === 'function' ? _calScope() : null;
+    logAudit({ action: 'scratchpad_note_edit', entityType: 'client', entityId: _scope && _scope.id, entityLabel: note.title || '(untitled note)', field: 'archived', oldValue: !archived, newValue: archived });
+  }
 }
 
 // Permanent delete -- only ever offered for already-archived notes (see the grid/zoom
@@ -21403,10 +21520,15 @@ function spDeleteNote(id) {
     var notes = spGetNotes();
     var idx = notes.findIndex(function(n){ return n.id === id; });
     if (idx < 0) return;
+    var _deletedNote = notes[idx];
     notes.splice(idx, 1);
     spPersist();
     if (window._spZoomId === id && typeof spCloseZoom === 'function') spCloseZoom();
     renderScratchpadTab();
+    if (typeof logAudit === 'function') {
+      var _scope = typeof _calScope === 'function' ? _calScope() : null;
+      logAudit({ action: 'scratchpad_note_deleted', entityType: 'client', entityId: _scope && _scope.id, entityLabel: _deletedNote.title || '(untitled note)', description: 'Deleted scratchpad note "' + (_deletedNote.title || '(untitled)') + '"' });
+    }
   }, { okLabel: 'Delete' });
 }
 
@@ -21721,6 +21843,9 @@ function restoreFromArchive(archiveIdx) {
   updateArchivesBadge();
   if (typeof renderClientAssignments === 'function') renderClientAssignments();
   showToast(a.name + ' has been restored to active clients!');
+  if (typeof logAudit === 'function') {
+    logAudit({ action: 'client_restored', entityType: 'client_group', entityId: a.groupKey, entityLabel: a.name, field: 'status', oldValue: 'Churned', newValue: 'active' });
+  }
 }
 
 function deleteArchive(archiveIdx) {
@@ -21733,6 +21858,9 @@ function deleteArchive(archiveIdx) {
   renderArchives();
   updateArchivesBadge();
   showToast('Archive record deleted');
+  if (typeof logAudit === 'function') {
+    logAudit({ action: 'archive_record_deleted', entityType: 'client_group', entityId: a && a.groupKey, entityLabel: a && a.name, description: 'Permanently deleted archive record' });
+  }
   }, { okLabel: 'Delete' });
 }
 </script>
@@ -22828,6 +22956,9 @@ async function saveNewMember() {
     if (typeof showToast === 'function') showToast('Could not save team member: ' + insRes.error.message, '#c0392b');
     return;
   }
+  if (typeof logAudit === 'function') {
+    logAudit({ action: 'member_added', entityType: 'user', entityId: shortKey, entityLabel: name, description: 'Invited ' + name + ' (' + role + ') as a pending team member' });
+  }
 
   teamProfiles[shortKey] = {
     name, initials, role,
@@ -22947,12 +23078,20 @@ async function saveOrgChart() {
   var writes = [];
   Object.keys(teamProfiles).filter(k => k !== 'zona').forEach(key => {
     const os = getOrInitOrgEntry(key);
+    const _oldOs = { showInChart: os.showInChart !== false, isLead: !!os.isLead, reportsTo: os.reportsTo };
     const showCb    = document.getElementById('org-show-' + key);
     const leadCb    = document.getElementById('org-islead-' + key);
     const reportsSel= document.getElementById('org-reports-' + key);
     if (showCb)     os.showInChart = showCb.checked;
     if (leadCb)     os.isLead      = leadCb.checked;
     if (reportsSel && !os.isLead) os.reportsTo = reportsSel.value;
+
+    if (typeof logAudit === 'function') {
+      var _memberName = (teamProfiles[key] && teamProfiles[key].name) || key;
+      if (_oldOs.showInChart !== (os.showInChart !== false)) logAudit({ action: 'member_profile_edit', entityType: 'user', entityId: key, entityLabel: _memberName, field: 'showInOrgChart', oldValue: _oldOs.showInChart, newValue: os.showInChart !== false });
+      if (_oldOs.isLead !== !!os.isLead) logAudit({ action: 'member_profile_edit', entityType: 'user', entityId: key, entityLabel: _memberName, field: 'isOrgLead', oldValue: _oldOs.isLead, newValue: !!os.isLead });
+      if (_oldOs.reportsTo !== os.reportsTo) logAudit({ action: 'member_profile_edit', entityType: 'user', entityId: key, entityLabel: _memberName, field: 'reportsTo', oldValue: _oldOs.reportsTo, newValue: os.reportsTo });
+    }
 
     var uid = USERS[key] && USERS[key].id;
     if (!uid) return;
@@ -23256,7 +23395,11 @@ var PERM_FLAG_TO_COLUMN = {
 
 function toggleUserPermission(userKey, flagKey, value) {
   if (USERS[userKey]) {
+    var _oldPermVal = !!USERS[userKey][flagKey];
     USERS[userKey][flagKey] = value;
+    if (_oldPermVal !== !!value && typeof logAudit === 'function') {
+      logAudit({ action: 'member_permission_change', entityType: 'user', entityId: userKey, entityLabel: USERS[userKey].name, field: flagKey, oldValue: _oldPermVal, newValue: !!value });
+    }
     // If currently previewing as that user, update currentUser too
     if (currentUser === USERS[userKey]) {
       updateDashboardMetrics();
@@ -26295,6 +26438,9 @@ function dtmDeleteTicket() {
       }
       if (typeof showToast === 'function') showToast('Ticket ' + id + ' deleted');
       if (wasDraft) return; // never claimed a number or touched Supabase -- nothing to delete there
+      if (typeof logAudit === 'function') {
+        logAudit({ action: 'ticket_deleted', entityType: 'dispute', entityId: id, entityLabel: id, description: 'Deleted ticket ' + id + (d.name ? ' (' + d.name + ')' : '') });
+      }
       supabaseClient.from('disputes').delete().eq('id', id).then(function(res) {
         if (res.error) dtmReportSaveError('Could not delete ticket ' + id, res.error);
       });
@@ -26396,6 +26542,9 @@ async function _dtmGraduateDraft(d) {
   if (Array.isArray(d.piLines) && d.piLines.some(function(l){ return l.code; })) dtmSyncPiLines(newId);
   var insRes = await supabaseClient.from('disputes').insert(Object.assign({ id: newId, source: 'manual' }, dtmBuildDisputeRow(d)));
   if (insRes.error) dtmReportSaveError('Could not save new ticket ' + newId, insRes.error);
+  else if (typeof logAudit === 'function') {
+    logAudit({ action: 'ticket_created', entityType: 'dispute', entityId: newId, entityLabel: newId + (d.name ? ' (' + d.name + ')' : '') });
+  }
   // Any activity-log entries added while this was still a draft (dtmAddLog skips their
   // Supabase insert for exactly this reason -- see there) only exist in dtmLogs[oldId] until
   // now -- move them under the real id and push them for real.
@@ -26762,12 +26911,20 @@ function dtmSyncPiLines(id) {
     supabaseClient.from('dispute_payroll_instructions').delete().eq('dispute_id', id).then(function(delRes) {
       if (delRes.error) { dtmReportSaveError('Could not sync payroll-instruction lines for ' + id, delRes.error); return; }
       var lines = (d.piLines || []).filter(function(l) { return l.code; });
-      if (!lines.length) return;
+      if (!lines.length) {
+        if (typeof logAudit === 'function') {
+          logAudit({ action: 'pi_lines_edit', entityType: 'dispute', entityId: id, entityLabel: id, field: 'piLines', description: 'Payroll-instruction lines cleared for ' + id });
+        }
+        return;
+      }
       supabaseClient.from('dispute_payroll_instructions').insert(lines.map(function(l) {
         return { dispute_id: id, code: l.code, number: l.number, unit: codeUnit(l.code, l.number), add_ded: l.addDed, remarks: l.remarks || '',
           date_of_dispute: l.date || null, pi_payout: l.piPayout || null, attendance_period: l.attendancePeriod || null };
       })).then(function(insRes) {
-        if (insRes.error) dtmReportSaveError('Could not save payroll-instruction lines for ' + id, insRes.error);
+        if (insRes.error) { dtmReportSaveError('Could not save payroll-instruction lines for ' + id, insRes.error); return; }
+        if (typeof logAudit === 'function') {
+          logAudit({ action: 'pi_lines_edit', entityType: 'dispute', entityId: id, entityLabel: id, field: 'piLines', description: lines.length + ' payroll-instruction line(s) saved for ' + id });
+        }
       });
     });
   }, 800);
@@ -27655,7 +27812,10 @@ async function _persistCalendar(scope, fileName, arrayBuffer, calPeriods, calHol
     scope_type: scope.type, scope_id: scope.id, file_name: fileName, storage_path: path,
     cal_periods: calPeriods, cal_holidays: calHolidays
   }, { onConflict: 'scope_type,scope_id' });
-  if (upsertRes.error) { console.warn('Could not save calendar record', upsertRes.error); if (typeof showToast === 'function') showToast('Calendar could not be saved: ' + upsertRes.error.message, '#c0392b'); }
+  if (upsertRes.error) { console.warn('Could not save calendar record', upsertRes.error); if (typeof showToast === 'function') showToast('Calendar could not be saved: ' + upsertRes.error.message, '#c0392b'); return; }
+  if (typeof logAudit === 'function') {
+    logAudit({ action: 'calendar_uploaded', entityType: scope.type, entityId: scope.id, field: 'calendar', oldValue: (existingRes.data && existingRes.data.storage_path) || null, newValue: fileName, description: 'Uploaded calendar file ' + fileName });
+  }
 }
 
 function loadTKCalendarFile(input) {
