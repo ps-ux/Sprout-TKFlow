@@ -868,6 +868,18 @@ function assignAvClass(shortKey, siblingClasses) {
         processClients: byType.processing,
         calendarFeedToken: profile.calendar_feed_token || null
       };
+      // Once per browser tab session per user, not once per page refresh -- getSession() (and
+      // therefore this whole function) also runs on every reload of an already-signed-in tab,
+      // and only a real sign-in event is worth an audit row.
+      try {
+        var _signInFlagKey = '_auditSignInLogged_' + currentUser.id;
+        if (!sessionStorage.getItem(_signInFlagKey)) {
+          sessionStorage.setItem(_signInFlagKey, '1');
+          if (typeof logAudit === 'function') {
+            logAudit({ action: 'sign_in', entityType: 'user', entityId: currentUser.id, entityLabel: currentUser.name, description: currentUser.name + ' signed in' });
+          }
+        }
+      } catch (e) { /* sessionStorage unavailable -- not worth failing sign-in over */ }
       await loadCompaniesFromSupabase();
       await loadUserRelationsFromSupabase();
       // All nine depend on clients/clientGroups (companyId/groupId) already being populated above.
@@ -1098,7 +1110,7 @@ function signInWithGoogle() {
     </script>
 
     <div class="sidebar-bottom" style="position:relative;flex-shrink:0;">
-      <div id="start-menu" style="display:none;position:absolute;bottom:64px;left:12px;right:12px;background:#0A3E1D;border:1px solid rgba(255,255,255,0.15);border-radius:14px;padding:8px;box-shadow:0 -8px 32px rgba(0,0,0,0.4);z-index:999;"><div onclick="switchPage('settings');toggleStartMenu();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-settings" style="font-size:16px;width:18px;"></i>Settings</div><div id="dark-toggle" onclick="toggleDarkMode()" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-moon" id="dark-toggle-icon" style="font-size:16px;width:18px;"></i><span id="dark-toggle-label">Dark mode</span></div><div onclick="openSearch();toggleStartMenu();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-search" style="font-size:16px;width:18px;"></i>Search <span style="margin-left:auto;font-size:10px;color:rgba(255,255,255,0.4);">Ctrl+K</span></div><div style="height:1px;background:rgba(255,255,255,0.1);margin:6px 4px;"></div><div onclick="signOut();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:#ff8080;font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-logout" style="font-size:16px;width:18px;"></i>Sign out</div></div><div onclick="toggleStartMenu()" id="sidebar-user-block" style="display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;border-top:1px solid rgba(255,255,255,0.08);user-select:none;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='transparent'"><div class="user-avatar" id="sidebar-avatar">ZM</div><div style="flex:1;min-width:0;"><div class="user-name" id="sidebar-name">Zona Rocelle Merto</div><div class="user-role" id="sidebar-role">Admin</div></div><i class="ti ti-chevron-up" id="start-chevron" style="font-size:14px;color:rgba(255,255,255,0.5);transition:transform 0.2s;"></i></div>
+      <div id="start-menu" style="display:none;position:absolute;bottom:64px;left:12px;right:12px;background:#0A3E1D;border:1px solid rgba(255,255,255,0.15);border-radius:14px;padding:8px;box-shadow:0 -8px 32px rgba(0,0,0,0.4);z-index:999;"><div onclick="switchPage('settings');toggleStartMenu();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-settings" style="font-size:16px;width:18px;"></i>Settings</div><div id="start-menu-auditlog" onclick="switchPage('auditlog');toggleStartMenu();" style="display:none;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-shield-lock" style="font-size:16px;width:18px;"></i>Audit Log</div><div id="dark-toggle" onclick="toggleDarkMode()" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-moon" id="dark-toggle-icon" style="font-size:16px;width:18px;"></i><span id="dark-toggle-label">Dark mode</span></div><div onclick="openSearch();toggleStartMenu();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,0.85);font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-search" style="font-size:16px;width:18px;"></i>Search <span style="margin-left:auto;font-size:10px;color:rgba(255,255,255,0.4);">Ctrl+K</span></div><div style="height:1px;background:rgba(255,255,255,0.1);margin:6px 4px;"></div><div onclick="signOut();" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;cursor:pointer;color:#ff8080;font-size:13px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'"><i class="ti ti-logout" style="font-size:16px;width:18px;"></i>Sign out</div></div><div onclick="toggleStartMenu()" id="sidebar-user-block" style="display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;border-top:1px solid rgba(255,255,255,0.08);user-select:none;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='transparent'"><div class="user-avatar" id="sidebar-avatar">ZM</div><div style="flex:1;min-width:0;"><div class="user-name" id="sidebar-name">Zona Rocelle Merto</div><div class="user-role" id="sidebar-role">Admin</div></div><i class="ti ti-chevron-up" id="start-chevron" style="font-size:14px;color:rgba(255,255,255,0.5);transition:transform 0.2s;"></i></div>
     </div>
   </aside>
 
@@ -2159,7 +2171,32 @@ function signInWithGoogle() {
           </div>
         </div>
 
-        
+
+      </div>
+
+      <!-- ── AUDIT LOG (admin roles only) ─────────────────────────────── -->
+      <div class="tab-content" id="page-auditlog">
+        <div style="background:#fff;border:1px solid #EBEBEF;border-radius:16px;padding:20px;">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+            <input id="auditlog-filter" type="text" placeholder="Filter by actor, action, or entity…" oninput="renderAuditLog()" style="flex:1;max-width:340px;padding:8px 12px;border:1px solid #EBEBEF;border-radius:10px;font-size:12px;font-family:Rubik,sans-serif;">
+            <div onclick="_auditLogCache=null;renderAuditLog();" style="cursor:pointer;padding:7px 14px;border:1px solid #EBEBEF;border-radius:10px;font-size:12px;color:#1a1a2e;"><i class="ti ti-refresh" style="margin-right:4px;"></i>Refresh</div>
+            <span style="font-size:11px;color:#9898a6;">Most recent 500 events</span>
+          </div>
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+              <thead><tr style="background:#F4F4F8;">
+                <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;white-space:nowrap;">Time</th>
+                <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;white-space:nowrap;">Actor</th>
+                <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;white-space:nowrap;">Action</th>
+                <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;white-space:nowrap;">Entity</th>
+                <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;white-space:nowrap;">Field</th>
+                <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;white-space:nowrap;">From → To</th>
+                <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #EBEBEF;font-weight:600;color:#9898a6;">Description</th>
+              </tr></thead>
+              <tbody id="auditlog-tbody"><tr><td colspan="7" style="padding:16px;color:#9898a6;">Loading…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <!-- ── SETTINGS ──────────────────────────────────────────────────── -->
@@ -2488,6 +2525,11 @@ function switchPage(page) {
     var adminVisible = currentUser.canServiceView;
     if (!adminVisible) { switchPage('dashboard'); return; }
     if (typeof renderOrgChart === 'function') renderOrgChart();
+  } else if (page === 'auditlog') {
+    document.getElementById('topbar-title').textContent = 'Audit Log';
+    if (_subEl) { _subEl.textContent = 'System activity — visible to admins only'; _subEl.style.display = 'block'; }
+    if (currentUser.roleType !== 'admin') { switchPage('dashboard'); return; }
+    if (typeof renderAuditLog === 'function') renderAuditLog();
   } else {
     // Any other page (workspace included) — the subtitle was previously left showing
     // whatever the last page had set (e.g. Admin's "Team overview..." text bleeding
@@ -3529,6 +3571,11 @@ function switchPage(page) {
     // left behind, staying stale until someone happened to click into another admin sub-tab
     // and back. Render it fresh every time Admin opens instead of relying on that leftover.
     if (typeof renderTeamCapacity === 'function') renderTeamCapacity();
+  } else if (page === 'auditlog') {
+    document.getElementById('topbar-title').textContent = 'Audit Log';
+    if (_subEl) { _subEl.textContent = 'System activity — visible to admins only'; _subEl.style.display = 'block'; }
+    if (currentUser.roleType !== 'admin') { switchPage('dashboard'); return; }
+    if (typeof renderAuditLog === 'function') renderAuditLog();
   } else {
     // Any other page (workspace included) — the subtitle was previously left showing
     // whatever the last page had set (e.g. Admin's "Team overview..." text bleeding
@@ -4891,6 +4938,13 @@ function refreshUserUI() {
   if (adminNav) {
     adminNav.style.display = currentUser.canServiceView ? 'flex' : 'none';
     if (!currentUser.canServiceView && currentPage === 'admin') switchPage('dashboard');
+  }
+  // Show/hide Audit Log start-menu item — admin roles only, and bounce off the page itself
+  // if a non-admin somehow lands on it (role can change out from under an open tab).
+  const auditLogNav = document.getElementById('start-menu-auditlog');
+  if (auditLogNav) {
+    auditLogNav.style.display = currentUser.roleType === 'admin' ? 'flex' : 'none';
+    if (currentUser.roleType !== 'admin' && currentPage === 'auditlog') switchPage('dashboard');
   }
   // Show/hide Assign button in capacity view
   document.querySelectorAll('.assign-btn').forEach(btn => {
@@ -7269,6 +7323,12 @@ async function saveClientAssignment(groupKey) {
   var oldSet = oldSpecs.slice().sort().join(',');
   var newSet = newSpecs.slice().sort().join(',');
   if (oldSet !== newSet) {
+    if (typeof logAudit === 'function') {
+      logAudit({
+        action: 'client_reassigned', entityType: 'client_group', entityId: groupKey, entityLabel: grp.name,
+        field: 'specialist', oldValue: oldSpecs.join(', ') || '(none)', newValue: newSpecs.join(', ') || '(none)'
+      });
+    }
     if (!grp.processorHistory) grp.processorHistory = [];
     var todayStr = new Date().toISOString().slice(0, 10);
     // Close out whichever entries are currently open (no endDate) if that person is no
@@ -7313,12 +7373,16 @@ function setBasicPayOffset(subKeysCsv, val) {
   var offset = parseInt(val, 10) || 0;
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk]) return;
+    var oldOffset = clients[sk].basicPayOffset;
     clients[sk].basicPayOffset = offset;
     var companyId = clients[sk].companyId;
     if (companyId) {
       supabaseClient.from('companies').update({ basic_pay_offset: offset }).eq('short_key', sk).then(function(res) {
         if (res.error) { console.warn('Could not save basic pay offset for ' + sk, res.error); if (typeof showToast === 'function') showToast('Could not save basic pay offset: ' + res.error.message, '#c0392b'); }
       });
+    }
+    if (oldOffset !== offset && typeof logAudit === 'function') {
+      logAudit({ action: 'client_profile_edit', entityType: 'client', entityId: sk, entityLabel: clients[sk].name || sk, field: 'basicPayOffset', oldValue: oldOffset, newValue: offset });
     }
   });
   if (typeof renderClientProfile === 'function' && window.currentWsGroup) {
@@ -7337,12 +7401,16 @@ function setHalfDayShortfallMinutes(subKeysCsv, val) {
   if (!mins || mins <= 0) mins = null;
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk]) return;
+    var oldMins = clients[sk].halfDayShortfallMinutes;
     clients[sk].halfDayShortfallMinutes = mins;
     var companyId = clients[sk].companyId;
     if (companyId) {
       supabaseClient.from('companies').update({ half_day_shortfall_minutes: mins }).eq('short_key', sk).then(function(res) {
         if (res.error) { console.warn('Could not save half-day shortfall threshold for ' + sk, res.error); if (typeof showToast === 'function') showToast('Could not save half-day threshold: ' + res.error.message, '#c0392b'); }
       });
+    }
+    if (oldMins !== mins && typeof logAudit === 'function') {
+      logAudit({ action: 'client_profile_edit', entityType: 'client', entityId: sk, entityLabel: clients[sk].name || sk, field: 'halfDayShortfallMinutes', oldValue: oldMins, newValue: mins });
     }
   });
   if (typeof renderClientProfile === 'function' && window.currentWsGroup) {
@@ -7383,6 +7451,9 @@ function setPayrollType(subKeysCsv, type) {
     var oldType = clients[sk].payrollType || 'Semi-monthly';
     clients[sk].payrollType = type;
     if (oldType !== type) {
+      if (typeof logAudit === 'function') {
+        logAudit({ action: 'client_profile_edit', entityType: 'client', entityId: sk, entityLabel: clients[sk].name || sk, field: 'payrollType', oldValue: oldType, newValue: type });
+      }
       // The old periods belonged to a different cadence (e.g. "1st Payout" doesn't carry
       // over meaningfully to "Week 1 Payout", and the period count itself may differ) -- reset
       // to blank rows matching the new type's labels so there's somewhere to re-enter the
@@ -7480,6 +7551,86 @@ function _recordCutoffHistory(sk) {
   }).then(function(res) {
     if (res.error) console.warn('Could not record cut-off schedule history for ' + sk, res.error);
   });
+  if (typeof logAudit === 'function') {
+    logAudit({
+      action: 'client_profile_edit', entityType: 'client', entityId: sk, entityLabel: clients[sk].name || sk,
+      field: 'cutoffs', oldValue: JSON.stringify(before), newValue: JSON.stringify(after)
+    });
+  }
+}
+
+// Generic cross-cutting audit trail -- who did what, and what changed from/to what, across
+// sign-ins, task processing, ticket edits, member reassignment, and client profile edits.
+// Fire-and-forget on purpose: a logging failure must never block the user's real action, so
+// errors only ever reach console.warn, never a toast.
+function _auditTrunc(v) {
+  v = String(v);
+  return v.length > 500 ? v.slice(0, 500) + '…' : v;
+}
+// Audit rows can contain arbitrary free text (ticket findings, pasted email content, etc.) --
+// never interpolate them into innerHTML unescaped.
+function _auditEsc(v) {
+  return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+var _auditLogCache = null;
+async function renderAuditLog() {
+  var tbody = document.getElementById('auditlog-tbody');
+  if (!tbody) return;
+  if (!_auditLogCache) {
+    tbody.innerHTML = '<tr><td colspan="7" style="padding:16px;color:#9898a6;">Loading…</td></tr>';
+    var res = await supabaseClient.from('audit_log').select('*').order('created_at', { ascending: false }).limit(500);
+    if (res.error) {
+      tbody.innerHTML = '<tr><td colspan="7" style="padding:16px;color:#c0392b;">Could not load audit log: ' + _auditEsc(res.error.message) + '</td></tr>';
+      return;
+    }
+    _auditLogCache = res.data || [];
+  }
+  var filterVal = ((document.getElementById('auditlog-filter') || {}).value || '').trim().toLowerCase();
+  var rows = _auditLogCache.filter(function(r) {
+    if (!filterVal) return true;
+    return (r.actor_name || '').toLowerCase().indexOf(filterVal) >= 0
+      || (r.action || '').toLowerCase().indexOf(filterVal) >= 0
+      || (r.entity_label || '').toLowerCase().indexOf(filterVal) >= 0
+      || (r.entity_type || '').toLowerCase().indexOf(filterVal) >= 0;
+  });
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="padding:16px;color:#9898a6;">No matching activity.</td></tr>';
+    return;
+  }
+  var cellStyle = 'padding:7px 12px;border-bottom:1px solid #F4F4F8;color:#1a1a2e;';
+  tbody.innerHTML = rows.map(function(r) {
+    var time = r.created_at ? new Date(r.created_at).toLocaleString() : '';
+    var fromTo = (r.old_value != null || r.new_value != null) ? (_auditEsc(r.old_value || '—') + ' → ' + _auditEsc(r.new_value || '—')) : '';
+    return '<tr>'
+      + '<td style="' + cellStyle + 'white-space:nowrap;">' + _auditEsc(time) + '</td>'
+      + '<td style="' + cellStyle + 'white-space:nowrap;">' + _auditEsc(r.actor_name) + '</td>'
+      + '<td style="' + cellStyle + 'white-space:nowrap;">' + _auditEsc(r.action) + '</td>'
+      + '<td style="' + cellStyle + 'white-space:nowrap;">' + _auditEsc(r.entity_label || r.entity_id) + '</td>'
+      + '<td style="' + cellStyle + 'white-space:nowrap;">' + _auditEsc(r.field) + '</td>'
+      + '<td style="' + cellStyle + 'white-space:nowrap;">' + fromTo + '</td>'
+      + '<td style="' + cellStyle + '">' + _auditEsc(r.description) + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function logAudit(opts) {
+  try {
+    var cu = window.currentUser || currentUser;
+    supabaseClient.from('audit_log').insert({
+      actor_name: (cu && cu.name) || '',
+      actor_email: (cu && cu.email) || null,
+      action: opts.action,
+      entity_type: opts.entityType || null,
+      entity_id: opts.entityId != null ? String(opts.entityId) : null,
+      entity_label: opts.entityLabel || null,
+      field: opts.field || null,
+      old_value: opts.oldValue != null ? _auditTrunc(opts.oldValue) : null,
+      new_value: opts.newValue != null ? _auditTrunc(opts.newValue) : null,
+      description: opts.description || ''
+    }).then(function(res) {
+      if (res.error) console.warn('Could not record audit log entry', res.error);
+    });
+  } catch (e) { console.warn('Audit log failed', e); }
 }
 
 // Cut-off Schedule starts locked (read-only) every time the profile renders -- this just flips
@@ -7802,8 +7953,12 @@ function setLeaveCreditsValidationEnabled(subKeysCsv, enabled) {
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk]) return;
     if (!clients[sk].taskConfig) clients[sk].taskConfig = {};
+    var oldEnabled = !!clients[sk].taskConfig.leave_credits_validation;
     clients[sk].taskConfig.leave_credits_validation = !!enabled;
     if (typeof _persistTaskConfig === 'function') _persistTaskConfig(sk);
+    if (oldEnabled !== !!enabled && typeof logAudit === 'function') {
+      logAudit({ action: 'client_profile_edit', entityType: 'client', entityId: sk, entityLabel: clients[sk].name || sk, field: 'taskConfig.leave_credits_validation', oldValue: oldEnabled, newValue: !!enabled });
+    }
   });
   var lcvTabBtn = document.getElementById('tab-lcv-btn');
   if (lcvTabBtn) lcvTabBtn.style.display = enabled ? 'flex' : 'none';
@@ -7828,8 +7983,12 @@ function setLcvValidateSickEnabled(subKeysCsv, enabled) {
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk]) return;
     if (!clients[sk].taskConfig) clients[sk].taskConfig = {};
+    var oldEnabled = !!clients[sk].taskConfig.lcv_validate_sick;
     clients[sk].taskConfig.lcv_validate_sick = !!enabled;
     if (typeof _persistTaskConfig === 'function') _persistTaskConfig(sk);
+    if (oldEnabled !== !!enabled && typeof logAudit === 'function') {
+      logAudit({ action: 'client_profile_edit', entityType: 'client', entityId: sk, entityLabel: clients[sk].name || sk, field: 'taskConfig.lcv_validate_sick', oldValue: oldEnabled, newValue: !!enabled });
+    }
   });
   if (typeof renderClientProfile === 'function' && window.currentWsGroup) {
     renderClientProfile(window.currentWsGroup);
@@ -7843,8 +8002,12 @@ function setEmailSupportEnabled(subKeysCsv, enabled) {
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk]) return;
     if (!clients[sk].taskConfig) clients[sk].taskConfig = {};
+    var oldEnabled = clients[sk].taskConfig.email_support !== false;
     clients[sk].taskConfig.email_support = !!enabled;
     if (typeof _persistTaskConfig === 'function') _persistTaskConfig(sk);
+    if (oldEnabled !== !!enabled && typeof logAudit === 'function') {
+      logAudit({ action: 'client_profile_edit', entityType: 'client', entityId: sk, entityLabel: clients[sk].name || sk, field: 'taskConfig.email_support', oldValue: oldEnabled, newValue: !!enabled });
+    }
   });
   var disputesTabBtn = document.getElementById('tab-disputes-btn');
   if (disputesTabBtn) disputesTabBtn.style.display = enabled ? 'flex' : 'none';
@@ -7868,6 +8031,7 @@ function setEmailSupportEnabled(subKeysCsv, enabled) {
 function setTicketingMode(subKeysCsv, mode) {
   subKeysCsv.split(',').forEach(function(sk) {
     if (!clients[sk]) return;
+    var oldMode = clients[sk].ticketingMode;
     clients[sk].ticketingMode = mode;
     supabaseClient.from('companies').update({ ticketing_mode: mode }).eq('short_key', sk).then(function(res) {
       if (res.error) {
@@ -7875,6 +8039,9 @@ function setTicketingMode(subKeysCsv, mode) {
         if (typeof showToast === 'function') showToast('Could not save ticketing mode: ' + res.error.message, '#c0392b');
       }
     });
+    if (oldMode !== mode && typeof logAudit === 'function') {
+      logAudit({ action: 'client_profile_edit', entityType: 'client', entityId: sk, entityLabel: clients[sk].name || sk, field: 'ticketingMode', oldValue: oldMode, newValue: mode });
+    }
   });
   if (typeof renderClientProfile === 'function' && window.currentWsGroup) {
     renderClientProfile(window.currentWsGroup);
@@ -9924,9 +10091,13 @@ function setTaskEnabled(clientKey, taskKey, enabled) {
   var c = clients[clientKey];
   if (!c) return;
   if (!c.taskConfig) c.taskConfig = {};
+  var oldEnabled = c.taskConfig[taskKey] !== false;
   c.taskConfig[taskKey] = !!enabled;
   _persistTaskConfig(clientKey);
   refreshGroupOverviewIfActive();
+  if (oldEnabled !== !!enabled && typeof logAudit === 'function') {
+    logAudit({ action: 'client_profile_edit', entityType: 'client', entityId: clientKey, entityLabel: c.name || clientKey, field: 'taskConfig.' + taskKey, oldValue: oldEnabled, newValue: !!enabled });
+  }
 }
 
 // Copies one subcompany's whole Applicable Tasks setup onto the others in the group -- for
@@ -10624,8 +10795,16 @@ function setTaskStatus(taskKey, st, reason, targetOverride) {
 
   targets.forEach(function(k) {
     if (!taskStatus[k]) taskStatus[k] = {};
+    var _oldTaskSt = taskStatus[k][taskKey] && taskStatus[k][taskKey].st;
     taskStatus[k][taskKey] = {st:st, reason:reason||'', timestamp: new Date().toISOString()};
     saveTaskRun(k, taskKey, st, reason);
+    if (_oldTaskSt !== st && typeof logAudit === 'function') {
+      logAudit({
+        action: 'task_status', entityType: 'task', entityId: k + ':' + taskKey,
+        entityLabel: (clients[k] && clients[k].name || k) + ' — ' + taskKey,
+        field: 'status', oldValue: _oldTaskSt || 'pending', newValue: st
+      });
+    }
 
     // Per-run history -- taskStatus above is a single overwritten "current" flag with no
     // record of earlier runs in the same cutoff, so running a task twice used to leave no
@@ -20920,6 +21099,13 @@ async function savePOC() {
   document.getElementById('poc-modal').style.display = 'none';
   if (typeof renderClientProfile === 'function') renderClientProfile(window.currentWsGroup || window.currentWsClient);
   showToast(name + (editId ? ' updated' : ' added') + ' as ' + type + ' contact');
+  if (typeof logAudit === 'function') {
+    logAudit({
+      action: 'client_profile_edit', entityType: 'client', entityId: newKey,
+      entityLabel: (clients[newKey] && clients[newKey].name) || (grp && grp.name) || newKey,
+      field: 'poc', description: (editId ? 'Updated' : 'Added') + ' contact ' + name + ' (' + type + ')'
+    });
+  }
 }
 
 async function removePOC(scope, key, idx) {
@@ -20933,6 +21119,13 @@ async function removePOC(scope, key, idx) {
   arr.splice(idx, 1);
   if (typeof renderClientProfile === 'function') renderClientProfile(window.currentWsGroup || window.currentWsClient);
   showToast(poc.name + ' removed');
+  if (typeof logAudit === 'function') {
+    logAudit({
+      action: 'client_profile_edit', entityType: 'client', entityId: key,
+      entityLabel: (clients[key] && clients[key].name) || key,
+      field: 'poc', description: 'Removed contact ' + poc.name
+    });
+  }
 }
 
 function openChurnModal() {
@@ -21076,9 +21269,19 @@ function saveProfile() {
   var target = epMetaTargetKey();
   if (target) {
     if (!target.obj.profileMeta) target.obj.profileMeta = {};
+    var _oldMeta = { dateStarted: target.obj.profileMeta.dateStarted, status: target.obj.profileMeta.status, notes: target.obj.profileMeta.notes };
     target.obj.profileMeta.dateStarted = date;
     target.obj.profileMeta.status = status;
     target.obj.profileMeta.notes = notes;
+    if (typeof logAudit === 'function') {
+      var _profKey = window.currentWsGroup || window.currentWsClient || '';
+      var _profLabel = (target.obj && target.obj.name) || _profKey;
+      [['dateStarted', _oldMeta.dateStarted, date], ['status', _oldMeta.status, status], ['notes', _oldMeta.notes, notes]].forEach(function(pair) {
+        if (pair[1] !== pair[2]) {
+          logAudit({ action: 'client_profile_edit', entityType: 'client', entityId: _profKey, entityLabel: _profLabel, field: pair[0], oldValue: pair[1], newValue: pair[2] });
+        }
+      });
+    }
     if (handoff) {
       if (!target.obj.profileMeta.handoffLog) target.obj.profileMeta.handoffLog = [];
       target.obj.profileMeta.handoffLog.unshift({ note: handoff, date: new Date().toISOString() });
@@ -26144,16 +26347,32 @@ function dtmReassignClientForEntity(d, value) {
   if (matchedKey && matchedKey !== d.client) d.client = matchedKey;
 }
 
+// Flattens an object/array value to a comparable+loggable string; primitives pass through as-is.
+function _dtmAuditVal(v) {
+  return (v != null && typeof v === 'object') ? JSON.stringify(v) : v;
+}
+
 function dtmSaveField(field, value) {
   if (!dtmCurrentId) return;
   var d = allDisputes.find(function(x) { return x.id === dtmCurrentId; });
   if (!d) return;
 
+  var oldVal = d[field];
+  var oldClient = d.client;
   d[field] = value;
   if (field === 'entity') dtmReassignClientForEntity(d, value);
 
   if (d._isDraft) return;
   dtmScheduleDisputeSave(dtmCurrentId);
+
+  if (typeof logAudit === 'function') {
+    if (_dtmAuditVal(oldVal) !== _dtmAuditVal(value)) {
+      logAudit({ action: 'ticket_edit', entityType: 'dispute', entityId: d.id, entityLabel: d.id, field: field, oldValue: _dtmAuditVal(oldVal), newValue: _dtmAuditVal(value) });
+    }
+    if (field === 'entity' && d.client !== oldClient) {
+      logAudit({ action: 'ticket_edit', entityType: 'dispute', entityId: d.id, entityLabel: d.id, field: 'client', oldValue: oldClient, newValue: d.client });
+    }
+  }
 }
 
 // Claims a real ticket number and inserts the row -- the ONE place a draft ticket turns into a
@@ -26335,6 +26554,9 @@ function dtmUpdateStatus(newStatus) {
   var oldLabel = d.statusLabel;
   d.status = newStatus; d.statusLabel = labels[newStatus];
   dtmScheduleDisputeSave(dtmCurrentId);
+  if (typeof logAudit === 'function') {
+    logAudit({ action: 'ticket_edit', entityType: 'dispute', entityId: d.id, entityLabel: d.id, field: 'status', oldValue: oldLabel, newValue: d.statusLabel });
+  }
   var cu = window.currentUser || currentUser;
   dtmAddLog(dtmCurrentId, {
     time: new Date().toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}),
