@@ -7664,6 +7664,13 @@ function _auditLogStopAutoRefresh() {
   if (_auditLogAutoRefreshTimer) { clearInterval(_auditLogAutoRefreshTimer); _auditLogAutoRefreshTimer = null; }
 }
 
+// So the Audit Log's Entity column reads as "which client workspace was this in" even for
+// records (tickets, notes, calendars) that aren't themselves a client -- matches the
+// "<Client name> — <specific thing>" shape already used for task_status rows.
+function _clientNameFor(clientKey) {
+  return (clients[clientKey] && clients[clientKey].name) || (clientGroups[clientKey] && clientGroups[clientKey].name) || clientKey || '';
+}
+
 function logAudit(opts) {
   try {
     var cu = window.currentUser || currentUser;
@@ -8752,7 +8759,7 @@ async function toggleAdhocDone(id) {
   var res = await supabaseClient.from('adhoc_logs').update({ status: entry.status }).eq('id', id);
   if (res.error) { console.warn('Could not save log status', res.error); if (typeof showToast === 'function') showToast('Could not save status change: ' + res.error.message, '#c0392b'); }
   if (typeof logAudit === 'function') {
-    logAudit({ action: 'adhoc_log_edit', entityType: 'adhoc_log', entityId: id, entityLabel: entry.emp || id, field: 'status', oldValue: oldStatus, newValue: entry.status });
+    logAudit({ action: 'adhoc_log_edit', entityType: 'adhoc_log', entityId: id, entityLabel: _clientNameFor(entry.subKey || _calKey()) + ' — ' + (entry.emp || id), field: 'status', oldValue: oldStatus, newValue: entry.status });
   }
 }
 
@@ -9297,7 +9304,7 @@ async function buildAndInsertAdhocCard(opts) {
   // afterward instead of one toast per employee.
   if (!opts.silent && typeof showToast === 'function') showToast(editId ? 'Log updated' : 'Task logged successfully!');
   if (typeof logAudit === 'function') {
-    logAudit({ action: 'adhoc_log_edit', entityType: 'adhoc_log', entityId: localEntry.id, entityLabel: localEntry.emp, description: (editId ? 'Edited' : 'Added') + ' ad hoc log for ' + localEntry.emp + ' (' + localEntry.type + ')' });
+    logAudit({ action: 'adhoc_log_edit', entityType: 'adhoc_log', entityId: localEntry.id, entityLabel: _clientNameFor(row.sub_short_key || _calKey()) + ' — ' + localEntry.emp, description: (editId ? 'Edited' : 'Added') + ' ad hoc log for ' + localEntry.emp + ' (' + localEntry.type + ')' });
   }
 }
 
@@ -9316,7 +9323,7 @@ async function removeAdhocLog(id) {
     return;
   }
   if (typeof logAudit === 'function') {
-    logAudit({ action: 'adhoc_log_deleted', entityType: 'adhoc_log', entityId: id, entityLabel: removed.emp, description: 'Deleted ad hoc log for ' + removed.emp + ' (' + removed.type + ')' });
+    logAudit({ action: 'adhoc_log_deleted', entityType: 'adhoc_log', entityId: id, entityLabel: _clientNameFor(removed.subKey || _calKey()) + ' — ' + removed.emp, description: 'Deleted ad hoc log for ' + removed.emp + ' (' + removed.type + ')' });
   }
 }
 
@@ -21480,7 +21487,7 @@ function spPersist() {
             var note = notes.filter(function(n){ return n.id === id; })[0];
             var base = _spAuditBaseline[id];
             if (note && (note.title !== base.title || note.body !== base.body)) {
-              logAudit({ action: 'scratchpad_note_edit', entityType: 'client', entityId: scope.id, entityLabel: note.title || '(untitled note)', field: 'note', description: 'Scratchpad note "' + (note.title || '(untitled)') + '" edited' });
+              logAudit({ action: 'scratchpad_note_edit', entityType: 'client', entityId: scope.id, entityLabel: (target.obj.name || scope.id) + ' — ' + (note.title || '(untitled note)'), field: 'note', description: 'Scratchpad note "' + (note.title || '(untitled)') + '" edited' });
             }
           });
           _spAuditBaseline = {};
@@ -21530,7 +21537,9 @@ function spArchiveNote(id, archived) {
   renderScratchpadTab();
   if (typeof logAudit === 'function') {
     var _scope = typeof _calScope === 'function' ? _calScope() : null;
-    logAudit({ action: 'scratchpad_note_edit', entityType: 'client', entityId: _scope && _scope.id, entityLabel: note.title || '(untitled note)', field: 'archived', oldValue: !archived, newValue: archived });
+    var _target = typeof epMetaTargetKey === 'function' ? epMetaTargetKey() : null;
+    var _clientLabel = (_target && _target.obj && _target.obj.name) || (_scope && _scope.id) || '';
+    logAudit({ action: 'scratchpad_note_edit', entityType: 'client', entityId: _scope && _scope.id, entityLabel: _clientLabel + ' — ' + (note.title || '(untitled note)'), field: 'archived', oldValue: !archived, newValue: archived });
   }
 }
 
@@ -21549,7 +21558,9 @@ function spDeleteNote(id) {
     renderScratchpadTab();
     if (typeof logAudit === 'function') {
       var _scope = typeof _calScope === 'function' ? _calScope() : null;
-      logAudit({ action: 'scratchpad_note_deleted', entityType: 'client', entityId: _scope && _scope.id, entityLabel: _deletedNote.title || '(untitled note)', description: 'Deleted scratchpad note "' + (_deletedNote.title || '(untitled)') + '"' });
+      var _target = typeof epMetaTargetKey === 'function' ? epMetaTargetKey() : null;
+      var _clientLabel = (_target && _target.obj && _target.obj.name) || (_scope && _scope.id) || '';
+      logAudit({ action: 'scratchpad_note_deleted', entityType: 'client', entityId: _scope && _scope.id, entityLabel: _clientLabel + ' — ' + (_deletedNote.title || '(untitled note)'), description: 'Deleted scratchpad note "' + (_deletedNote.title || '(untitled)') + '"' });
     }
   }, { okLabel: 'Delete' });
 }
@@ -26461,7 +26472,7 @@ function dtmDeleteTicket() {
       if (typeof showToast === 'function') showToast('Ticket ' + id + ' deleted');
       if (wasDraft) return; // never claimed a number or touched Supabase -- nothing to delete there
       if (typeof logAudit === 'function') {
-        logAudit({ action: 'ticket_deleted', entityType: 'dispute', entityId: id, entityLabel: id, description: 'Deleted ticket ' + id + (d.name ? ' (' + d.name + ')' : '') });
+        logAudit({ action: 'ticket_deleted', entityType: 'dispute', entityId: id, entityLabel: _clientNameFor(d.client) + ' — ' + id, description: 'Deleted ticket ' + id + (d.name ? ' (' + d.name + ')' : '') });
       }
       supabaseClient.from('disputes').delete().eq('id', id).then(function(res) {
         if (res.error) dtmReportSaveError('Could not delete ticket ' + id, res.error);
@@ -26535,10 +26546,10 @@ function dtmSaveField(field, value) {
 
   if (typeof logAudit === 'function') {
     if (_dtmAuditVal(oldVal) !== _dtmAuditVal(value)) {
-      logAudit({ action: 'ticket_edit', entityType: 'dispute', entityId: d.id, entityLabel: d.id, field: field, oldValue: _dtmAuditVal(oldVal), newValue: _dtmAuditVal(value) });
+      logAudit({ action: 'ticket_edit', entityType: 'dispute', entityId: d.id, entityLabel: _clientNameFor(d.client) + ' — ' + d.id, field: field, oldValue: _dtmAuditVal(oldVal), newValue: _dtmAuditVal(value) });
     }
     if (field === 'entity' && d.client !== oldClient) {
-      logAudit({ action: 'ticket_edit', entityType: 'dispute', entityId: d.id, entityLabel: d.id, field: 'client', oldValue: oldClient, newValue: d.client });
+      logAudit({ action: 'ticket_edit', entityType: 'dispute', entityId: d.id, entityLabel: _clientNameFor(d.client) + ' — ' + d.id, field: 'client', oldValue: _clientNameFor(oldClient), newValue: _clientNameFor(d.client) });
     }
   }
 }
@@ -26565,7 +26576,7 @@ async function _dtmGraduateDraft(d) {
   var insRes = await supabaseClient.from('disputes').insert(Object.assign({ id: newId, source: 'manual' }, dtmBuildDisputeRow(d)));
   if (insRes.error) dtmReportSaveError('Could not save new ticket ' + newId, insRes.error);
   else if (typeof logAudit === 'function') {
-    logAudit({ action: 'ticket_created', entityType: 'dispute', entityId: newId, entityLabel: newId + (d.name ? ' (' + d.name + ')' : '') });
+    logAudit({ action: 'ticket_created', entityType: 'dispute', entityId: newId, entityLabel: _clientNameFor(d.client) + ' — ' + newId + (d.name ? ' (' + d.name + ')' : '') });
   }
   // Any activity-log entries added while this was still a draft (dtmAddLog skips their
   // Supabase insert for exactly this reason -- see there) only exist in dtmLogs[oldId] until
@@ -26726,7 +26737,7 @@ function dtmUpdateStatus(newStatus) {
   d.status = newStatus; d.statusLabel = labels[newStatus];
   dtmScheduleDisputeSave(dtmCurrentId);
   if (typeof logAudit === 'function') {
-    logAudit({ action: 'ticket_edit', entityType: 'dispute', entityId: d.id, entityLabel: d.id, field: 'status', oldValue: oldLabel, newValue: d.statusLabel });
+    logAudit({ action: 'ticket_edit', entityType: 'dispute', entityId: d.id, entityLabel: _clientNameFor(d.client) + ' — ' + d.id, field: 'status', oldValue: oldLabel, newValue: d.statusLabel });
   }
   var cu = window.currentUser || currentUser;
   dtmAddLog(dtmCurrentId, {
@@ -26935,7 +26946,7 @@ function dtmSyncPiLines(id) {
       var lines = (d.piLines || []).filter(function(l) { return l.code; });
       if (!lines.length) {
         if (typeof logAudit === 'function') {
-          logAudit({ action: 'pi_lines_edit', entityType: 'dispute', entityId: id, entityLabel: id, field: 'piLines', description: 'Payroll-instruction lines cleared for ' + id });
+          logAudit({ action: 'pi_lines_edit', entityType: 'dispute', entityId: id, entityLabel: _clientNameFor(d.client) + ' — ' + id, field: 'piLines', description: 'Payroll-instruction lines cleared for ' + id });
         }
         return;
       }
@@ -26945,7 +26956,7 @@ function dtmSyncPiLines(id) {
       })).then(function(insRes) {
         if (insRes.error) { dtmReportSaveError('Could not save payroll-instruction lines for ' + id, insRes.error); return; }
         if (typeof logAudit === 'function') {
-          logAudit({ action: 'pi_lines_edit', entityType: 'dispute', entityId: id, entityLabel: id, field: 'piLines', description: lines.length + ' payroll-instruction line(s) saved for ' + id });
+          logAudit({ action: 'pi_lines_edit', entityType: 'dispute', entityId: id, entityLabel: _clientNameFor(d.client) + ' — ' + id, field: 'piLines', description: lines.length + ' payroll-instruction line(s) saved for ' + id });
         }
       });
     });
@@ -27836,7 +27847,8 @@ async function _persistCalendar(scope, fileName, arrayBuffer, calPeriods, calHol
   }, { onConflict: 'scope_type,scope_id' });
   if (upsertRes.error) { console.warn('Could not save calendar record', upsertRes.error); if (typeof showToast === 'function') showToast('Calendar could not be saved: ' + upsertRes.error.message, '#c0392b'); return; }
   if (typeof logAudit === 'function') {
-    logAudit({ action: 'calendar_uploaded', entityType: scope.type, entityId: scope.id, field: 'calendar', oldValue: (existingRes.data && existingRes.data.storage_path) || null, newValue: fileName, description: 'Uploaded calendar file ' + fileName });
+    var _calClientKey = typeof _calKey === 'function' ? _calKey() : null;
+    logAudit({ action: 'calendar_uploaded', entityType: 'client', entityId: scope.id, entityLabel: (_calClientKey ? _clientNameFor(_calClientKey) : null) || fileName, field: 'calendar', oldValue: (existingRes.data && existingRes.data.storage_path) || null, newValue: fileName, description: 'Uploaded calendar file ' + fileName });
   }
 }
 
