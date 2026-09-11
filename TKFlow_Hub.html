@@ -2183,7 +2183,7 @@ function signInWithGoogle() {
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
             <input id="auditlog-filter" type="text" placeholder="Filter by actor, action, or entity…" oninput="renderAuditLog()" style="flex:1;max-width:340px;padding:8px 12px;border:1px solid #EBEBEF;border-radius:10px;font-size:12px;font-family:Rubik,sans-serif;">
             <div onclick="_auditLogCache=null;renderAuditLog();" style="cursor:pointer;padding:7px 14px;border:1px solid #EBEBEF;border-radius:10px;font-size:12px;color:#1a1a2e;"><i class="ti ti-refresh" style="margin-right:4px;"></i>Refresh</div>
-            <span style="font-size:11px;color:#9898a6;">Most recent 500 events</span>
+            <span style="font-size:11px;color:#9898a6;">Most recent 500 events · auto-refreshes every 15s</span>
           </div>
           <div style="overflow-x:auto;">
             <table style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -2512,6 +2512,7 @@ function switchPage(page) {
   if (navEl) navEl.classList.add('active');
   document.getElementById('tab-bar').style.display = 'none';
   currentPage = page;
+  if (typeof _auditLogStopAutoRefresh === 'function') _auditLogStopAutoRefresh();
   var _subEl = document.getElementById('topbar-subtitle');
   if (page === 'dashboard') {
     document.getElementById('topbar-title').textContent = (typeof getTimeGreeting==='function') ? getTimeGreeting(currentUser.name.split(' ')[0]) : 'Good day, Zona';
@@ -2533,6 +2534,7 @@ function switchPage(page) {
     if (_subEl) { _subEl.textContent = 'System activity — visible to admins only'; _subEl.style.display = 'block'; }
     if (currentUser.roleType !== 'admin') { switchPage('dashboard'); return; }
     if (typeof renderAuditLog === 'function') renderAuditLog();
+    if (typeof _auditLogStartAutoRefresh === 'function') _auditLogStartAutoRefresh();
   } else {
     // Any other page (workspace included) — the subtitle was previously left showing
     // whatever the last page had set (e.g. Admin's "Team overview..." text bleeding
@@ -3550,6 +3552,7 @@ function switchPage(page) {
   if (navEl) navEl.classList.add('active');
   document.getElementById('tab-bar').style.display = 'none';
   currentPage = page;
+  if (typeof _auditLogStopAutoRefresh === 'function') _auditLogStopAutoRefresh();
   var _subEl = document.getElementById('topbar-subtitle');
   if (page === 'dashboard') {
     document.getElementById('topbar-title').textContent = (typeof getTimeGreeting==='function') ? getTimeGreeting(currentUser.name.split(' ')[0]) : 'Good day, Zona';
@@ -3579,6 +3582,7 @@ function switchPage(page) {
     if (_subEl) { _subEl.textContent = 'System activity — visible to admins only'; _subEl.style.display = 'block'; }
     if (currentUser.roleType !== 'admin') { switchPage('dashboard'); return; }
     if (typeof renderAuditLog === 'function') renderAuditLog();
+    if (typeof _auditLogStartAutoRefresh === 'function') _auditLogStartAutoRefresh();
   } else {
     // Any other page (workspace included) — the subtitle was previously left showing
     // whatever the last page had set (e.g. Admin's "Team overview..." text bleeding
@@ -7640,6 +7644,24 @@ async function renderAuditLog() {
       + '<td style="' + cellStyle + '">' + _auditEsc(r.description) + '</td>'
       + '</tr>';
   }).join('');
+}
+
+// Keeps the Audit Log page live without a manual refresh -- polls every 15s while it's actually
+// the visible page (self-stops if something navigated away without going through switchPage) and
+// skips the tick entirely while the tab is in the background, so it doesn't burn requests on a
+// forgotten background tab.
+var _auditLogAutoRefreshTimer = null;
+function _auditLogStartAutoRefresh() {
+  _auditLogStopAutoRefresh();
+  _auditLogAutoRefreshTimer = setInterval(function() {
+    if (currentPage !== 'auditlog') { _auditLogStopAutoRefresh(); return; }
+    if (document.hidden) return;
+    _auditLogCache = null;
+    renderAuditLog();
+  }, 15000);
+}
+function _auditLogStopAutoRefresh() {
+  if (_auditLogAutoRefreshTimer) { clearInterval(_auditLogAutoRefreshTimer); _auditLogAutoRefreshTimer = null; }
 }
 
 function logAudit(opts) {
