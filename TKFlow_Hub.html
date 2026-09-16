@@ -19930,8 +19930,13 @@ async function emailDetectTk() {
     // evidence, not just check whether dates is non-empty -- confirmed live: without this, an
     // employee who was only ever late/undertime (never absent) still counted here.
     var rowsWithAbsentDates = (byClient[k] || []).map(function(r) {
-      var absentDates = (r.evidence || []).filter(function(e){ return e.flagType === 'absent'; }).map(function(e){ return e.date; });
-      return { name: r.name, absentDates: absentDates };
+      var absentEvs = (r.evidence || []).filter(function(e){ return e.flagType === 'absent'; });
+      var absentDates = absentEvs.map(function(e){ return e.date; });
+      // Weighted the same way tkRecomputeDaysAbsent computes the "Days Absent" badge (a
+      // half-day absence counts as 0.5) -- keeps this in step with what the reviewer already
+      // sees per employee, rather than a raw count of flagged dates.
+      var daysAbsent = absentEvs.reduce(function(sum, e){ return sum + (e.isHalfDay ? 0.5 : 1); }, 0);
+      return { name: r.name, absentDates: absentDates, daysAbsent: daysAbsent };
     }).filter(function(r){ return r.absentDates.length > 0; });
     if (!rowsWithAbsentDates.length) {
       out.push({ id: 'tk-' + k, client: k, text: 'No unusual pattern detected among the causes of absences.' });
@@ -19951,6 +19956,13 @@ async function emailDetectTk() {
     if (heavyDates.length) {
       var heavyText = heavyDates.map(function(d){ return countByDate[d] + ' employees were absent on ' + d; }).join('; ') + '.';
       out.push({ id: 'tk-heavy-' + k, client: k, text: heavyText });
+    }
+    // Employees with more than 5 days of absences this cut-off -- daysAbsent above already
+    // only counts flagType 'absent' evidence, so this never picks up late/undertime-only rows.
+    var chronic = rowsWithAbsentDates.filter(function(r){ return r.daysAbsent > 5; });
+    if (chronic.length) {
+      var chronicText = chronic.map(function(r){ return r.name + ' (' + r.daysAbsent + ' days)'; }).join(', ');
+      out.push({ id: 'tk-chronic-' + k, client: k, text: chronic.length + ' employee(s) have more than 5 days of absences this cut-off: ' + chronicText + '.' });
     }
   });
   return out;
