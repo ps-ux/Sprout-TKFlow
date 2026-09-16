@@ -12319,22 +12319,29 @@ function formatAttCovShort(attCov) {
 
 function buildVarCard(co, index, showRemove, gi) {
   var id = co.id;
-  // Auto-fill from the uploaded TK Calendar: Cut-off 1 = the period containing today,
-  // Cut-off 2 = the next one after that, and so on — still fully editable afterward.
+  // Auto-fill from the uploaded TK Calendar: Cut-off 1 = the most recently completed period,
+  // Cut-off 2 (and beyond, via "Add another cut-off") = progressively EARLIER periods before
+  // that -- confirmed live: with current payout Sept 30 (period Sept 1-15) and Cut-off 1
+  // correctly showing Sept 15 (period Aug 16-31), adding another cut-off must go backward to
+  // Aug 30 (period Aug 1-15), not forward to the current Sept 30 period. Previously added
+  // `(index - 1)`, which walked forward in time instead.
   var _varPayoutVal = '';
   var _periods = getRealCalendarPeriods();
   if (_periods.length) {
-    var _idx = findMostRecentlyCompletedPeriodIdx(_periods) + (index - 1);
+    var _idx = findMostRecentlyCompletedPeriodIdx(_periods) - (index - 1);
     var _p = _periods[_idx];
     if (_p && _p.payout) _varPayoutVal = _p.payout.toLocaleDateString('en-US', {month:'long', day:'numeric', year:'numeric'});
     // The output file name references the payout one period earlier than the one shown here --
     // Variance reviews the most recently completed attendance cutoff, but by established
     // convention the output file is named after the PREVIOUS payout run's cycle.
     if (_p && _p.payout) co._filenamePayout = _varFilenamePayoutFromShown(_p.payout);
-    // The Orig upload is the "Previous Attendance Template" -- its own sheet tab should read as
-    // the attendance coverage IT actually contains (e.g. "Aug 1-15"), not a payout date at all.
-    var _origPeriod = _periods[_idx - 1];
-    co._origAttCov = _origPeriod ? formatAttCovShort(_origPeriod.attCov) : null;
+    // The Orig upload is the "Previous Attendance Template" -- its sheet tab should read as
+    // THIS SAME cutoff's own attendance coverage (e.g. the Sept 15 payout cutoff's Orig tab is
+    // "Aug 16-31", its own attCov) -- Orig/ACO/PayReg are three different snapshots of the SAME
+    // period being validated, not three different periods. Previously read `_periods[_idx - 1]`
+    // (the period BEFORE this one), which confirmed live swapped the tab names between adjacent
+    // cut-off cards (Sept 15's file showed "Aug 1-15", the Aug 30 card's file showed "Aug 16-31").
+    co._origAttCov = _p ? formatAttCovShort(_p.attCov) : null;
   }
   return '<div class="var-cutoff-card" id="var-co-' + id + '" style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:14px;margin-bottom:10px;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
@@ -12715,10 +12722,10 @@ function runVariance(opts) {
         return widths.map(function(w) { return {wch: Math.max(8, Math.min(45, (w||0) + 2))}; });
       }
 
-      // The Orig tab is the PREVIOUS attendance cut-off's own data, so it's named after the
-      // attendance coverage range that cut-off actually spans (e.g. "Orig Aug 1-15"), not a
-      // payout date -- co._filenamePayout is the previous PAYOUT's date, a different thing,
-      // used only as a fallback here if no calendar was uploaded to compute the real range.
+      // The Orig tab is THIS cut-off's own attendance coverage range (e.g. "Orig Aug 16-31" for
+      // the Sept 15 payout cutoff), not a payout date -- co._filenamePayout is the PREVIOUS
+      // payout's date, a different thing, used only as a fallback here if no calendar was
+      // uploaded to compute the real range. See buildVarCard's co._origAttCov comment.
       var origSheetName = sanitizeSheetName('Orig ' + (co._origAttCov || co._filenamePayout || payout));
       var acoSheetName   = 'ACO';
       var attSheetName   = 'Attendance';
