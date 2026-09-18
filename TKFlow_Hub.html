@@ -10886,17 +10886,20 @@ function logTaskProgress(clientKey) {
   saveCutoffProcessing(clientKey, entry);
 }
 
+// Tasks in here track completion per-subcompany, same as variance/validation/disputes_summary
+// -- finalizing one sub's run must NOT also mark siblings done. payroll_instructions is
+// deliberately left out: it still applies to the whole group when marked done/skipped, since
+// no one has asked for it to be split out yet.
+var PER_SUB_TASK_KEYS = { newhires: true, profile: true };
+
 function setTaskStatus(taskKey, st, reason, targetOverride) {
   var ck = window.currentWsClient || window._wsClient || '';
   var grpKey = window.currentWsGroup;
-  // Tasks without their own independent per-subcompany batch tracking (newhires, profile,
-  // payroll_instructions) apply to the whole group when marked done/skipped — there's no
-  // per-sub state for these to track separately, unlike variance/validation/disputes_summary.
-  // targetOverride lets a caller (e.g. confirmSkipTask, when the user didn't opt into
-  // "apply to all subcompanies") narrow this to specific keys instead of the whole group.
+  // targetOverride lets a caller (e.g. confirmSkipTask, when the user opted into "apply to
+  // all subcompanies") widen a PER_SUB_TASK_KEYS task back out to specific keys/whole group.
   var targets = (Array.isArray(targetOverride) && targetOverride.length)
     ? targetOverride
-    : (grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey])
+    : (!PER_SUB_TASK_KEYS[taskKey] && grpKey && typeof clientGroups !== 'undefined' && clientGroups[grpKey])
       ? clientGroups[grpKey].subs.filter(function(k){ return clients[k] && !clients[k]._churned; })
       : [ck];
   if (!targets.length) targets = [ck];
@@ -11214,8 +11217,15 @@ function confirmSkipTask() {
   }
   var batchNamesSkip = finalizeBatchTaskIfApplicable(taskKey, 'skipped', reason);
   // Default to skipping just the sub actually open -- only spread to the rest of a
-  // multi-sub group when the user explicitly opted into that via the checkbox above.
-  if (!batchNamesSkip) setTaskStatus(taskKey, 'skipped', reason, applyToWholeGroup ? null : [ck]);
+  // multi-sub group when the user explicitly opted into that via the checkbox above. Built as
+  // an explicit key list (not null) so this still reaches the whole group even for
+  // PER_SUB_TASK_KEYS tasks (newhires, profile), whose own default in setTaskStatus is now
+  // just the current sub.
+  var grpKeyForSkip = window.currentWsGroup;
+  var wholeGroupTargets = (grpKeyForSkip && typeof clientGroups !== 'undefined' && clientGroups[grpKeyForSkip])
+    ? clientGroups[grpKeyForSkip].subs.filter(function(k){ return clients[k] && !clients[k]._churned; })
+    : [ck];
+  if (!batchNamesSkip) setTaskStatus(taskKey, 'skipped', reason, applyToWholeGroup ? wholeGroupTargets : [ck]);
   closeTaskRunner(true);
   if (typeof showToast === 'function') showToast('Task skipped: ' + reason + (applyToWholeGroup ? ' (all subcompanies)' : ''));
 }
