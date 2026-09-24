@@ -9143,7 +9143,9 @@ setInterval(recomputeAllDisputeTAT, 60000);
 // anything else folds into the Description — still the same real Ad Hoc Log card underneath.
 // Sprout HR shift types, offered as a dropdown in Shift Management logs (and as suggestions in
 // Bulk log's Change from/to cells for Shift Management rows).
-var SHIFT_TYPES = ['Normal Shift', 'Flexible per Day', 'Flexible per Week', 'Exempted', 'Shift-Based', 'Single Login', 'Supervisor Shift'];
+var SHIFT_TYPES = ['Exempted', 'Flexible per Day', 'Flexible per Week', 'Normal Shift', 'Shift-Based', 'Single Login', 'Supervisor Shift']; // alphabetical
+// Common Profile Update fields, suggested in "Field Changed" (free typing still allowed).
+var PROFILE_FIELDS = ['Department', 'Employment Status', 'Immediate Supervisor', 'Job Position', 'Salary']; // alphabetical
 
 var LOG_TAILORED_FIELDS = {
   'Shift Management': [
@@ -9165,7 +9167,7 @@ var LOG_TAILORED_FIELDS = {
   ],
   'Profile Update': [
     { id: 'emp', label: 'Employee Name', placeholder: 'e.g. Reyes, Alvin', maps: 'emp' },
-    { id: 'field', label: 'Field Changed', placeholder: 'e.g. Salary, Employment Status', maps: 'desc', descPrefix: 'Field' },
+    { id: 'field', label: 'Field Changed', placeholder: 'Pick from the list or type your own', type: 'suggest', options: PROFILE_FIELDS, maps: 'desc', descPrefix: 'Field' },
     { id: 'before', label: 'Before (old value)', placeholder: 'e.g. PHP 28,000', maps: 'before' },
     { id: 'after', label: 'After (new value)', placeholder: 'e.g. PHP 32,000', maps: 'after' },
     { id: 'effective', label: 'Effective Date', placeholder: '', type: 'date', maps: 'desc', descPrefix: 'Effective' },
@@ -9186,6 +9188,10 @@ function adHocOpenTailored(type) {
     fieldsEl.innerHTML = (LOG_TAILORED_FIELDS[type] || []).map(function(f) {
       var input = f.type === 'textarea'
         ? '<textarea id="adhoc-t-' + f.id + '" class="task-input" rows="2" placeholder="' + f.placeholder + '" style="width:100%;"></textarea>'
+        : f.type === 'suggest'
+        // Free-text input with a clickable suggestion list (datalist) -- pick one or type anything.
+        ? '<input type="text" id="adhoc-t-' + f.id + '" list="adhoc-t-' + f.id + '-list" class="task-input" placeholder="' + f.placeholder + '" style="width:100%;">'
+            + '<datalist id="adhoc-t-' + f.id + '-list">' + (f.options || []).map(function(o){ return '<option value="' + o + '">'; }).join('') + '</datalist>'
         : f.type === 'select'
         ? '<select id="adhoc-t-' + f.id + '" class="task-input" style="width:100%;cursor:pointer;"><option value="">' + f.placeholder + '</option>'
             + (f.options || []).map(function(o){ return '<option>' + o + '</option>'; }).join('') + '</select>'
