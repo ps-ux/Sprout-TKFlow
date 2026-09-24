@@ -13864,7 +13864,10 @@ function renderTKReview() {
     + '</div>'
     + '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0 10px;">'
     + '<div style="font-size:13px;font-weight:600;color:#1a1a2e;">' + confirmed + '/' + total + ' confirmed</div>'
-    + '<div style="font-size:11px;color:'+(allDone?'#32CE13':'#9898a6')+';font-weight:'+(allDone?'600':'400')+';">' + (allDone ? '✓ All done' : 'Click ✓ to confirm each employee') + '</div>'
+    + (allDone
+        ? '<div style="font-size:11px;color:#32CE13;font-weight:600;">✓ All done</div>'
+        : '<div style="display:flex;align-items:center;gap:10px;"><span style="font-size:11px;color:#9898a6;">Click ✓ to confirm each employee, or</span>'
+          + '<button onclick="tkApproveAll()" style="padding:5px 12px;background:var(--kk-500);color:#fff;border:none;border-radius:10px;font-size:11px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:5px;"><i class="ti ti-checks" style="font-size:12px;"></i> Approve all</button></div>')
     + '</div>'
     + '<div style="height:4px;background:#EBEBEF;border-radius:2px;margin-bottom:14px;overflow:hidden;">'
     + '<div style="height:100%;background:linear-gradient(90deg,#32CE15,#1fa80e);width:'+pct+'%;transition:width 0.4s;border-radius:2px;"></div>'
@@ -13874,7 +13877,7 @@ function renderTKReview() {
     + 'style="text-align:center;padding:10px;font-size:12px;color:#32CE13;cursor:pointer;border:1.5px dashed #BBF7D0;border-radius:14px;margin-top:2px;">'
     + '<i class="ti ti-user-plus" style="font-size:11px;"></i> Add missing employee from Summary tab</div>'
     + '<button class="task-run-btn '+(allDone?'green':'')+'" style="margin-top:10px;" '
-    + (allDone?'':'disabled ')+'onclick="tkDownloadOutput()">'
+    + (allDone?'':'disabled ')+'onclick="tkDownloadOutputChecked()">'
     + '<i class="ti ti-download"></i> '+(allDone?'Download validated output':'Confirm all rows to download')+'</button>';
 }
 
@@ -15074,6 +15077,64 @@ function toggleTKRow(i) {
 }
 function tkToggleCollapse(i) { tkReviewRows[i]._collapsed = !tkReviewRows[i]._collapsed; renderTKReview(); }
 
+// Confirms every still-unconfirmed employee in one go. Rows with an absence-count mismatch
+// (tkAbsentMismatch) keep the same explicit acknowledgment toggleTKRow requires -- they're held
+// back and listed in one prompt instead of being silently approved with everyone else.
+function tkApproveAll() {
+  var clean = [], mismatched = [];
+  tkReviewRows.forEach(function(r) {
+    if (r.checked) return;
+    if (tkAbsentMismatch(r) && !r._absentMismatchAcked) mismatched.push(r);
+    else clean.push(r);
+  });
+  clean.forEach(function(r) { r.checked = true; r._collapsed = true; });
+  if (!mismatched.length) {
+    renderTKReview();
+    if (typeof showToast === 'function') showToast('Approved ' + clean.length + ' employee(s)');
+    return;
+  }
+  renderTKReview();
+  var lines = mismatched.map(function(r) {
+    var detected = (r.evidence||[]).filter(function(e){ return (e.flagType||'absent')==='absent'; })
+      .reduce(function(sum,e){ return sum + (e.isHalfDay ? 0.5 : 1); }, 0);
+    return (r.name || r.id) + ' (Summary tab: ' + r.fileDaysAbsent + ', flagged: ' + detected + ')';
+  });
+  appConfirm(
+    'Absence count mismatch',
+    (clean.length ? 'Approved ' + clean.length + ' employee(s). ' : '')
+      + mismatched.length + ' employee(s) were held back because the Summary tab’s absence count doesn’t match the flagged dates: '
+      + lines.join('; ') + '. Approve them anyway?',
+    function() {
+      mismatched.forEach(function(r) { r._absentMismatchAcked = true; r.checked = true; r._collapsed = true; });
+      renderTKReview();
+    },
+    { okLabel: 'Approve anyway', cancelLabel: 'Review them first' }
+  );
+}
+
+// Summary-tab employees (absences/undertime) that were never added to the review list --
+// i.e. still showing "Not detected" with a "+ Add" button in the cross-check panel.
+function tkMissingFromSummary(summList, rows) {
+  return (summList || []).filter(function(emp) {
+    return !(rows || []).some(function(r) { return r.id === emp.id; });
+  });
+}
+
+// Download button entry point: every flagged row can be approved while employees from the
+// Summary tab were never added at all, so warn before producing the file.
+function tkDownloadOutputChecked() {
+  var missing = tkMissingFromSummary(window.tkSummaryEmployees, tkReviewRows);
+  if (!missing.length) { tkDownloadOutput(); return; }
+  appConfirm(
+    'Employees not yet checked',
+    missing.length + ' employee(s) with absences/undertime in the Summary tab haven’t been added to the review list: '
+      + missing.map(function(emp){ return emp.name + ' (' + emp.daysAbsent + ' day(s) absent)'; }).join('; ')
+      + '. Use "+ Add" in the Summary tab cross-check to review them. Download anyway?',
+    tkDownloadOutput,
+    { okLabel: 'Download anyway', cancelLabel: 'Go back' }
+  );
+}
+
 function runValidationBatch() {
   var anyFiles = tkBatchGroups.some(function(g,gi){ return taskFiles['tk-att-'+gi] && taskFiles['tk-ac-'+gi] && taskFiles['tk-bio-'+gi]; });
   if (!anyFiles) {
@@ -15254,15 +15315,33 @@ function tkSwitchGroup(gi) {
 function tkDownloadAllGroups() {
   var doneGroups = tkBatchGroups.map(function(g,gi){return {g:g,gi:gi};}).filter(function(x){ return x.g.status === 'done'; });
   if (!doneGroups.length) return;
-  var i = 0;
-  function next() {
-    if (i >= doneGroups.length) return;
-    tkSwitchGroup(doneGroups[i].gi);
-    tkDownloadOutput();
-    i++;
-    setTimeout(next, 600);
+  function startDownloads() {
+    var i = 0;
+    function next() {
+      if (i >= doneGroups.length) return;
+      tkSwitchGroup(doneGroups[i].gi);
+      tkDownloadOutput();
+      i++;
+      setTimeout(next, 600);
+    }
+    next();
   }
-  next();
+  // Same "Summary-tab employees never added" warning as tkDownloadOutputChecked, across every
+  // subcompany being downloaded. The active group's live rows are in tkReviewRows; the rest
+  // were snapshotted into g.tkReviewRows by renderTKReview.
+  var pending = [];
+  doneGroups.forEach(function(x) {
+    var rows = x.gi === tkActiveGroupIdx ? tkReviewRows : x.g.tkReviewRows;
+    var missing = tkMissingFromSummary(x.g.tkSummaryEmployees, rows);
+    if (missing.length) pending.push((x.g.name || ('Subcompany ' + (x.gi+1))) + ': ' + missing.map(function(emp){ return emp.name; }).join(', '));
+  });
+  if (!pending.length) { startDownloads(); return; }
+  appConfirm(
+    'Employees not yet checked',
+    'Some employees with absences/undertime in the Summary tab haven’t been added to the review list — ' + pending.join('; ') + '. Download anyway?',
+    startDownloads,
+    { okLabel: 'Download anyway', cancelLabel: 'Go back' }
+  );
 }
 
 function runValidation(opts) {
