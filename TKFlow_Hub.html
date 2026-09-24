@@ -4493,22 +4493,40 @@ function polDeleteFile(id) {
   if (typeof showToast==='function') showToast('File removed');
 }
 
-function openBulkLogModal() {
+// ── Bulk log ────────────────────────────────────────────────────────────────
+// Two modes:
+//   'same'  -- every row shares one activity type + request date and is saved as ONE ad hoc card
+//              whose entries live in adhoc_logs.items (e.g. 12 salary increases = 1 card).
+//   'mixed' -- each row picks its own activity type + request date and becomes its OWN card
+//              (catch-up logging of unrelated requests in one sitting).
+// Rows are plain <input>s -- the old contenteditable cells rendered their placeholder as a gray
+// <span> inside the editable area, so typed text landed inside the span (gray) and the
+// placeholder never cleared.
+var BULK_TYPES = ['Shift Management', 'Holiday Setup', 'Profile Update', 'Payroll ID Sync', 'Salary Increase', 'Other'];
+
+function _bulkTodayIso() {
+  var d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+}
+
+// prefill (optional): an existing grouped entry being edited -- opens in 'same' mode with its rows.
+function openBulkLogModal(prefill) {
   var modal = document.getElementById('bulk-log-modal');
-  if (modal) modal.style.display = 'flex';
-  // Reset channels
+  if (modal) { modal.style.display = 'flex'; modal._editId = prefill ? prefill.id : ''; }
   window._bulkChannels = {};
   ['email','viber','chat'].forEach(function(ch){ bulkSetChannel(ch,false); });
-  // Clear table and add 3 starter rows
-  var tbody = document.getElementById('bulk-log-tbody');
-  if (tbody) tbody.innerHTML = '';
-  window._bulkRows = [];
-  for (var r = 0; r < 3; r++) bulkAddRow();
+  if (prefill && prefill.channels) prefill.channels.split(',').forEach(function(ch){ ch = ch.trim(); if (ch) { window._bulkChannels[ch] = true; bulkSetChannel(ch, true); } });
 
-  // Multi-sub groups need to say which sub a batch of employees belongs to -- previously
-  // there was no field for this at all, so every bulk-logged entry silently defaulted to
-  // whichever sub happened to be selected in the switcher. Same pattern as the single
-  // "Log Request" modal's own subcompany selector (adHocOpenTailored).
+  var typeSel = document.getElementById('bulk-log-type');
+  if (typeSel) {
+    typeSel.innerHTML = BULK_TYPES.map(function(t){ return '<option>' + t + '</option>'; }).join('');
+    typeSel.value = prefill ? prefill.type : 'Salary Increase';
+  }
+  var dateInp = document.getElementById('bulk-log-date');
+  if (dateInp) dateInp.value = (prefill && prefill.dateRequested) || _bulkTodayIso();
+
+  // Multi-sub groups need to say which sub a batch belongs to (same as the single Log Request
+  // modal's subcompany selector).
   var grpKey = window.currentWsGroup;
   var subGroup = document.getElementById('bulk-log-sub-group');
   var subSelect = document.getElementById('bulk-log-sub');
@@ -4519,88 +4537,147 @@ function openBulkLogModal() {
       + subs.map(function(k){ return '<option value="' + k + '">' + (clients[k].name||k) + '</option>'; }).join('');
     subGroup.style.display = 'block';
     defaultClientKey = subs.indexOf(defaultClientKey) >= 0 ? defaultClientKey : subs[0];
-    subSelect.value = defaultClientKey;
+    subSelect.value = prefill ? (prefill.subKey || '') : defaultClientKey;
   } else if (subGroup) {
     subGroup.style.display = 'none';
   }
+
+  window._bulkRows = [];
+  if (prefill && prefill.items && prefill.items.length) {
+    prefill.items.forEach(function(it){ window._bulkRows.push({ type: prefill.type, emp: it.emp||'', desc: it.desc||'', from: it.before||'', to: it.after||'', date: prefill.dateRequested || '' }); });
+  } else {
+    for (var r = 0; r < 3; r++) window._bulkRows.push(_bulkBlankRow());
+  }
+  bulkSetMode('same', true);
+  // Editing a grouped card only makes sense in 'same' mode -- hide the mode switch then.
+  var modeRow = document.getElementById('bulk-mode-row');
+  if (modeRow) modeRow.style.display = prefill ? 'none' : 'flex';
+  var title = document.getElementById('bulk-log-title');
+  if (title) title.textContent = prefill ? 'Edit bulk log' : 'Bulk log';
+}
+
+function _bulkBlankRow() {
+  var typeSel = document.getElementById('bulk-log-type');
+  return { type: (typeSel && typeSel.value) || 'Salary Increase', emp: '', desc: '', from: '', to: '', date: _bulkTodayIso() };
 }
 
 function closeBulkLogModal() {
   var modal = document.getElementById('bulk-log-modal');
-  if (modal) modal.style.display = 'none';
+  if (modal) { modal.style.display = 'none'; modal._editId = ''; }
 }
 
-function bulkAddRow(emp, desc, from, to) {
-  if (!window._bulkRows) window._bulkRows = [];
-  var ri = window._bulkRows.length;
-  var row = {emp: emp||'', desc: desc||'', from: from||'', to: to||''};
-  window._bulkRows.push(row);
+function bulkSetMode(mode, skipRender) {
+  window._bulkMode = mode;
+  ['same','mixed'].forEach(function(m) {
+    var b = document.getElementById('bulk-mode-' + m);
+    if (!b) return;
+    var on = m === mode;
+    b.style.background = on ? 'var(--ub-500)' : '#fff';
+    b.style.color = on ? '#fff' : '#6b6b80';
+    b.style.borderColor = on ? 'var(--ub-500)' : '#EBEBEF';
+  });
+  var shared = document.getElementById('bulk-shared-type-date');
+  if (shared) shared.style.display = mode === 'same' ? 'grid' : 'none';
+  var hint = document.getElementById('bulk-mode-hint');
+  if (hint) hint.textContent = mode === 'same'
+    ? 'All rows are the same activity and will be saved together as ONE card.'
+    : 'Pick an activity type and request date per row. Each row is saved as its own card.';
+  bulkRenderRows();
+}
 
+function _bulkEsc(v) { return String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+
+function bulkRenderRows() {
+  var mixed = window._bulkMode === 'mixed';
+  var thead = document.getElementById('bulk-log-thead');
+  var th = function(label, w) { return '<th style="padding:8px 10px;text-align:left;color:#fff;font-weight:600;border:1px solid #1a5fa8;white-space:nowrap;' + (w ? 'min-width:' + w + 'px;' : '') + '">' + label + '</th>'; };
+  if (thead) thead.innerHTML = '<tr style="background:#2E75B6;">' + th('#', 36)
+    + (mixed ? th('Activity type', 150) : '')
+    + th('Employee name / ID (or reference)', 190) + th('Description', 200) + th('Change from', 130) + th('Change to', 130)
+    + (mixed ? th('Date requested', 130) : '')
+    + '<th style="padding:8px 10px;border:1px solid #1a5fa8;width:36px;"></th></tr>';
+
+  var inp = 'width:100%;box-sizing:border-box;padding:7px 9px;border:none;outline:none;font-size:12px;font-family:Rubik,sans-serif;color:#1a1a2e;background:transparent;';
+  var cell = 'padding:0;border:1px solid #EBEBEF;';
   var tbody = document.getElementById('bulk-log-tbody');
   if (!tbody) return;
-  var tr = document.createElement('tr');
-  tr.id = 'bulk-row-' + ri;
-  tr.style.borderBottom = '1px solid #EBEBEF';
-
-  function td(key, val, ph) {
-    return '<td style="padding:0;border:1px solid #EBEBEF;">'
-      + '<div contenteditable="true" data-ri="' + ri + '" data-key="' + key + '"'
-      + ' onblur="bulkCellUpdate(this)"'
-      + ' style="padding:7px 10px;min-height:32px;outline:none;font-size:12px;font-family:Rubik,sans-serif;color:#1a1a2e;"'
-      + (val ? '' : ' data-empty="true"')
-      + '>' + (val || '<span style=\'color:#d0d0dc;font-size:11px;\'>' + ph + '</span>') + '</div>'
-      + '</td>';
+  var n = 0;
+  if (!document.getElementById('bulk-shift-types')) {
+    var dl = document.createElement('datalist');
+    dl.id = 'bulk-shift-types';
+    dl.innerHTML = SHIFT_TYPES.map(function(t){ return '<option value="' + t + '">'; }).join('');
+    document.body.appendChild(dl);
   }
-
-  tr.innerHTML = '<td style="padding:7px 10px;border:1px solid #EBEBEF;color:#9898a6;font-size:11px;text-align:center;">' + (ri+1) + '</td>'
-    + td('emp',  row.emp,  'Employee name or ID')
-    + td('desc', row.desc, 'What changed / what was done')
-    + td('from', row.from, 'Before (optional)')
-    + td('to',   row.to,   'After (optional)')
-    + '<td style="padding:4px 6px;border:1px solid #EBEBEF;text-align:center;">'
-    + '<button onclick="bulkRemoveRow(' + ri + ')" style="background:none;border:none;color:#9898a6;cursor:pointer;font-size:14px;padding:2px 4px;"><i class="ti ti-x"></i></button>'
-    + '</td>';
-
-  tbody.appendChild(tr);
+  tbody.innerHTML = (window._bulkRows || []).map(function(r, ri) {
+    if (!r) return '';
+    n++;
+    var rowType = mixed ? r.type : ((document.getElementById('bulk-log-type')||{}).value || r.type);
+    var field = function(key, ph, type) {
+      var list = (rowType === 'Shift Management' && (key === 'from' || key === 'to')) ? 'list="bulk-shift-types" ' : '';
+      if (list) ph = 'Pick or type a shift type';
+      return '<td style="' + cell + '"><input ' + list + (type ? 'type="' + type + '" ' : '') + 'value="' + _bulkEsc(r[key]) + '" placeholder="' + ph + '" oninput="bulkCellUpdate(' + ri + ',\'' + key + '\',this.value)" style="' + inp + '"></td>';
+    };
+    return '<tr style="border-bottom:1px solid #EBEBEF;">'
+      + '<td style="padding:7px 10px;border:1px solid #EBEBEF;color:#9898a6;font-size:11px;text-align:center;">' + n + '</td>'
+      + (mixed ? '<td style="' + cell + '"><select onchange="bulkCellUpdate(' + ri + ',\'type\',this.value)" style="' + inp + 'cursor:pointer;">'
+          + BULK_TYPES.map(function(t){ return '<option' + (t === r.type ? ' selected' : '') + '>' + t + '</option>'; }).join('') + '</select></td>' : '')
+      + field('emp', 'Employee name or ID')
+      + field('desc', 'What changed / what was done')
+      + field('from', 'Before (optional)')
+      + field('to', 'After (optional)')
+      + (mixed ? field('date', '', 'date') : '')
+      + '<td style="padding:4px 6px;border:1px solid #EBEBEF;text-align:center;"><button onclick="bulkRemoveRow(' + ri + ')" title="Remove row" style="background:none;border:none;color:#9898a6;cursor:pointer;font-size:14px;padding:2px 4px;"><i class="ti ti-x"></i></button></td>'
+      + '</tr>';
+  }).join('');
   bulkUpdateRowCount();
-  // Focus the employee cell of the new row
+}
+
+function bulkAddRow(emp, desc, from, to, type, date) {
+  if (!window._bulkRows) window._bulkRows = [];
+  var row = _bulkBlankRow();
+  if (emp) row.emp = emp;
+  if (desc) row.desc = desc;
+  if (from) row.from = from;
+  if (to) row.to = to;
+  if (type) row.type = type;
+  if (date) row.date = date;
+  window._bulkRows.push(row);
+  bulkRenderRows();
   if (!emp) {
-    var cell = tr.querySelector('[data-key="emp"]');
-    if (cell) { cell.focus(); }
+    var rowsEls = document.querySelectorAll('#bulk-log-tbody tr');
+    var last = rowsEls[rowsEls.length - 1];
+    var first = last && last.querySelector('input');
+    if (first) first.focus();
   }
 }
 
 function bulkRemoveRow(ri) {
   if (!window._bulkRows) return;
-  window._bulkRows[ri] = null; // mark as deleted
-  var tr = document.getElementById('bulk-row-' + ri);
-  if (tr) tr.remove();
-  bulkUpdateRowCount();
+  window._bulkRows[ri] = null;
+  bulkRenderRows();
 }
 
-function bulkCellUpdate(el) {
-  var ri  = parseInt(el.dataset.ri);
-  var key = el.dataset.key;
-  var val = el.innerText.trim();
+function bulkCellUpdate(ri, key, val) {
   if (!window._bulkRows || !window._bulkRows[ri]) return;
   window._bulkRows[ri][key] = val;
-  // Remove placeholder styling
-  el.removeAttribute('data-empty');
-  if (!val) {
-    el.innerHTML = '<span style=\'color:#d0d0dc;font-size:11px;\'>' + (key==='emp'?'Employee name or ID':key==='desc'?'What changed / what was done':key==='from'?'Before (optional)':'After (optional)') + '</span>';
-  }
+  if (key === 'emp') bulkUpdateRowCount();
+  if (key === 'type') bulkRenderRows(); // e.g. Shift Management rows get shift-type suggestions
 }
 
 function bulkUpdateRowCount() {
   var rows = (window._bulkRows||[]).filter(function(r){ return r; });
   var el = document.getElementById('bulk-row-count');
-  if (el) el.textContent = rows.length + ' employee' + (rows.length!==1?'s':'');
+  if (el) el.textContent = rows.length + ' row' + (rows.length!==1?'s':'');
   var lbl = document.getElementById('bulk-log-count-label');
-  if (lbl) lbl.textContent = rows.length ? rows.length + ' employees' : '';
+  var filled = rows.filter(function(r){ return (r.emp||'').trim(); }).length;
+  if (lbl) lbl.textContent = filled ? '(' + filled + ')' : '';
 }
 
 function bulkApplyType() {
-  // type is shared — no per-row update needed
+  // Shared type in 'same' mode -- keep row objects in sync so switching to 'mixed' starts from it.
+  var t = (document.getElementById('bulk-log-type')||{}).value;
+  (window._bulkRows||[]).forEach(function(r){ if (r) r.type = t; });
+  bulkRenderRows();
 }
 
 function bulkToggleChannel(ch) {
@@ -4616,6 +4693,28 @@ function bulkSetChannel(ch, active) {
   else        { btn.style.background='#fff'; btn.style.color='#6b6b80'; btn.style.borderColor='#EBEBEF'; }
 }
 
+// Matches a free-text activity name from an imported sheet to one of BULK_TYPES.
+function _bulkMatchType(s) {
+  s = String(s || '').toLowerCase();
+  if (!s) return '';
+  if (/shift|schedule/.test(s)) return 'Shift Management';
+  if (/holiday/.test(s)) return 'Holiday Setup';
+  if (/salary|increase|rate/.test(s)) return 'Salary Increase';
+  if (/payroll id|id sync/.test(s)) return 'Payroll ID Sync';
+  if (/profile/.test(s)) return 'Profile Update';
+  return 'Other';
+}
+
+function _bulkParseDate(v) {
+  if (!v) return '';
+  var s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  var d = new Date(s);
+  if (isNaN(d)) return '';
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+}
+
 function bulkHandleFile(input) {
   var file = input.files[0]; if (!file) return;
   if (typeof XLSX==='undefined') { if(typeof showToast==='function') showToast('XLSX not loaded yet','#e67e00'); return; }
@@ -4625,26 +4724,24 @@ function bulkHandleFile(input) {
       var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', raw:false});
       var ws = wb.Sheets[wb.SheetNames[0]];
       var raw = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
-      // Find header row
-      var hdrIdx=0, nameCol=-1, idCol=-1, fromCol=-1, toCol=-1, descCol=-1;
+      var hdrIdx=0, nameCol=-1, idCol=-1, fromCol=-1, toCol=-1, descCol=-1, typeCol=-1, dateCol=-1;
       for (var ri=0; ri<Math.min(raw.length,10); ri++) {
         var joined=raw[ri].map(function(c){return String(c||'').toLowerCase();}).join('|');
         if (joined.includes('name')||joined.includes('employee')) {
           hdrIdx=ri;
           raw[ri].forEach(function(h,ci) {
-            var hl=String(h||'').toLowerCase();
+            var hl=String(h||'').toLowerCase().trim();
             if ((hl.includes('name')||hl.includes('employee'))&&nameCol<0) nameCol=ci;
             if ((hl==='id'||hl.includes('emp id')||hl.includes('emp no'))&&idCol<0) idCol=ci;
             if ((hl.includes('from')||hl.includes('before')||hl.includes('old'))&&fromCol<0) fromCol=ci;
-            if ((hl.includes('to')||hl.includes('after')||hl.includes('new'))&&toCol<0) toCol=ci;
+            if ((hl==='to'||hl.includes('change to')||hl.includes('after')||hl.includes('new'))&&toCol<0) toCol=ci;
             if ((hl.includes('desc')||hl.includes('detail')||hl.includes('remark'))&&descCol<0) descCol=ci;
+            if ((hl.includes('type')||hl.includes('activity'))&&typeCol<0) typeCol=ci;
+            if (hl.includes('date')&&dateCol<0) dateCol=ci;
           });
           break;
         }
       }
-      // Clear existing rows
-      var tbody=document.getElementById('bulk-log-tbody');
-      if (tbody) tbody.innerHTML='';
       window._bulkRows=[];
       var added=0;
       for (var ri2=hdrIdx+1; ri2<raw.length; ri2++) {
@@ -4654,14 +4751,23 @@ function bulkHandleFile(input) {
         var id2=idCol>=0?String(row[idCol]||'').trim():'';
         var emp2=id2&&name?id2+' — '+name:(name||id2);
         if (!emp2) continue;
-        var from2=fromCol>=0?String(row[fromCol]||'').trim():'';
-        var to2=toCol>=0?String(row[toCol]||'').trim():'';
-        var desc2=descCol>=0?String(row[descCol]||'').trim():'';
-        bulkAddRow(emp2,desc2,from2,to2);
+        var r = _bulkBlankRow();
+        r.emp = emp2;
+        r.from = fromCol>=0?String(row[fromCol]||'').trim():'';
+        r.to = toCol>=0?String(row[toCol]||'').trim():'';
+        r.desc = descCol>=0?String(row[descCol]||'').trim():'';
+        if (typeCol>=0 && String(row[typeCol]||'').trim()) r.type = _bulkMatchType(row[typeCol]);
+        if (dateCol>=0) r.date = _bulkParseDate(row[dateCol]) || r.date;
+        window._bulkRows.push(r);
         added++;
       }
       input.value='';
-      if(typeof showToast==='function') showToast('Imported ' + added + ' employees');
+      // A sheet with its own activity-type column holding more than one type is a mixed batch.
+      var typesSeen = {};
+      window._bulkRows.forEach(function(r){ typesSeen[r.type] = true; });
+      if (typeCol >= 0 && Object.keys(typesSeen).length > 1) bulkSetMode('mixed');
+      else bulkRenderRows();
+      if(typeof showToast==='function') showToast('Imported ' + added + ' row' + (added!==1?'s':''));
     } catch(ex) {
       console.error(ex);
       if(typeof showToast==='function') showToast('Could not read file','#e67e00');
@@ -4671,31 +4777,51 @@ function bulkHandleFile(input) {
 }
 
 async function saveBulkLog() {
-  var type     = ((document.getElementById('bulk-log-type')||{}).value||'Other');
+  var modal = document.getElementById('bulk-log-modal');
+  var editId = (modal && modal._editId) || '';
+  var mode = window._bulkMode || 'same';
   var channelsObj = window._bulkChannels || {};
   var channels = ['email','viber','chat'].filter(function(c){ return channelsObj[c]; }).join(',');
-  var rows     = (window._bulkRows||[]).filter(function(r){ return r && r.emp && r.emp.trim(); });
+  var rows = (window._bulkRows||[]).filter(function(r){ return r && r.emp && r.emp.trim(); });
   var subGroup = document.getElementById('bulk-log-sub-group');
-  var subKey   = (subGroup && subGroup.style.display !== 'none') ? document.getElementById('bulk-log-sub').value : (window.currentWsClient || window._wsClient || '');
+  var subKey = (subGroup && subGroup.style.display !== 'none') ? document.getElementById('bulk-log-sub').value : (window.currentWsClient || window._wsClient || '');
 
   if (!rows.length) {
-    if(typeof showToast==='function') showToast('No employees with names entered','#e67e00');
+    if(typeof showToast==='function') showToast('Enter at least one employee name or reference','#e67e00');
     return;
   }
 
-  // Each row persists through the same buildAndInsertAdhocCard() path as the regular Log
-  // Task modal -- this used to build raw DOM nodes directly with no backing data at all,
-  // same gap the rest of Ad hoc Logs had.
-  for (var i = 0; i < rows.length; i++) {
-    var r = rows[i];
-    await buildAndInsertAdhocCard({
-      type: type, emp: r.emp.trim(), desc: (r.desc||'').trim(), before: r.from||'', after: r.to||'',
-      channels: channels, subKey: subKey, silent: true
-    });
+  if (mode === 'same') {
+    var type = (document.getElementById('bulk-log-type')||{}).value || 'Other';
+    var dateRequested = (document.getElementById('bulk-log-date')||{}).value || null;
+    var items = rows.map(function(r){ return { emp: r.emp.trim(), desc: (r.desc||'').trim(), before: (r.from||'').trim(), after: (r.to||'').trim() }; });
+    var opts = { type: type, dateRequested: dateRequested, channels: channels, subKey: subKey, silent: true, editId: editId };
+    if (items.length === 1 && !editId) {
+      // A single row is just a normal card -- no point wrapping it as a group.
+      opts.emp = items[0].emp; opts.desc = items[0].desc; opts.before = items[0].before; opts.after = items[0].after;
+    } else {
+      opts.items = items;
+      opts.emp = items.length + (type === 'Holiday Setup' ? ' holidays' : ' employees');
+      opts.desc = type + ' — logged in bulk';
+    }
+    var ok = await buildAndInsertAdhocCard(opts);
+    if (ok === false) return;
+    closeBulkLogModal();
+    if(typeof showToast==='function') showToast((editId ? 'Updated ' : 'Logged ') + items.length + ' ' + type + ' entr' + (items.length!==1?'ies':'y') + ' as one card');
+    return;
   }
 
+  // 'mixed' -- one card per row, each with its own type and request date.
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var okRow = await buildAndInsertAdhocCard({
+      type: r.type || 'Other', emp: r.emp.trim(), desc: (r.desc||'').trim(), before: r.from||'', after: r.to||'',
+      dateRequested: r.date || null, channels: channels, subKey: subKey, silent: true
+    });
+    if (okRow === false) return;
+  }
   closeBulkLogModal();
-  if(typeof showToast==='function') showToast('Logged '+rows.length+' employee'+(rows.length!==1?'s':'')+' for '+type);
+  if(typeof showToast==='function') showToast('Logged ' + rows.length + ' separate entr' + (rows.length!==1?'ies':'y'));
 }
 
 // Ad hoc logs, Leave Monitoring downloads, and any other report whose content spans an
@@ -4745,6 +4871,21 @@ function generateAdhocReport() {
     var descEl   = card.querySelector('.adhoc-detail');
     var changeVals = card.querySelectorAll('.change-val');
     var remarksEl = card.querySelector('.adhoc-remarks');
+
+    // Grouped bulk-log card: one report row per entry, not one summary row for the whole card.
+    var grouped = _adhocGet().find(function(e){ return e.id === card.dataset.logId; });
+    if (grouped && grouped.items && grouped.items.length) {
+      grouped.items.forEach(function(it) {
+        rows.push([
+          dateEl   ? dateEl.textContent.trim()   : '',
+          typePill ? typePill.textContent.trim() : '',
+          statusEl ? statusEl.textContent.trim() : '',
+          it.emp || '', it.desc || '', it.before || '', it.after || '',
+          grouped.remarks || ''
+        ]);
+      });
+      return;
+    }
 
     rows.push([
       dateEl   ? dateEl.textContent.trim()    : '',
@@ -8783,6 +8924,8 @@ async function toggleAdhocDone(id) {
 function editLog(id) {
   var entry = _adhocGet().find(function(e){ return e.id === id; });
   if (!entry) return;
+  // Grouped bulk-log cards are edited row-by-row in the Bulk log table, not the single-log form.
+  if (entry.items && entry.items.length) { openBulkLogModal(entry); return; }
 
   var typeGroup = document.getElementById('log-type-group');
   var typePresetLabel = document.getElementById('log-type-preset-label');
@@ -8998,11 +9141,16 @@ setInterval(recomputeAllDisputeTAT, 60000);
 // tracking a true catch-all request might need. Each field maps to where its value lands in
 // the underlying log entry: 'emp' -> name line, 'before'/'after' -> the changes block, and
 // anything else folds into the Description — still the same real Ad Hoc Log card underneath.
+// Sprout HR shift types, offered as a dropdown in Shift Management logs (and as suggestions in
+// Bulk log's Change from/to cells for Shift Management rows).
+var SHIFT_TYPES = ['Normal Shift', 'Flexible per Day', 'Flexible per Week', 'Exempted', 'Shift-Based', 'Single Login', 'Supervisor Shift'];
+
 var LOG_TAILORED_FIELDS = {
   'Shift Management': [
     { id: 'emp', label: 'Employee Name', placeholder: 'e.g. Santos, Maria', maps: 'emp' },
-    { id: 'current', label: 'Current Schedule/Shift', placeholder: 'e.g. Normal Shift, 8AM\u20135PM', maps: 'before' },
-    { id: 'new', label: 'New Schedule/Shift', placeholder: 'e.g. Flexi Per Day, 9AM\u20136PM', maps: 'after' },
+    { id: 'current', label: 'Current Shift Type', placeholder: 'Select current shift type\u2026', type: 'select', options: SHIFT_TYPES, maps: 'before' },
+    { id: 'new', label: 'New Shift Type', placeholder: 'Select new shift type\u2026', type: 'select', options: SHIFT_TYPES, maps: 'after' },
+    { id: 'schedule', label: 'Schedule details (optional)', placeholder: 'e.g. 8AM\u20135PM \u2192 9AM\u20136PM', maps: 'desc', descPrefix: 'Schedule' },
     { id: 'effective', label: 'Effective Date', placeholder: '', type: 'date', maps: 'desc', descPrefix: 'Effective' },
     { id: 'notes', label: 'Notes (optional)', placeholder: 'Any additional context', type: 'textarea', maps: 'desc' },
   ],
@@ -9038,6 +9186,9 @@ function adHocOpenTailored(type) {
     fieldsEl.innerHTML = (LOG_TAILORED_FIELDS[type] || []).map(function(f) {
       var input = f.type === 'textarea'
         ? '<textarea id="adhoc-t-' + f.id + '" class="task-input" rows="2" placeholder="' + f.placeholder + '" style="width:100%;"></textarea>'
+        : f.type === 'select'
+        ? '<select id="adhoc-t-' + f.id + '" class="task-input" style="width:100%;cursor:pointer;"><option value="">' + f.placeholder + '</option>'
+            + (f.options || []).map(function(o){ return '<option>' + o + '</option>'; }).join('') + '</select>'
         : '<input type="' + (f.type || 'text') + '" id="adhoc-t-' + f.id + '" class="task-input" placeholder="' + f.placeholder + '" style="width:100%;">';
       return '<div style="margin-bottom:10px;"><div class="field-label">' + f.label + '</div>' + input + '</div>';
     }).join('');
@@ -9205,7 +9356,8 @@ async function loadAdhocLogsFromSupabase() {
       dateRequested: row.date_requested || '', cutoffVal: row.cutoff_label || '',
       isDispute: !!row.is_dispute, remarks: row.remarks || '', fieldChanged: row.field_changed || '',
       effectiveDate: row.effective_date || '', channels: row.channels || '', status: row.status || 'pending',
-      profilePulled: !!row.profile_pulled, createdAt: row.created_at
+      profilePulled: !!row.profile_pulled, createdAt: row.created_at,
+      items: Array.isArray(row.items) ? row.items : []
     });
   });
 }
@@ -9231,6 +9383,16 @@ function _adhocCardHtml(entry) {
   var changesHtml = (entry.before || entry.after)
     ? '<div class="adhoc-changes"><div class="change-block"><div class="change-label">Before</div><div class="change-val">' + (entry.before||'—') + '</div></div><div style="color:#9898a6;align-self:center;font-size:18px;">&#x2192;</div><div class="change-block"><div class="change-label">After</div><div class="change-val" style="color:#32CE13;">' + (entry.after||'—') + '</div></div></div>'
     : '';
+  // Grouped bulk-log card: list every entry in a compact table instead of one Before/After block.
+  if (entry.items && entry.items.length) {
+    var tdS = 'padding:5px 8px;border-bottom:1px solid #EBEBEF;font-size:11px;vertical-align:top;';
+    changesHtml = '<div style="overflow-x:auto;margin:6px 0 8px;border:1px solid #EBEBEF;border-radius:10px;"><table class="adhoc-items" style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr style="background:#F4F4F8;"><th style="' + tdS + 'text-align:left;color:#9898a6;font-weight:600;">Employee / Reference</th><th style="' + tdS + 'text-align:left;color:#9898a6;font-weight:600;">Description</th><th style="' + tdS + 'text-align:left;color:#9898a6;font-weight:600;">Before</th><th style="' + tdS + 'text-align:left;color:#9898a6;font-weight:600;">After</th></tr></thead><tbody>'
+      + entry.items.map(function(it) {
+          return '<tr><td style="' + tdS + 'font-weight:600;color:#1a1a2e;">' + (it.emp||'') + '</td><td style="' + tdS + 'color:#6b6b80;">' + (it.desc||'—') + '</td><td style="' + tdS + 'color:#6b6b80;">' + (it.before||'—') + '</td><td style="' + tdS + 'color:#32CE13;font-weight:600;">' + (it.after||'—') + '</td></tr>';
+        }).join('')
+      + '</tbody></table></div>';
+  }
   var remarksHtml = entry.remarks ? '<div class="adhoc-detail adhoc-remarks" style="margin-top:-4px;"><strong>Remarks:</strong> ' + entry.remarks + '</div>' : '';
   var channelIcons = { email: 'ti-mail', viber: 'ti-message-circle', chat: 'ti-message' };
   var channelsHtml = (entry.channels || '').split(',').map(function(c){ return c.trim(); }).filter(Boolean).map(function(c) {
@@ -9279,6 +9441,15 @@ function renderAdhocLogs() {
 // Persists a new log or an edit (opts.editId) to Supabase, updates _adhocStore, and
 // re-renders -- shared by the full log-modal's saveLog() and the lean tailored-task modals so
 // every entry point produces the exact same tracked, persisted record.
+// A grouped bulk-log card needs the adhoc_logs.items column
+// (supabase/migrations/20260924200000_adhoc_logs_items.sql); say so plainly if it's missing.
+function _adhocSaveErrMsg(err) {
+  var m = (err && err.message) || '';
+  if (/items/i.test(m) && /column|schema/i.test(m)) return 'Could not save: the database needs the ad hoc "items" update before grouped bulk logs can be saved.';
+  return 'Could not save log: ' + m;
+}
+
+// Returns false when the save failed (callers like saveBulkLog stop instead of closing).
 async function buildAndInsertAdhocCard(opts) {
   var editId = opts.editId || '';
   var scope = (typeof _calScope === 'function') ? _calScope() : null;
@@ -9292,12 +9463,14 @@ async function buildAndInsertAdhocCard(opts) {
     remarks: opts.remarks || '', field_changed: opts.fieldChanged || '', effective_date: opts.effectiveDate || null,
     channels: opts.channels || ''
   };
+  // Only sent when present, so single logs keep working even before the items column exists.
+  if (opts.items && opts.items.length) row.items = opts.items;
   var localEntry = {
     subKey: row.sub_short_key, type: row.type, emp: row.employee_name, desc: row.description,
     before: row.before_value, after: row.after_value, dateRequested: row.date_requested || '',
     cutoffVal: row.cutoff_label, isDispute: row.is_dispute, remarks: row.remarks,
     fieldChanged: row.field_changed, effectiveDate: row.effective_date || '', channels: row.channels,
-    status: 'pending', profilePulled: false
+    status: 'pending', profilePulled: false, items: opts.items || []
   };
 
   var arr = _adhocGet();
@@ -9305,12 +9478,12 @@ async function buildAndInsertAdhocCard(opts) {
     var idx = arr.findIndex(function(e){ return e.id === editId; });
     if (idx >= 0) { localEntry.status = arr[idx].status; localEntry.profilePulled = arr[idx].profilePulled; localEntry.createdAt = arr[idx].createdAt; }
     var updRes = await supabaseClient.from('adhoc_logs').update(row).eq('id', editId);
-    if (updRes.error) { if (typeof showToast === 'function') showToast('Could not save log: ' + updRes.error.message, '#c0392b'); return; }
+    if (updRes.error) { if (typeof showToast === 'function') showToast(_adhocSaveErrMsg(updRes.error), '#c0392b'); return false; }
     localEntry.id = editId;
     if (idx >= 0) arr[idx] = localEntry; else arr.push(localEntry);
   } else {
     var insRes = await supabaseClient.from('adhoc_logs').insert(row).select().single();
-    if (insRes.error) { if (typeof showToast === 'function') showToast('Could not save log: ' + insRes.error.message, '#c0392b'); return; }
+    if (insRes.error) { if (typeof showToast === 'function') showToast(_adhocSaveErrMsg(insRes.error), '#c0392b'); return false; }
     localEntry.id = insRes.data.id;
     localEntry.createdAt = insRes.data.created_at;
     arr.push(localEntry);
@@ -18215,7 +18388,9 @@ function profilePullFromAdhocLogs() {
 
   relevant.forEach(function(e) {
     if (window.profileData._pulledLogIds.indexOf(e.id) >= 0) return; // already in the tables
-    if (e.type !== 'Profile Update') return; // only pull profile-update-tagged logs
+    // Profile Update logs, plus Salary Increase logs (e.g. from Bulk log), which always route to
+    // the Salary Increase section below.
+    if (e.type !== 'Profile Update' && e.type !== 'Salary Increase') return;
 
     var requestedDate = e.dateRequested
       ? new Date(e.dateRequested + 'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
@@ -18245,10 +18420,13 @@ function profilePullFromAdhocLogs() {
     }
     var effectivity = matchDate ? matchDate.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : requestedDate;
 
-    var fullName = (e.emp || '').split('—')[0].trim();
-    var remarks = e.desc || '';
-    var before = e.before || '';
-    var after = e.after || '';
+    // A grouped bulk-log card holds several entries in e.items -- pull each as its own row.
+    var subEntries = (e.items && e.items.length) ? e.items : [{ emp: e.emp, desc: e.desc, before: e.before, after: e.after }];
+    subEntries.forEach(function(it) {
+    var fullName = (it.emp || '').split('—')[0].trim();
+    var remarks = it.desc || '';
+    var before = it.before || '';
+    var after = it.after || '';
 
     // Field Changed (set from the tailored modal) is the reliable signal for routing when
     // present -- e.g. "Employment Status" changing to "Resigned" was previously falling
@@ -18261,7 +18439,7 @@ function profilePullFromAdhocLogs() {
     // catch plain integers (e.g. "5000" -> "100000") when Field Changed itself says salary/
     // rate/pay, since the old regex required a currency symbol or decimal point and silently
     // misrouted a plain-number salary change into Change in Personal Info instead.
-    var looksLikeSalary = /salary|rate|\bpay\b|compensation/i.test(fieldChanged)
+    var looksLikeSalary = e.type === 'Salary Increase' || /salary|rate|\bpay\b|compensation/i.test(fieldChanged)
       || /php|₱|\d[\d,]*\.\d{2}/i.test(before) || /php|₱|\d[\d,]*\.\d{2}/i.test(after);
 
     if (isResignation) {
@@ -18269,7 +18447,7 @@ function profilePullFromAdhocLogs() {
         empNo: '', fullName: fullName, lastDay: effectivity, remarks: remarks
       });
       pulledResigned++;
-    } else if (looksLikeSalary && (before || after)) {
+    } else if (looksLikeSalary && (before || after || e.type === 'Salary Increase')) {
       window.profileData.salaryIncrease.push({
         empNo: '', fullName: fullName, oldRate: before, newRate: after,
         effectivity: effectivity, type: 'Salary Increase', remarks: remarks
@@ -18282,6 +18460,7 @@ function profilePullFromAdhocLogs() {
       });
       pulledChanges++;
     }
+    }); // subEntries
     e.profilePulled = true;
     window.profileData._pulledLogIds.push(e.id);
     justPulledIds.push(e.id);
@@ -23003,29 +23182,35 @@ async function ildConfirmImport() {
 
 <!-- Bulk Log Modal -->
 <div id="bulk-log-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:2000;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto;">
-  <div style="background:#fff;border-radius:16px;width:100%;max-width:980px;box-shadow:0 24px 64px rgba(0,0,0,0.25);overflow:hidden;">
+  <div style="background:#fff;border-radius:16px;width:100%;max-width:1100px;box-shadow:0 24px 64px rgba(0,0,0,0.25);overflow:hidden;">
     <div style="padding:14px 20px 12px;border-bottom:1px solid #EBEBEF;display:flex;align-items:center;justify-content:space-between;background:#F4F4F8;position:sticky;top:0;z-index:1;">
       <div>
-        <div style="font-size:15px;font-weight:600;color:#1a1a2e;">Bulk log</div>
-        <div style="font-size:12px;color:#9898a6;margin-top:1px;">For <b>Shift Management</b>, <b>Payroll ID Sync</b>, and <b>Salary Increase</b> — each employee gets their own row. For Holiday Setup and other single-entry tasks, use <b>Log task</b> instead.</div>
+        <div id="bulk-log-title" style="font-size:15px;font-weight:600;color:#1a1a2e;">Bulk log</div>
+        <div style="font-size:12px;color:#9898a6;margin-top:1px;">Log many requests at once, either all the same activity (saved as one card) or a mix of activities (one card each).</div>
       </div>
       <div onclick="closeBulkLogModal()" style="width:30px;height:30px;border-radius:12px;border:1px solid #EBEBEF;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9898a6;font-size:18px;">&times;</div>
     </div>
     <div style="padding:14px 20px;">
+      <div id="bulk-mode-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+        <button type="button" id="bulk-mode-same" onclick="bulkSetMode('same')" style="padding:7px 14px;border:1px solid #EBEBEF;border-radius:20px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-stack-2" style="font-size:12px;"></i> Same activity for all rows</button>
+        <button type="button" id="bulk-mode-mixed" onclick="bulkSetMode('mixed')" style="padding:7px 14px;border:1px solid #EBEBEF;border-radius:20px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-list-details" style="font-size:12px;"></i> Different activity per row</button>
+      </div>
+      <div id="bulk-mode-hint" style="font-size:11px;color:#9898a6;margin-bottom:12px;"></div>
       <div id="bulk-log-sub-group" style="display:none;margin-bottom:10px;">
         <label class="task-field-label">Subcompany (applies to all rows)</label>
         <select id="bulk-log-sub" class="task-input" style="width:100%;"></select>
       </div>
-      <!-- Shared settings -->
-      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px;margin-bottom:12px;align-items:end;">
+      <div id="bulk-shared-type-date" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
         <div>
-          <label class="task-field-label">Activity type (applies to all)</label>
-          <select id="bulk-log-type" class="task-input" style="font-family:Rubik,sans-serif;" onchange="bulkApplyType()">
-            <option>Shift Management</option>
-            <option>Payroll ID Sync</option>
-            <option>Salary Increase</option>
-          </select>
+          <label class="task-field-label">Activity type (applies to all rows)</label>
+          <select id="bulk-log-type" class="task-input" style="font-family:Rubik,sans-serif;" onchange="bulkApplyType()"></select>
         </div>
+        <div>
+          <label class="task-field-label">Date request was made</label>
+          <input type="date" id="bulk-log-date" class="task-input">
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:12px;align-items:end;justify-content:space-between;flex-wrap:wrap;">
         <div>
           <label class="task-field-label">Channels (applies to all)</label>
           <div style="display:flex;gap:6px;" id="bulk-channel-row">
@@ -23036,31 +23221,19 @@ async function ildConfirmImport() {
         </div>
         <div style="display:flex;gap:6px;" class="generic-dz" id="bulk-drop-zone" ondragover="return dzDragOver(event)" ondragleave="dzDragLeave(event)" ondrop="dzDrop(event,'bulk-file-input')">
           <button onclick="bulkAddRow()" style="padding:7px 12px;background:#32CE13;color:#fff;border:none;border-radius:7px;font-size:12px;cursor:pointer;font-family:Rubik,sans-serif;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;"><i class="ti ti-plus" style="font-size:12px;"></i> Add row</button>
-          <button onclick="document.getElementById('bulk-file-input').click()" style="padding:7px 12px;background:#F4F4F8;color:#1a1a2e;border:1px solid #EBEBEF;border-radius:7px;font-size:12px;cursor:pointer;font-family:Rubik,sans-serif;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;"><i class="ti ti-upload" style="font-size:12px;color:#32CE13;"></i> Import names (or drag file here)</button>
+          <button onclick="document.getElementById('bulk-file-input').click()" style="padding:7px 12px;background:#F4F4F8;color:#1a1a2e;border:1px solid #EBEBEF;border-radius:7px;font-size:12px;cursor:pointer;font-family:Rubik,sans-serif;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;"><i class="ti ti-upload" style="font-size:12px;color:#32CE13;"></i> Import file (or drag it here)</button>
           <input type="file" id="bulk-file-input" accept=".xlsx,.xls,.csv" style="display:none;" onchange="bulkHandleFile(this)">
         </div>
       </div>
-      <!-- Spreadsheet table -->
       <div style="overflow-x:auto;border:1px solid #EBEBEF;border-radius:14px;max-height:420px;overflow-y:auto;">
         <table style="width:100%;border-collapse:collapse;font-size:12px;" id="bulk-log-table">
-          <thead style="position:sticky;top:0;z-index:1;">
-            <tr style="background:#2E75B6;">
-              <th style="padding:8px 10px;text-align:left;color:#fff;font-weight:600;border:1px solid #1a5fa8;white-space:nowrap;min-width:40px;">#</th>
-              <th style="padding:8px 10px;text-align:left;color:#fff;font-weight:600;border:1px solid #1a5fa8;min-width:180px;">Employee Name / ID</th>
-              <th style="padding:8px 10px;text-align:left;color:#fff;font-weight:600;border:1px solid #1a5fa8;min-width:200px;">Description</th>
-              <th style="padding:8px 10px;text-align:left;color:#fff;font-weight:600;border:1px solid #1a5fa8;min-width:140px;">Change From</th>
-              <th style="padding:8px 10px;text-align:left;color:#fff;font-weight:600;border:1px solid #1a5fa8;min-width:140px;">Change To</th>
-              <th style="padding:8px 10px;border:1px solid #1a5fa8;width:36px;"></th>
-            </tr>
-          </thead>
-          <tbody id="bulk-log-tbody">
-            <!-- rows added by JS -->
-          </tbody>
+          <thead id="bulk-log-thead" style="position:sticky;top:0;z-index:1;"></thead>
+          <tbody id="bulk-log-tbody"></tbody>
         </table>
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;">
-        <span id="bulk-row-count" style="font-size:11px;color:#9898a6;">0 employees</span>
-        <span style="font-size:11px;color:#9898a6;">Click any cell to edit</span>
+        <span id="bulk-row-count" style="font-size:11px;color:#9898a6;">0 rows</span>
+        <span style="font-size:11px;color:#9898a6;">Rows without an employee name or reference are skipped</span>
       </div>
     </div>
     <div style="padding:12px 20px 16px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid #EBEBEF;">
