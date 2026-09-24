@@ -12887,7 +12887,18 @@ function runVarianceBatch() {
   function next() {
     if (idx >= varBatchGroups.length) {
       if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-table-plus"></i> Process all'; }
-      renderVarBatchList();
+      // Auto-expand the first successfully processed subcompany. varActiveGroupIdx was left
+      // pointing at the LAST group processed (set per-group above) without its results ever
+      // being rendered, so the first row click hit varToggleGroupInline's "collapse the open
+      // one" branch and it took a second click to actually expand anything.
+      var firstDone = -1;
+      varBatchGroups.some(function(bg, bi) { if (bg.status === 'done') { firstDone = bi; return true; } return false; });
+      if (firstDone >= 0) {
+        varSwitchGroup(firstDone);
+      } else {
+        varActiveGroupIdx = -1;
+        renderVarBatchList();
+      }
       if (typeof showToast === 'function') showToast('Processed ' + varBatchGroups.length + ' subcompan' + (varBatchGroups.length===1?'y':'ies'));
       return;
     }
