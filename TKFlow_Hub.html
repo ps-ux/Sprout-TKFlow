@@ -17277,6 +17277,35 @@ function nhFinalizeConfirmed() {
     if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(lmKey, nhYear);
   }
 
+  // Add every finalized new hire to the saved employee roster (store.roster, the same list the
+  // Employee List Report fills) for ALL clients -- not just Leave Monitoring ones -- so their
+  // names are suggested in Ad hoc Logs right away (see adhocEmployeeSuggestions). Matched by
+  // Employee No. so a later Employee List upload updates the same entry instead of duplicating it.
+  if (typeof lmGetStore === 'function') {
+    var rosterYear = new Date().getFullYear();
+    var rosterKey = (typeof lmStorageKeyFor === 'function') ? lmStorageKeyFor(ck) : ck;
+    var rStore = lmGetStore(rosterKey, rosterYear);
+    if (!rStore.roster) rStore.roster = [];
+    var rosterAdded = 0;
+    (window.nhRows || []).forEach(function(nh) {
+      var full = String(nh.name || '').trim();
+      if (!full) return;
+      // "LAST, GIVEN MI" -> last + first; a name with no comma is kept whole.
+      var comma = full.indexOf(',');
+      var lastName = comma >= 0 ? full.slice(0, comma).trim() : full;
+      var firstName = comma >= 0 ? full.slice(comma + 1).trim() : '';
+      var empId = String(nh.empNo || '').trim();
+      var entry = { empId: empId, lastName: lastName, firstName: firstName };
+      var idx = rStore.roster.findIndex(function(e) {
+        return empId ? e.empId === empId
+          : (!e.empId && (e.lastName + '|' + e.firstName).toLowerCase() === (lastName + '|' + firstName).toLowerCase());
+      });
+      if (idx >= 0) rStore.roster[idx] = entry; else rStore.roster.push(entry);
+      rosterAdded++;
+    });
+    if (rosterAdded && typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(rosterKey, rosterYear);
+  }
+
   if (typeof showToast === 'function') showToast('New hires finalized — included in Payroll Instructions');
   // Cache updated body
   setTimeout(function() {
