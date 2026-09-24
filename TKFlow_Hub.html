@@ -12692,7 +12692,9 @@ function runVariance(opts) {
         var pr = (payreg && payreg.empMap[emp.id]) || {grossDay:0, basicHr:0};
         var amtRow = [emp.id, emp.name];
         for (var ci = 2; ci < 35; ci++) {
-          var d = Math.abs(emp.row[ci]);
+          // Signed, not Math.abs -- Amt must carry the same sign as the Attendance diff
+          // (e.g. -1 Days Absent -> -1 x Gross/Day), so deductions read as negative amounts.
+          var d = emp.row[ci];
           var val = 0;
           if (ci === 2) val = rd(d * MULTS[ci] * pr.grossDay);
           else if (ci === 3) val = rd(d * MULTS[ci] * (pr.basicHr/60));
