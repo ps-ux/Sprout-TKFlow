@@ -1705,6 +1705,19 @@ function signInWithGoogle() {
             </div>
             <div id="viewer-content" style="height:500px;overflow-y:auto;padding:20px;background:var(--bg-card);font-size:13px;line-height:1.8;color:var(--text-primary);white-space:pre-wrap;"></div>
           </div>
+          <!-- Employee list: feeds Ad hoc Logs' employee-name suggestions for ANY client (with or
+               without Leave Monitoring). See rosterHandleUpload / adhocEmployeeSuggestions. -->
+          <div class="generic-dz" id="emplist-drop-zone" ondragover="return dzDragOver(event)" ondragleave="dzDragLeave(event)" ondrop="dzDrop(event,'emplist-file-input')" style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border);">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+              <div>
+                <div style="font-size:13px;font-weight:600;color:var(--text-primary);">Employee list</div>
+                <div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">Employee names suggested in Ad hoc Logs. Also refreshed automatically by each Variance Analysis run and by finalized New Hires.</div>
+              </div>
+              <button onclick="document.getElementById('emplist-file-input').click()" style="padding:8px 16px;background:#fff;color:#1a1a2e;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;"><i class="ti ti-users" style="font-size:13px;color:#32CE13;"></i> Upload Employee List</button>
+              <input type="file" id="emplist-file-input" accept=".xlsx,.xls,.csv" style="display:none;" onchange="rosterHandleUpload(this)">
+            </div>
+            <div id="emplist-status" style="font-size:11px;color:#9898a6;margin-top:8px;"></div>
+          </div>
               </div>
               <div style="min-width:0;overflow:hidden;">
           <!-- Header -->
@@ -8352,6 +8365,7 @@ function profileAccordionSection(sectionKey, title, subtitle, bodyHtml, headerEx
 }
 
 function renderClientProfile(key) {
+  if (typeof renderRosterStatus === 'function') setTimeout(renderRosterStatus, 0);
   var el = document.getElementById('ws-profile-content');
   if (!el) return;
   var grpKey = window.currentWsGroup || null;
@@ -9151,6 +9165,103 @@ setInterval(recomputeAllDisputeTAT, 60000);
 // Monitoring (store.roster, saved on "Process & Add to Monitoring"), plus anyone already in the
 // monitoring rows (covers data processed before the roster was saved). Scoped to the open
 // workspace (group-shared roster for multi-sub groups), this year and next.
+// Where the employee-name list lives: the same year bucket as Leave Monitoring (group-shared
+// for multi-sub groups), for every client whether or not Leave Monitoring is on. Sources:
+//   roster          -- Employee List Report (Leave Monitoring) or Client Profile upload; REPLACED on each upload
+//   rosterBySub[sk] -- names from that subcompany's latest Variance Analysis run; replaced per sub
+//   rosterNewHires  -- finalized New Hires since the last full list upload
+// Each year starts fresh (suggestions read only this year and next).
+function _rosterSplitName(full) {
+  full = String(full || '').replace(/\s+/g, ' ').trim();
+  var comma = full.indexOf(',');
+  return comma >= 0 ? { lastName: full.slice(0, comma).trim(), firstName: full.slice(comma + 1).trim() } : { lastName: full, firstName: '' };
+}
+
+function _rosterBucket(key) {
+  var year = new Date().getFullYear();
+  return { key: key, year: year, bucket: lmGetStore(key, year) };
+}
+
+function _rosterPersist(key, year) {
+  if (typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(key, year);
+}
+
+// Full list upload (Leave Monitoring's Employee List Report or Client Profile's Upload Employee
+// List): replaces the main list and clears new-hire additions, which the fresh list supersedes.
+function rosterReplaceMain(key, list, sourceLabel, year) {
+  year = year || new Date().getFullYear();
+  var b = lmGetStore(key, year);
+  b.roster = list.slice();
+  b.rosterNewHires = [];
+  b.rosterUpdatedAt = new Date().toISOString();
+  b.rosterSource = sourceLabel || '';
+  _rosterPersist(key, year);
+}
+
+// One subcompany's names from a Variance Analysis run (group rosters are shared, so this only
+// replaces that sub's own slice, never another sub's names).
+function rosterSetForSub(subKey, list) {
+  if (!subKey || !list.length) return;
+  var rb = _rosterBucket((typeof lmStorageKeyFor === 'function') ? lmStorageKeyFor(subKey) : subKey);
+  if (!rb.bucket.rosterBySub) rb.bucket.rosterBySub = {};
+  rb.bucket.rosterBySub[subKey] = list;
+  _rosterPersist(rb.key, rb.year);
+}
+
+function rosterHandleUpload(input) {
+  var file = input.files && input.files[0]; if (!file) return;
+  if (typeof XLSX === 'undefined') { if (typeof showToast === 'function') showToast('XLSX not loaded yet', '#e67e00'); return; }
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', raw: false });
+      var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' });
+      var hdr = -1, cId = -1, cLast = -1, cFirst = -1, cName = -1;
+      for (var i = 0; i < Math.min(rows.length, 10) && hdr < 0; i++) {
+        (rows[i] || []).forEach(function(h, ci) {
+          var t = String(h || '').toLowerCase().trim();
+          if (cId < 0 && /^(employee\s*(id|no\.?|number)|emp\s*(id|no\.?)|id)$/.test(t)) cId = ci;
+          if (cLast < 0 && /last\s*name/.test(t)) cLast = ci;
+          if (cFirst < 0 && /first\s*name|given\s*name/.test(t)) cFirst = ci;
+          if (cName < 0 && /^(employee\s*name|full\s*name|name)$/.test(t)) cName = ci;
+        });
+        if (cLast >= 0 || cName >= 0) hdr = i; else { cId = cLast = cFirst = cName = -1; }
+      }
+      if (hdr < 0) { if (typeof showToast === 'function') showToast('Could not find a Name or Last Name column in that file', '#e67e00'); input.value = ''; return; }
+      var list = [];
+      for (var r = hdr + 1; r < rows.length; r++) {
+        var row = rows[r] || [];
+        var nm = cLast >= 0
+          ? { lastName: String(row[cLast] || '').trim(), firstName: cFirst >= 0 ? String(row[cFirst] || '').trim() : '' }
+          : _rosterSplitName(row[cName]);
+        if (!nm.lastName && !nm.firstName) continue;
+        list.push({ empId: cId >= 0 ? String(row[cId] || '').trim() : '', lastName: nm.lastName, firstName: nm.firstName });
+      }
+      rosterReplaceMain(lmCurrentClientKey(), list, 'Employee list upload');
+      input.value = '';
+      renderRosterStatus();
+      if (typeof showToast === 'function') showToast('Employee list saved \u2014 ' + list.length + ' employee(s)');
+    } catch (ex) {
+      console.error(ex);
+      if (typeof showToast === 'function') showToast('Could not read that file', '#e67e00');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function renderRosterStatus() {
+  var el = document.getElementById('emplist-status');
+  if (!el) return;
+  var n = adhocEmployeeSuggestions().length;
+  var key = lmCurrentClientKey();
+  var b = (window.leaveMonitoringStore && window.leaveMonitoringStore[key] && window.leaveMonitoringStore[key][new Date().getFullYear()]) || {};
+  var when = b.rosterUpdatedAt ? new Date(b.rosterUpdatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  el.innerHTML = n
+    ? '<i class="ti ti-circle-check" style="color:#32CE13;font-size:12px;vertical-align:-1px;"></i> ' + n + ' employee name(s) available'
+      + (when ? ' \u00b7 full list last uploaded ' + when + (b.rosterSource ? ' (' + b.rosterSource + ')' : '') : ' \u00b7 no full list uploaded yet this year')
+    : 'No employee names yet this year. Upload a list here, or run Variance Analysis / finalize New Hires.';
+}
+
 function adhocEmployeeSuggestions() {
   var key = (typeof lmCurrentClientKey === 'function') ? lmCurrentClientKey() : '';
   var byYear = (key && window.leaveMonitoringStore && window.leaveMonitoringStore[key]) || {};
@@ -9158,11 +9269,13 @@ function adhocEmployeeSuggestions() {
   var seen = {}, out = [];
   [thisYear, thisYear + 1].forEach(function(y) {
     var b = byYear[y]; if (!b) return;
-    ['roster', 'oneYear', 'fiveYear', 'sickOneYear', 'sickFiveYear'].forEach(function(cat) {
-      (b[cat] || []).forEach(function(r) {
+    var subLists = b.rosterBySub ? Object.keys(b.rosterBySub).map(function(sk){ return b.rosterBySub[sk] || []; }) : [];
+    var sources = [b.roster, b.rosterNewHires].concat(subLists).concat([b.oneYear, b.fiveYear, b.sickOneYear, b.sickFiveYear]);
+    sources.forEach(function(list) {
+      (list || []).forEach(function(r) {
         var name = [String(r.lastName || '').trim(), String(r.firstName || '').trim()].filter(Boolean).join(', ');
         if (!name) return;
-        var k = (r.empId || '') + '|' + name.toLowerCase();
+        var k = r.empId ? 'id:' + r.empId : 'nm:' + name.toLowerCase();
         if (seen[k]) return;
         seen[k] = true;
         out.push({ name: name, empId: r.empId || '' });
@@ -12997,6 +13110,25 @@ function runVariance(opts) {
 
       var orig   = readAttSheet(res.origWb);
       var aco    = readAttSheet(res.acoWb);
+      // Every employee in the Orig/ACO templates (ID + Name) refreshes this subcompany's slice of
+      // the employee-name list used by Ad hoc Logs' suggestions.
+      try {
+        var _rsSub = (typeof varActiveGroupIdx !== 'undefined' && varActiveGroupIdx >= 0 && varBatchGroups[varActiveGroupIdx] && varBatchGroups[varActiveGroupIdx].clientKey)
+          || window.currentWsClient || window._wsClient || '';
+        var _rsSeen = {}, _rsList = [];
+        [aco, orig].forEach(function(sheet) {
+          if (!sheet || !sheet.empMap) return;
+          Object.keys(sheet.empMap).forEach(function(id) {
+            var rid = String(id).trim();
+            if (!rid || _rsSeen[rid]) return;
+            var nm = _rosterSplitName((sheet.empMap[id] || [])[1]);
+            if (!nm.lastName && !nm.firstName) return;
+            _rsSeen[rid] = true;
+            _rsList.push({ empId: rid, lastName: nm.lastName, firstName: nm.firstName });
+          });
+        });
+        if (typeof rosterSetForSub === 'function') rosterSetForSub(_rsSub, _rsList);
+      } catch (rsErr) { console.warn('Could not refresh employee names from Variance files', rsErr); }
       var payreg = readPayReg(res.payregWb);
 
       if (!orig || !aco) { if (typeof showToast === 'function') showToast('Could not read files for ' + payout, '#e67e00'); return; }
@@ -17285,7 +17417,7 @@ function nhFinalizeConfirmed() {
     var rosterYear = new Date().getFullYear();
     var rosterKey = (typeof lmStorageKeyFor === 'function') ? lmStorageKeyFor(ck) : ck;
     var rStore = lmGetStore(rosterKey, rosterYear);
-    if (!rStore.roster) rStore.roster = [];
+    if (!rStore.rosterNewHires) rStore.rosterNewHires = [];
     var rosterAdded = 0;
     (window.nhRows || []).forEach(function(nh) {
       var full = String(nh.name || '').trim();
@@ -17296,11 +17428,11 @@ function nhFinalizeConfirmed() {
       var firstName = comma >= 0 ? full.slice(comma + 1).trim() : '';
       var empId = String(nh.empNo || '').trim();
       var entry = { empId: empId, lastName: lastName, firstName: firstName };
-      var idx = rStore.roster.findIndex(function(e) {
+      var idx = rStore.rosterNewHires.findIndex(function(e) {
         return empId ? e.empId === empId
           : (!e.empId && (e.lastName + '|' + e.firstName).toLowerCase() === (lastName + '|' + firstName).toLowerCase());
       });
-      if (idx >= 0) rStore.roster[idx] = entry; else rStore.roster.push(entry);
+      if (idx >= 0) rStore.rosterNewHires[idx] = entry; else rStore.rosterNewHires.push(entry);
       rosterAdded++;
     });
     if (rosterAdded && typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(rosterKey, rosterYear);
@@ -17961,12 +18093,12 @@ function runLeaveMonitoring() {
 // different year's row now that buckets are year-scoped.
 function lmMergeIntoStore(ck, year, computed) {
   var store = lmGetStore(ck, year);
+  // A new Employee List Report replaces the name list (resigned employees drop off).
   if (computed.roster && computed.roster.length) {
-    if (!store.roster) store.roster = [];
-    computed.roster.forEach(function(r) {
-      var i = store.roster.findIndex(function(e){ return e.empId === r.empId; });
-      if (i >= 0) store.roster[i] = r; else store.roster.push(r);
-    });
+    store.roster = computed.roster.slice();
+    store.rosterNewHires = [];
+    store.rosterUpdatedAt = new Date().toISOString();
+    store.rosterSource = 'Leave Monitoring';
   }
   computed.oneYearTransfers.forEach(function(r) {
     var existingIdx = store.oneYear.findIndex(function(e){ return e.empId === r.empId; });
