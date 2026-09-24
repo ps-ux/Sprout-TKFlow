@@ -9187,6 +9187,28 @@ function ensureAdhocEmpDatalist() {
 var SHIFT_TYPES = ['Exempted', 'Flexible per Day', 'Flexible per Week', 'Normal Shift', 'Shift-Based', 'Single Login', 'Supervisor Shift']; // alphabetical
 // Common Profile Update fields, suggested in "Field Changed" (free typing still allowed).
 var PROFILE_FIELDS = ['Department', 'Employment Status', 'Immediate Supervisor', 'Job Position', 'Salary']; // alphabetical
+// Suggested Before/After values when Field Changed is "Employment Status" (free typing still allowed).
+var EMPLOYMENT_STATUSES = ['Maternity', 'Paternity', 'Probationary', 'Regular', 'Resigned', 'Sabbatical', 'Terminated']; // alphabetical
+
+// Profile Update form: point Before/After at the employment-status suggestions only while
+// Field Changed is "Employment Status"; any other field leaves them as plain text boxes.
+function _adHocSyncStatusSuggestions() {
+  var field = document.getElementById('adhoc-t-field');
+  if (!field) return;
+  var dl = document.getElementById('adhoc-status-list');
+  if (!dl) {
+    dl = document.createElement('datalist'); dl.id = 'adhoc-status-list';
+    dl.innerHTML = EMPLOYMENT_STATUSES.map(function(v){ return '<option value="' + v + '">'; }).join('');
+    document.body.appendChild(dl);
+  }
+  var isStatus = /^employment status$/i.test(field.value.trim());
+  ['adhoc-t-before', 'adhoc-t-after'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    if (isStatus) { el.setAttribute('list', 'adhoc-status-list'); el.setAttribute('autocomplete', 'off'); el.placeholder = 'Pick a status or type your own'; }
+    else { el.removeAttribute('list'); el.placeholder = id === 'adhoc-t-before' ? 'e.g. PHP 28,000' : 'e.g. PHP 32,000'; }
+  });
+}
 
 var LOG_TAILORED_FIELDS = {
   'Shift Management': [
@@ -9245,6 +9267,8 @@ function adHocOpenTailored(type, entry) {
       return '<div style="margin-bottom:10px;"><div class="field-label">' + f.label + '</div>' + input + '</div>';
     }).join('');
   }
+  var fieldInput = document.getElementById('adhoc-t-field');
+  if (fieldInput) { fieldInput.addEventListener('input', _adHocSyncStatusSuggestions); fieldInput.addEventListener('change', _adHocSyncStatusSuggestions); _adHocSyncStatusSuggestions(); }
   var dateEl = document.getElementById('adhoc-tailored-date');
   if (dateEl) {
     var now = new Date();
@@ -9316,6 +9340,7 @@ function _adHocPrefillTailored(type, entry) {
   var subGroup = document.getElementById('adhoc-tailored-sub-group');
   var subSelect = document.getElementById('adhoc-tailored-sub');
   if (subGroup && subGroup.style.display !== 'none' && subSelect) subSelect.value = entry.subKey || '';
+  _adHocSyncStatusSuggestions();
 }
 
 function adHocCloseTailoredModal() {
