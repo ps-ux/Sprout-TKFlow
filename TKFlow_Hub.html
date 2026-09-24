@@ -8926,6 +8926,9 @@ function editLog(id) {
   if (!entry) return;
   // Grouped bulk-log cards are edited row-by-row in the Bulk log table, not the single-log form.
   if (entry.items && entry.items.length) { openBulkLogModal(entry); return; }
+  // Logged through a tailored form (Shift Management, Holiday Setup, Profile Update, Payroll ID
+  // Sync) -> edit in that same form so the fields match what was originally filled in.
+  if (LOG_TAILORED_FIELDS[entry.type]) { adHocOpenTailored(entry.type, entry); return; }
 
   var typeGroup = document.getElementById('log-type-group');
   var typePresetLabel = document.getElementById('log-type-preset-label');
@@ -9180,9 +9183,11 @@ var LOG_TAILORED_FIELDS = {
   ],
 };
 
-function adHocOpenTailored(type) {
+// entry (optional): an existing log to edit -- reopens the SAME tailored form it was logged
+// with, prefilled, instead of the generic log form (which showed different fields).
+function adHocOpenTailored(type, entry) {
   var titleEl = document.getElementById('adhoc-tailored-title');
-  if (titleEl) titleEl.textContent = type + ' \u2014 Log Request';
+  if (titleEl) titleEl.textContent = type + (entry ? ' \u2014 Edit Log' : ' \u2014 Log Request');
   var fieldsEl = document.getElementById('adhoc-tailored-fields');
   if (fieldsEl) {
     fieldsEl.innerHTML = (LOG_TAILORED_FIELDS[type] || []).map(function(f) {
@@ -9226,7 +9231,50 @@ function adHocOpenTailored(type) {
 
   window._adHocTailoredType = type;
   var modal = document.getElementById('adhoc-tailored-modal');
-  if (modal) modal.style.display = 'flex';
+  if (modal) { modal.style.display = 'flex'; modal._editId = entry ? entry.id : ''; }
+  if (entry) _adHocPrefillTailored(type, entry);
+}
+
+// Reverses adHocSaveTailored's mapping: emp/before/after straight across, and each
+// description-mapped field recovered from its "Prefix: value" part of the joined description.
+function _adHocPrefillTailored(type, entry) {
+  var fields = LOG_TAILORED_FIELDS[type] || [];
+  var parts = String(entry.desc || '').split(' \u2014 ').map(function(p){ return p.trim(); }).filter(Boolean);
+  var used = {};
+  function takePrefixed(prefix) {
+    for (var i = 0; i < parts.length; i++) {
+      if (!used[i] && parts[i].indexOf(prefix + ': ') === 0) { used[i] = true; return parts[i].slice(prefix.length + 2); }
+    }
+    return '';
+  }
+  var values = {};
+  fields.forEach(function(f) {
+    if (f.maps === 'emp') values[f.id] = entry.emp || '';
+    else if (f.maps === 'before') values[f.id] = entry.before || '';
+    else if (f.maps === 'after') values[f.id] = entry.after || '';
+    else if (f.maps === 'desc' && f.descPrefix) values[f.id] = takePrefixed(f.descPrefix);
+  });
+  if (entry.fieldChanged && values.field !== undefined) values.field = entry.fieldChanged;
+  if (entry.effectiveDate && values.effective !== undefined) values.effective = entry.effectiveDate;
+  // Whatever description text wasn't claimed by a prefixed field goes to the unprefixed one (Notes).
+  var leftover = parts.filter(function(_, i){ return !used[i]; }).join(' \u2014 ');
+  fields.forEach(function(f) { if (f.maps === 'desc' && !f.descPrefix) values[f.id] = leftover; });
+  fields.forEach(function(f) {
+    var el = document.getElementById('adhoc-t-' + f.id);
+    if (!el) return;
+    var v = values[f.id] || '';
+    // A log saved before a field became a dropdown may hold free text (e.g. "Normal Shift,
+    // 8AM-5PM") -- keep it selectable instead of silently dropping it.
+    if (el.tagName === 'SELECT' && v && !Array.prototype.some.call(el.options, function(o){ return o.value === v; })) {
+      var opt = document.createElement('option'); opt.value = v; opt.textContent = v; el.appendChild(opt);
+    }
+    el.value = v;
+  });
+  var dateEl = document.getElementById('adhoc-tailored-date');
+  if (dateEl) dateEl.value = entry.dateRequested || '';
+  var subGroup = document.getElementById('adhoc-tailored-sub-group');
+  var subSelect = document.getElementById('adhoc-tailored-sub');
+  if (subGroup && subGroup.style.display !== 'none' && subSelect) subSelect.value = entry.subKey || '';
 }
 
 function adHocCloseTailoredModal() {
@@ -9262,10 +9310,18 @@ function adHocSaveTailored() {
     if (f.id === 'effective') effectiveDateVal = val;
   });
 
+  var tModal = document.getElementById('adhoc-tailored-modal');
+  var editId = (tModal && tModal._editId) || '';
+  var existing = editId ? _adhocGet().find(function(e){ return e.id === editId; }) : null;
   buildAndInsertAdhocCard({
     type: type, emp: empVal, desc: descParts.join(' \u2014 '), before: beforeVal, after: afterVal,
     dateRequested: dateRequested, subKey: subKey, fieldChanged: fieldChangedVal, effectiveDate: effectiveDateVal,
+    editId: editId,
+    // Not on the tailored form -- keep whatever the log already had instead of blanking it.
+    cutoffVal: existing ? existing.cutoffVal : '', isDispute: existing ? existing.isDispute : false,
+    remarks: existing ? existing.remarks : '', channels: existing ? existing.channels : '',
   });
+  if (tModal) tModal._editId = '';
   adHocCloseTailoredModal();
 }
 
