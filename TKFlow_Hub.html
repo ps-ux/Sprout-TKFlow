@@ -18079,11 +18079,17 @@ function profilePullFromAdhocLogs() {
   });
 
   if (!window.profileData) window.profileData = {resigned:[], changes:[], salaryIncrease:[]};
+  // Dedupe against what's actually in this task's tables right now, NOT the persisted
+  // adhoc_logs.profile_pulled flag: the tables themselves live only in memory
+  // (profileDataByClient), so after a reload they're empty while the flag stays true forever --
+  // which made already-pulled logs un-pullable ("none fall within ..."). This list resets
+  // together with the tables, so a reload lets the same logs be pulled again.
+  if (!window.profileData._pulledLogIds) window.profileData._pulledLogIds = [];
   var pulledChanges = 0, pulledSalary = 0, pulledResigned = 0, skippedOutOfPeriod = 0;
   var justPulledIds = [];
 
   relevant.forEach(function(e) {
-    if (e.profilePulled) return; // already imported
+    if (window.profileData._pulledLogIds.indexOf(e.id) >= 0) return; // already in the tables
     if (e.type !== 'Profile Update') return; // only pull profile-update-tagged logs
 
     var requestedDate = e.dateRequested
@@ -18152,6 +18158,7 @@ function profilePullFromAdhocLogs() {
       pulledChanges++;
     }
     e.profilePulled = true;
+    window.profileData._pulledLogIds.push(e.id);
     justPulledIds.push(e.id);
   });
 
