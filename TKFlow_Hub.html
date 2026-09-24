@@ -3946,7 +3946,7 @@ function closeWorkspace() {
         <div style="font-size:16px;font-weight:600;color:#1a1a2e;">Add new client</div>
         <div style="font-size:12px;color:#9898a6;margin-top:2px;">Fill in the client details and configuration</div>
       </div>
-      <div onclick="closeModal()" style="width:30px;height:30px;border-radius:12px;border:1px solid #EBEBEF;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9898a6;font-size:16px;">
+      <div onclick="requestCloseAddClient()" title="Close" style="width:30px;height:30px;border-radius:12px;border:1px solid #EBEBEF;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9898a6;font-size:16px;">
         <i class="ti ti-x"></i>
       </div>
     </div>
@@ -4178,7 +4178,7 @@ function closeWorkspace() {
           <div class="step-dot" id="dot-3"></div>
           <div class="step-dot" id="dot-4"></div>
         </div>
-        <button onclick="closeModal()" style="padding:9px 18px;border:1px solid #EBEBEF;border-radius:12px;background:#fff;color:#6b6b80;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Cancel</button>
+        <button onclick="requestCloseAddClient()" style="padding:9px 18px;border:1px solid #EBEBEF;border-radius:12px;background:#fff;color:#6b6b80;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Cancel</button>
         <button onclick="nextStep()" id="btn-next" style="padding:9px 18px;border:none;border-radius:12px;background:var(--ub-500);color:#fff;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Next →</button>
         <button onclick="saveClient()" id="btn-save" style="display:none;padding:9px 18px;border:none;border-radius:12px;background:linear-gradient(135deg,#32CE15,#1fa80e);color:#fff;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Save client ✓</button>
       </div>
@@ -5138,6 +5138,7 @@ function openAddClient() {
   var halfDayShortfallInput = document.getElementById('ac-half-day-shortfall');
   if (halfDayShortfallInput) halfDayShortfallInput.value = '';
   goStep(1);
+  window._acDirty = false; // fresh form -- nothing to lose yet
 }
 
 function closeModal() {
@@ -5943,10 +5944,26 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// Close modal on overlay click
-document.getElementById('modal-overlay').addEventListener('click', function(e) {
-  if (e.target === this) closeModal();
-});
+// No close-on-overlay-click for the Add client wizard: a text selection or drag that started
+// inside a field and ended on the backdrop registers as a backdrop click, which silently
+// closed the wizard -- and openAddClient() resets the form, so all progress was lost. X and
+// Cancel go through requestCloseAddClient() instead, which confirms before discarding.
+// "Dirty" = anything typed/changed/uploaded since opening, or having moved past Step 1.
+window._acDirty = false;
+document.getElementById('modal-overlay').addEventListener('input', function() { window._acDirty = true; });
+document.getElementById('modal-overlay').addEventListener('change', function() { window._acDirty = true; });
+
+function requestCloseAddClient() {
+  var pastStep1 = ['modal-step-2','modal-step-3','modal-step-4'].some(function(id) {
+    var el = document.getElementById(id);
+    return el && el.style.display && el.style.display !== 'none';
+  });
+  if (!window._acDirty && !pastStep1) { closeModal(); return; }
+  appConfirm('Discard this new client?',
+    'The details you entered for this client will be lost.',
+    closeModal,
+    { okLabel: 'Discard', cancelLabel: 'Keep editing' });
+}
 
 // Init — run after DOM is ready
 
