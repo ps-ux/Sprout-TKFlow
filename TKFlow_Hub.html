@@ -4511,6 +4511,7 @@ function _bulkTodayIso() {
 
 // prefill (optional): an existing grouped entry being edited -- opens in 'same' mode with its rows.
 function openBulkLogModal(prefill) {
+  ensureAdhocEmpDatalist();
   var modal = document.getElementById('bulk-log-modal');
   if (modal) { modal.style.display = 'flex'; modal._editId = prefill ? prefill.id : ''; }
   window._bulkChannels = {};
@@ -4615,6 +4616,7 @@ function bulkRenderRows() {
     var field = function(key, ph, type) {
       var list = (rowType === 'Shift Management' && (key === 'from' || key === 'to')) ? 'list="bulk-shift-types" ' : '';
       if (list) ph = 'Pick or type a shift type';
+      if (key === 'emp' && rowType !== 'Holiday Setup') list = 'list="adhoc-emp-list" autocomplete="off" ';
       return '<td style="' + cell + '"><input ' + list + (type ? 'type="' + type + '" ' : '') + 'value="' + _bulkEsc(r[key]) + '" placeholder="' + ph + '" oninput="bulkCellUpdate(' + ri + ',\'' + key + '\',this.value)" style="' + inp + '"></td>';
     };
     return '<tr style="border-bottom:1px solid #EBEBEF;">'
@@ -8967,6 +8969,7 @@ function editLog(id) {
   // generic form) are carried through unchanged rather than being blanked out by a plain edit.
   document.getElementById('log-modal')._editId = id;
   document.getElementById('log-modal').style.display = 'flex';
+  _wireLogEmpSuggestions();
   document.querySelector('[onclick="saveLog()"]').textContent = 'Save changes';
 }
 
@@ -9144,6 +9147,41 @@ setInterval(recomputeAllDisputeTAT, 60000);
 // tracking a true catch-all request might need. Each field maps to where its value lands in
 // the underlying log entry: 'emp' -> name line, 'before'/'after' -> the changes block, and
 // anything else folds into the Description — still the same real Ad Hoc Log card underneath.
+// Employee-name suggestions for Ad hoc Logs, from the Employee List Report uploaded in Leave
+// Monitoring (store.roster, saved on "Process & Add to Monitoring"), plus anyone already in the
+// monitoring rows (covers data processed before the roster was saved). Scoped to the open
+// workspace (group-shared roster for multi-sub groups), this year and next.
+function adhocEmployeeSuggestions() {
+  var key = (typeof lmCurrentClientKey === 'function') ? lmCurrentClientKey() : '';
+  var byYear = (key && window.leaveMonitoringStore && window.leaveMonitoringStore[key]) || {};
+  var thisYear = new Date().getFullYear();
+  var seen = {}, out = [];
+  [thisYear, thisYear + 1].forEach(function(y) {
+    var b = byYear[y]; if (!b) return;
+    ['roster', 'oneYear', 'fiveYear', 'sickOneYear', 'sickFiveYear'].forEach(function(cat) {
+      (b[cat] || []).forEach(function(r) {
+        var name = [String(r.lastName || '').trim(), String(r.firstName || '').trim()].filter(Boolean).join(', ');
+        if (!name) return;
+        var k = (r.empId || '') + '|' + name.toLowerCase();
+        if (seen[k]) return;
+        seen[k] = true;
+        out.push({ name: name, empId: r.empId || '' });
+      });
+    });
+  });
+  return out.sort(function(a, b){ return a.name.localeCompare(b.name); });
+}
+
+// (Re)builds the shared <datalist id="adhoc-emp-list"> for whichever workspace is open.
+function ensureAdhocEmpDatalist() {
+  var dl = document.getElementById('adhoc-emp-list');
+  if (!dl) { dl = document.createElement('datalist'); dl.id = 'adhoc-emp-list'; document.body.appendChild(dl); }
+  var esc = function(v){ return String(v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); };
+  dl.innerHTML = adhocEmployeeSuggestions().map(function(e) {
+    return '<option value="' + esc(e.name) + '"' + (e.empId ? ' label="' + esc(e.empId) + '"' : '') + '>';
+  }).join('');
+}
+
 // Sprout HR shift types, offered as a dropdown in Shift Management logs (and as suggestions in
 // Bulk log's Change from/to cells for Shift Management rows).
 var SHIFT_TYPES = ['Exempted', 'Flexible per Day', 'Flexible per Week', 'Normal Shift', 'Shift-Based', 'Single Login', 'Supervisor Shift']; // alphabetical
@@ -9188,6 +9226,7 @@ var LOG_TAILORED_FIELDS = {
 function adHocOpenTailored(type, entry) {
   var titleEl = document.getElementById('adhoc-tailored-title');
   if (titleEl) titleEl.textContent = type + (entry ? ' \u2014 Edit Log' : ' \u2014 Log Request');
+  ensureAdhocEmpDatalist();
   var fieldsEl = document.getElementById('adhoc-tailored-fields');
   if (fieldsEl) {
     fieldsEl.innerHTML = (LOG_TAILORED_FIELDS[type] || []).map(function(f) {
@@ -9200,7 +9239,9 @@ function adHocOpenTailored(type, entry) {
         : f.type === 'select'
         ? '<select id="adhoc-t-' + f.id + '" class="task-input" style="width:100%;cursor:pointer;"><option value="">' + f.placeholder + '</option>'
             + (f.options || []).map(function(o){ return '<option>' + o + '</option>'; }).join('') + '</select>'
-        : '<input type="' + (f.type || 'text') + '" id="adhoc-t-' + f.id + '" class="task-input" placeholder="' + f.placeholder + '" style="width:100%;">';
+        : '<input type="' + (f.type || 'text') + '" id="adhoc-t-' + f.id + '"'
+            + (f.maps === 'emp' && type !== 'Holiday Setup' ? ' list="adhoc-emp-list" autocomplete="off"' : '')
+            + ' class="task-input" placeholder="' + f.placeholder + '" style="width:100%;">';
       return '<div style="margin-bottom:10px;"><div class="field-label">' + f.label + '</div>' + input + '</div>';
     }).join('');
   }
@@ -9325,8 +9366,15 @@ function adHocSaveTailored() {
   adHocCloseTailoredModal();
 }
 
+function _wireLogEmpSuggestions() {
+  ensureAdhocEmpDatalist();
+  var el = document.getElementById('log-emp');
+  if (el) { el.setAttribute('list', 'adhoc-emp-list'); el.setAttribute('autocomplete', 'off'); }
+}
+
 function openLogModal(presetType) {
   document.getElementById('log-modal').style.display = 'flex';
+  _wireLogEmpSuggestions();
 
   var typeGroup = document.getElementById('log-type-group');
   var typePresetLabel = document.getElementById('log-type-preset-label');
@@ -17720,6 +17768,9 @@ function computeLeaveMonitoring(empRows, leaveRows, ck, targetYear) {
   var fiveYearTransfers = [];
   var sickOneYearTransfers = [];
   var sickFiveYearTransfers = [];
+  // Every employee on the Employee List Report, not just the ones due a transfer this year --
+  // saved with the monitoring data so Ad hoc Logs can suggest employee names.
+  var roster = [];
   var sickEnabled = creditConfig.sickEnabled !== false;
   var sickBase = creditConfig.sickBaseCredits || creditConfig.baseCredits;
 
@@ -17729,6 +17780,7 @@ function computeLeaveMonitoring(empRows, leaveRows, ck, targetYear) {
     if (!empId) continue;
     var lastName = cLastName >= 0 ? erow[cLastName] : '';
     var firstName = cFirstName >= 0 ? erow[cFirstName] : '';
+    if (String(lastName || firstName).trim()) roster.push({ empId: empId, lastName: String(lastName || '').trim(), firstName: String(firstName || '').trim() });
     var regDate = cRegDate >= 0 ? lmParseDate(erow[cRegDate]) : null;
     var hireDate = cHireDate >= 0 ? lmParseDate(erow[cHireDate]) : null;
     if (!hireDate) continue;
@@ -17808,7 +17860,7 @@ function computeLeaveMonitoring(empRows, leaveRows, ck, targetYear) {
   fiveYearTransfers.sort(function(a,b){ return a.anniversary - b.anniversary; });
   sickOneYearTransfers.sort(function(a,b){ return a.anniversary - b.anniversary; });
   sickFiveYearTransfers.sort(function(a,b){ return a.anniversary - b.anniversary; });
-  return { oneYearTransfers: oneYearTransfers, fiveYearTransfers: fiveYearTransfers, sickOneYearTransfers: sickOneYearTransfers, sickFiveYearTransfers: sickFiveYearTransfers, year: currentYear };
+  return { oneYearTransfers: oneYearTransfers, fiveYearTransfers: fiveYearTransfers, sickOneYearTransfers: sickOneYearTransfers, sickFiveYearTransfers: sickFiveYearTransfers, roster: roster, year: currentYear };
 }
 
 function runLeaveMonitoring() {
@@ -17855,6 +17907,13 @@ function runLeaveMonitoring() {
 // different year's row now that buckets are year-scoped.
 function lmMergeIntoStore(ck, year, computed) {
   var store = lmGetStore(ck, year);
+  if (computed.roster && computed.roster.length) {
+    if (!store.roster) store.roster = [];
+    computed.roster.forEach(function(r) {
+      var i = store.roster.findIndex(function(e){ return e.empId === r.empId; });
+      if (i >= 0) store.roster[i] = r; else store.roster.push(r);
+    });
+  }
   computed.oneYearTransfers.forEach(function(r) {
     var existingIdx = store.oneYear.findIndex(function(e){ return e.empId === r.empId; });
     if (existingIdx >= 0) store.oneYear[existingIdx] = Object.assign({}, store.oneYear[existingIdx], r, {done: store.oneYear[existingIdx].done});
