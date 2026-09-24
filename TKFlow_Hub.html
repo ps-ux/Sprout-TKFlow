@@ -11094,7 +11094,23 @@ function openTaskRunner(taskKey, taskName) {
         + '<button onclick="skipTask(\'' + taskKey + '\')" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:#F4F4F8;color:#6b6b80;border:1.5px solid #EBEBEF;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-player-skip-forward" style="font-size:13px;"></i> Skip (N/A)</button>';
     }
     body.appendChild(footer);
+    window._taskFooterEl = footer;
+    keepTaskFooterAttached(body);
   }
+}
+
+// The Mark as done / Skip footer lives inside #task-modal-body, so anything that later rewrites
+// body.innerHTML -- "Reset and start over" (varResetAll/tkResetAll/dsResetAll), Profile
+// Updates' "Pull from Ad hoc logs" re-render, etc. -- silently deleted it, and it only came back
+// by closing and reopening the task. Rather than patch every rewrite site, re-attach the
+// current footer whenever it goes missing from the body.
+function keepTaskFooterAttached(body) {
+  if (!body || body._footerObserver || typeof MutationObserver === 'undefined') return;
+  body._footerObserver = new MutationObserver(function() {
+    var f = window._taskFooterEl;
+    if (f && !body.contains(f)) body.appendChild(f);
+  });
+  body._footerObserver.observe(body, { childList: true });
 }
 
 
@@ -11161,6 +11177,7 @@ function finalizeTask(taskKey) {
     // Remove footer from cache snapshot
     var footerEl = document.getElementById('task-action-footer');
     if (footerEl) footerEl.remove();
+    window._taskFooterEl = null; // intentional removal -- keepTaskFooterAttached must not re-add it
     window._taskBodyCache[cacheKey] = body.innerHTML;
   }
   var batchNames = finalizeBatchTaskIfApplicable(taskKey, 'done', '');
@@ -11213,6 +11230,7 @@ function confirmSkipTask() {
   if (body && window._taskBodyCache) {
     var footerEl = document.getElementById('task-action-footer');
     if (footerEl) footerEl.remove();
+    window._taskFooterEl = null; // intentional removal -- keepTaskFooterAttached must not re-add it
     window._taskBodyCache[cacheKey] = body.innerHTML;
   }
   var batchNamesSkip = finalizeBatchTaskIfApplicable(taskKey, 'skipped', reason);
