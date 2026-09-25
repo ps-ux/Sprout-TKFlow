@@ -11868,6 +11868,15 @@ function xlsxWrapBuffer(wb) {
       });
       if (rowNumber === 1) row.font = { bold: true };
     });
+    // Optional per-column fill, set by callers as sheet['!colFills'] = { startRow, cols: { colIdx: argb } }.
+    var cf = sheet['!colFills'];
+    if (cf && cf.cols) {
+      Object.keys(cf.cols).forEach(function(c) {
+        for (var r = (cf.startRow || 0) + 1; r <= aoa.length; r++) {
+          exWs.getCell(r, +c + 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: cf.cols[c] } };
+        }
+      });
+    }
   });
   return exWb.xlsx.writeBuffer(); // Promise<ArrayBuffer> — JSZip accepts a Promise directly as file content
 }
@@ -25480,7 +25489,7 @@ function lcvRenderConsolVlConv() {
   function leftOffset(i){ var s = 0; for (var k=0;k<i;k++) s += (colWidths[k]||100); return s; }
   function cellStyle(i, isHeader) {
     var w = 'width:' + colWidths[i] + 'px;min-width:' + colWidths[i] + 'px;';
-    if (i >= stickyCount) return w;
+    if (i >= stickyCount) return w + lcvColFillCss(headers2[i]);
     var bg = isHeader ? '#F8F8FA' : '#fff';
     return w + 'position:sticky;left:' + leftOffset(i) + 'px;z-index:' + (isHeader ? 4 : 1) + ';background:' + bg + ';' + (i === stickyCount - 1 ? 'box-shadow:2px 0 4px rgba(0,0,0,0.06);' : '');
   }
@@ -25530,7 +25539,7 @@ function lcvRenderConsolSlConv() {
   function leftOffset(i){ var s = 0; for (var k=0;k<i;k++) s += (colWidths[k]||100); return s; }
   function cellStyle(i, isHeader) {
     var w = 'width:' + colWidths[i] + 'px;min-width:' + colWidths[i] + 'px;';
-    if (i >= stickyCount) return w;
+    if (i >= stickyCount) return w + lcvColFillCss(headers2[i]);
     var bg = isHeader ? '#F8F8FA' : '#fff';
     return w + 'position:sticky;left:' + leftOffset(i) + 'px;z-index:' + (isHeader ? 4 : 1) + ';background:' + bg + ';' + (i === stickyCount - 1 ? 'box-shadow:2px 0 4px rgba(0,0,0,0.06);' : '');
   }
@@ -25637,6 +25646,7 @@ function lcvConsolFinalize() {
       return [e.id, lcvFullName(e), e.employmentStatus, e.manualAddback || 0, e.actualLeavesForYear.toFixed(2), e.availAdjusted.toFixed(2), e.forConversion.toFixed(2), (e.manualVLTicketIds||[]).join(', ')];
     }));
     var wsSum = XLSX.utils.aoa_to_sheet(summaryRows);
+    lcvTagColFills(wsSum, summaryHeaders, 0);
     wsSum['!cols'] = [12, 26, 16, 14, 18, 22, 14, 20].map(function(w){ return {wch:w}; });
     XLSX.utils.book_append_sheet(wb, wsSum, truncSheetName(sd.subKey + ' - Summary'));
   });
@@ -25654,6 +25664,7 @@ function lcvConsolFinalize() {
     });
   });
   var wsVlConv = XLSX.utils.aoa_to_sheet(vlConvRows);
+  lcvTagColFills(wsVlConv, vlConvHeaders, 1);
   wsVlConv['!cols'] = [16,12,14,14,14,16,12,12,16,20,14,14,3,14,16,12,16,18,20].map(function(w){ return {wch:w}; });
   wsVlConv['!merges'] = [
     { s: { r: 0, c: 9 },  e: { r: 0, c: 11 } },
@@ -25675,6 +25686,7 @@ function lcvConsolFinalize() {
       });
     });
     var wsSlConv = XLSX.utils.aoa_to_sheet(slConvRows);
+    lcvTagColFills(wsSlConv, slConvHeaders, 1);
     wsSlConv['!cols'] = [16,12,14,14,14,16,12,12,16,20,14,14,3,14,16,12,16,18,20].map(function(w){ return {wch:w}; });
     wsSlConv['!merges'] = [
       { s: { r: 0, c: 9 },  e: { r: 0, c: 11 } },
@@ -25754,6 +25766,21 @@ function lcvClosePreviewModal() {
   if (selRow) selRow.style.display = 'none';
 }
 
+// Column highlights shared by the preview tables and the downloaded file: For Conversion in
+// light green, For Carryover in light yellow. Keyed by header text so every VL/SL Conversion
+// and Summary layout (with or without the leading Subcompany column) picks them up.
+var LCV_COL_FILLS = { 'For Conversion': 'C6EFCE', 'For Carryover': 'FFF2CC' };
+function lcvColFillCss(header) {
+  var hex = LCV_COL_FILLS[header];
+  return hex ? 'background:#' + hex + ';' : '';
+}
+// Tags a SheetJS sheet so xlsxWrapBuffer fills the highlighted columns from headerRow (0-based) down.
+function lcvTagColFills(ws, headers, headerRow) {
+  var cols = {};
+  headers.forEach(function(h, i) { if (LCV_COL_FILLS[h]) cols[i] = 'FF' + LCV_COL_FILLS[h]; });
+  ws['!colFills'] = { startRow: headerRow, cols: cols };
+}
+
 function lcvFullName(e) {
   return e.lastName + (e.firstName ? ', ' + e.firstName : '') + (e.middleName ? ' ' + e.middleName : '');
 }
@@ -25792,7 +25819,7 @@ function lcvSwitchPreviewTab(tab) {
     function leftOffset(i) { var sum = 0; for (var k = 0; k < i; k++) sum += (colWidths[k] || 120); return sum; }
     function cellStyle(i, isHeader) {
       var w = colWidths[i] ? ('width:' + colWidths[i] + 'px;min-width:' + colWidths[i] + 'px;') : '';
-      if (i >= stickyCount) return w;
+      if (i >= stickyCount) return w + lcvColFillCss(headers[i]);
       var bg = isHeader ? '#F8F8FA' : '#fff';
       return w + 'position:sticky;left:' + leftOffset(i) + 'px;z-index:' + (isHeader ? 4 : 1) + ';background:' + bg + ';' + (i === stickyCount - 1 ? 'box-shadow:2px 0 4px rgba(0,0,0,0.06);' : '');
     }
@@ -25812,7 +25839,7 @@ function lcvSwitchPreviewTab(tab) {
     function leftOffset(i){ var s=0; for (var k=0;k<i;k++) s+=(colWidths[k]||100); return s; }
     function cellStyle(i, isHeader) {
       var w = 'width:' + colWidths[i] + 'px;min-width:' + colWidths[i] + 'px;';
-      if (i >= stickyCount) return w;
+      if (i >= stickyCount) return w + lcvColFillCss(headers2[i]);
       var bg = isHeader ? '#F8F8FA' : '#fff';
       return w + 'position:sticky;left:' + leftOffset(i) + 'px;z-index:' + (isHeader ? 4 : 1) + ';background:' + bg + ';' + (i === stickyCount - 1 ? 'box-shadow:2px 0 4px rgba(0,0,0,0.06);' : '');
     }
@@ -26165,9 +26192,11 @@ function lcvFinalize() {
     XLSX.utils.book_append_sheet(wb, wsManualVL, 'Manual VLs');
   }
   var wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+  lcvTagColFills(wsSummary, summaryHeaders, 0);
   wsSummary['!cols'] = [12, 26, 16, 14, 18, 22, 14, 20].map(function(w){ return {wch:w}; });
   XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
   var wsVlConv = XLSX.utils.aoa_to_sheet(vlConvRows);
+  lcvTagColFills(wsVlConv, vlConvHeaders, 1);
   wsVlConv['!cols'] = [12,14,14,14,16,12,12,16,20,14,14,3,14,16,12,16,18,20].map(function(w){ return {wch:w}; });
   wsVlConv['!merges'] = [
     { s: { r: 0, c: 8 },  e: { r: 0, c: 10 } }, // "Breakdown" over Total Available Balance..For Carryover
@@ -26188,6 +26217,7 @@ function lcvFinalize() {
       });
     });
     var wsSlConv = XLSX.utils.aoa_to_sheet(slConvRows);
+    lcvTagColFills(wsSlConv, slConvHeaders, 1);
     wsSlConv['!cols'] = [12,14,14,14,16,12,12,16,20,14,14,3,14,16,12,16,18,20].map(function(w){ return {wch:w}; });
     wsSlConv['!merges'] = [
       { s: { r: 0, c: 8 },  e: { r: 0, c: 10 } },
