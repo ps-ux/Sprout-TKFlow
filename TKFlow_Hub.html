@@ -11208,6 +11208,7 @@ function checkCutoffRollover(key) {
       });
     });
     if (window.newHiresData) window.newHiresData = [];
+    if (window.newHiresByClient) delete window.newHiresByClient[key];
     window.nhFinalized = false;
 
     clientObj.cutoff = newLabel;
@@ -12126,13 +12127,14 @@ function varRenderResultCard(co, cutoffIdx, attData) {
     + '</div></div>';
 
   var varTable = varBuildSnapshotTableHtml(attData);
+  var _aiRes = varAttItemsRows(co);
 
   var actionsHtml = '<div style="padding:12px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
     + '<button id="dl-var-' + co.id + '" onclick="varDownload(' + co.id + ')" class="dl-btn" style="margin:0;width:auto;flex:1 1 220px;">'
     + '<i class="ti ti-download"></i> Download Variance Template</button>'
     + '<button id="dl-disp-' + co.id + '" onclick="varDisputesDownload(' + co.id + ')" class="dl-btn" style="margin:0;width:auto;flex:1 1 220px;" '
-    + (withVar.length ? '' : 'disabled title="No variances detected — nothing to log"') + '>'
-    + '<i class="ti ti-ticket"></i> Download Disputes Tab</button>'
+    + (_aiRes.rows.length ? '' : ('disabled title="' + (_aiRes.skippedFlagged ? 'Only flagged employees — review them first; nothing verified to log' : 'No variances detected — nothing to log') + '"')) + '>'
+    + '<i class="ti ti-ticket"></i> Download Attendance Items</button>'
     + '<button id="finalize-var-' + co.id + '" onclick="varFinalize(' + co.id + ')" '
     + 'style="padding:8px 16px;background:#F4F4F8;color:#9898a6;border:1.5px solid #EBEBEF;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:' + (co._finalized ? 'none' : 'inline-flex') + ';align-items:center;gap:6px;">'
     + '<i class="ti ti-lock" style="font-size:13px;"></i> Mark as finalized</button>'
@@ -12309,11 +12311,14 @@ function removeVarCutoffInGroup(gi, coId) {
 
 function buildPayrollInstructionsRunner(body) {
   document.getElementById('task-modal-sub').textContent = 'Generate payroll instructions combining variance findings and dispute tracker';
+  // Rendered first: the picker settles window.currentWsClient on a real sub of this group, and
+  // every count below must read that same client, not a leftover from another workspace.
+  var subPickerHtml = renderTaskSubPicker('payroll_instructions');
 
   var clientKey = (typeof currentWsClient !== 'undefined' ? currentWsClient : null) || window._wsClient || '';
   var clientObj = clientKey && clients[clientKey] ? clients[clientKey] : null;
   var clientName = clientObj ? clientObj.name : (clientKey || 'Client');
-  var nhFinalizedCount = (window.nhFinalized && window.newHiresData) ? window.newHiresData.length : 0;
+  var nhFinalizedCount = piNewHiresFor(clientKey).length;
   var nhInfo = nhFinalizedCount > 0
     ? '<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#32CE13;"><i class="ti ti-circle-check" style="font-size:14px;"></i> ' + nhFinalizedCount + ' new hire(s) finalized and ready</div>'
     : '<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#e67e00;"><i class="ti ti-alert-circle" style="font-size:14px;"></i> No new hires finalized — run New Hires task first</div>';
@@ -12328,8 +12333,8 @@ function buildPayrollInstructionsRunner(body) {
   }).filter(function(d){ return hasPiLines(d); }).length;
 
   // Check live at open time
-  var varCount = (window.varResults && Object.keys(window.varResults).length) || 0;
-  var finalizedCount = varCount ? Object.values(window.varResults).filter(function(v){ return v.finalized; }).length : 0;
+  var varCount = varProcessedCutoffCountFor(clientKey);
+  var finalizedCount = varFinalizedCutoffsFor(clientKey).length;
   var varInfo = varCount
     ? '<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#32CE13;"><i class="ti ti-circle-check" style="font-size:14px;"></i> ' + finalizedCount + '/' + varCount + ' variance cut-off(s) finalized and ready</div>'
     : '<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#e67e00;"><i class="ti ti-alert-circle" style="font-size:14px;"></i> No variance results found — run and finalize Variance Analysis first</div>';
@@ -12357,7 +12362,7 @@ function buildPayrollInstructionsRunner(body) {
       + '</select>'
     : '<div style="font-size:11px;color:#9898a6;background:#F8F8FA;border:1px solid #EBEBEF;border-radius:12px;padding:8px 12px;">No TK Calendar uploaded for this client yet \u2014 fill in the dates below manually, or upload one from the Calendar tab to auto-fill these.</div>';
 
-  body.innerHTML = renderTaskSubPicker('payroll_instructions')
+  body.innerHTML = subPickerHtml
     + '<div style="background:#DCFCE7;border:1px solid #BBF7D0;border-radius:14px;padding:11px 14px;margin-bottom:14px;">'
     + '<div style="font-size:12px;font-weight:600;color:#16A34A;margin-bottom:4px;">Pulling from: ' + clientName + '</div>'
     + nhInfo + pdInfo + varInfo + '</div>'
@@ -12369,11 +12374,15 @@ function buildPayrollInstructionsRunner(body) {
     + '<label class="task-field-label" style="margin-top:10px;">Basic pay cut-off</label>'
     + '<input class="task-input" type="text" id="pi-bp-cutoff" placeholder="e.g. May 1-31, 2026">'
     + '<div style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:11px 14px;margin-top:12px;">'
-    + '<div style="font-size:12px;font-weight:600;color:#1a1a2e;margin-bottom:8px;">Output file (2 sheets):</div>'
+    + '<div style="font-size:12px;font-weight:600;color:#1a1a2e;margin-bottom:8px;">Output file (up to 2 sheets):</div>'
     + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:12px;color:#6b6b80;"><i class="ti ti-circle-check" style="color:#32CE13;font-size:13px;"></i> <b>Masterfile Changes</b> — New hires, resigned/ON HOLD, personal info changes, salary increases (from New Hires + Profile Updates tasks)</div>'
-    + '<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#6b6b80;"><i class="ti ti-circle-check" style="color:#32CE13;font-size:13px;"></i> <b>Disputes</b> — Open tickets with payroll impact + variance findings</div>'
+    + '<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#6b6b80;"><i class="ti ti-circle-check" style="color:#32CE13;font-size:13px;"></i> <b>Attendance Items</b> — Open tickets with payroll impact + variance findings (left out when empty)</div>'
     + '</div>'
     + '<button class="task-run-btn" id="pi-run-btn" disabled onclick="runPayrollInstructions()"><i class="ti ti-eye"></i> Preview Payroll Instructions</button>'
+    + (subOptionsForCurrentGroup().length > 1
+        ? '<button class="dl-btn" id="pi-all-btn" disabled onclick="piGenerateAll()" style="margin-top:8px;"><i class="ti ti-files"></i> Generate for all subcompanies</button>'
+          + '<div style="font-size:11px;color:#9898a6;margin-top:4px;">One file per subcompany, downloaded directly (no preview). Subcompanies with nothing to include are skipped.</div>'
+        : '')
     + '<div id="pi-result" style="display:none;"></div>';
 
   // Auto-fill from the detected current period on first render, so the fields start correct
@@ -12406,7 +12415,40 @@ function buildPayrollInstructionsRunner(body) {
     var payout = ((document.getElementById('pi-payout')||{}).value||'').trim();
     var btn = document.getElementById('pi-run-btn');
     if (btn) { btn.disabled = !payout; if (payout) btn.classList.add('green'); else btn.classList.remove('green'); }
+    var allBtn = document.getElementById('pi-all-btn');
+    if (allBtn) allBtn.disabled = !payout;
   };
+}
+
+// Finalized Variance cut-offs for ONE client, read from varBatchGroups (each group carries its
+// own clientKey and each cut-off its own _attData) -- NOT window.varResults, which is keyed only
+// by payout label and shared by every sub in the workspace: two subs finalizing the same payout
+// overwrote each other there, and varSwitchGroup reset it to whichever sub was last expanded, so
+// Payroll Instructions for Hillcroft/Erminland silently came out with Capital Growth's variances.
+function varFinalizedCutoffsFor(clientKey) {
+  var out = [];
+  if (!clientKey || typeof varBatchGroups === 'undefined') return out;
+  varBatchGroups.forEach(function(g) {
+    if (g.clientKey !== clientKey) return;
+    (g.cutoffs || []).forEach(function(co) {
+      if (co._attData === undefined || !co._finalized) return;
+      out.push({ payout: co._payout, attData: co._attData });
+    });
+  });
+  return out;
+}
+function varProcessedCutoffCountFor(clientKey) {
+  if (!clientKey || typeof varBatchGroups === 'undefined') return 0;
+  return varBatchGroups.reduce(function(s, g) {
+    if (g.clientKey !== clientKey) return s;
+    return s + (g.cutoffs || []).filter(function(co){ return co._attData !== undefined; }).length;
+  }, 0);
+}
+// New Hires rows are kept per client (window.newHiresByClient, set on extract/finalize) --
+// window.newHiresData alone is whichever sub last ran New Hires, which would otherwise leak
+// into every other sub's Payroll Instructions.
+function piNewHiresFor(clientKey) {
+  return (window.newHiresByClient && clientKey && window.newHiresByClient[clientKey]) || [];
 }
 
 function runPayrollInstructions() {
@@ -12414,10 +12456,73 @@ function runPayrollInstructions() {
   var attCutoff = ((document.getElementById('pi-att-cutoff')||{}).value||'').trim();
   var bpCutoff  = ((document.getElementById('pi-bp-cutoff')||{}).value||'').trim();
   var clientKey = (typeof currentWsClient !== 'undefined' ? currentWsClient : null) || window._wsClient || '';
-  var cu = window.currentUser || currentUser;
 
   if (typeof XLSX === 'undefined') { if(typeof showToast==='function') showToast('XLSX not loaded','#e67e00'); return; }
+  var built = piBuild(clientKey, payout, attCutoff, bpCutoff);
+  var resultDiv = document.getElementById('pi-result');
+  if (!built.hasContent) {
+    window._piConfirmDownload = null;
+    if (resultDiv) { resultDiv.style.display = 'block'; resultDiv.innerHTML = '<div style="margin-top:12px;font-size:12px;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;padding:10px 12px;"><i class="ti ti-info-circle"></i> Nothing to include for ' + ((clients[clientKey] && clients[clientKey].name) || clientKey || 'this client') + ' — no new hires, profile updates, finalized variances or payroll-impact disputes. No file generated.</div>'; }
+    return;
+  }
   if (clientKey && typeof markTaskStarted === 'function') markTaskStarted(clientKey);
+  window._piConfirmDownload = built.download;
+  built.renderPreview(resultDiv);
+}
+
+// Generates one Payroll Instructions file per subcompany in the current group, skipping any
+// sub with nothing to include. Payout/Attendance cut-off come from the form (the group shares
+// one calendar); Basic pay cut-off is recomputed per sub from its own basicPayOffset -- unless
+// the field was hand-edited away from the auto-filled value, in which case that edit is used.
+async function piGenerateAll() {
+  var payout    = ((document.getElementById('pi-payout')||{}).value||'').trim();
+  var attCutoff = ((document.getElementById('pi-att-cutoff')||{}).value||'').trim();
+  var bpCutoff  = ((document.getElementById('pi-bp-cutoff')||{}).value||'').trim();
+  if (!payout) { if (typeof showToast === 'function') showToast('Enter a payout date first', '#e67e00'); return; }
+  if (typeof XLSX === 'undefined') { if(typeof showToast==='function') showToast('XLSX not loaded','#e67e00'); return; }
+  var subs = subOptionsForCurrentGroup();
+  var picker = document.getElementById('pi-period-picker');
+  var periods = window._piCalPeriods || [];
+  var pIdx = picker ? parseInt(picker.value, 10) : NaN;
+  function autoBpFor(ck) {
+    if (isNaN(pIdx) || !periods[pIdx]) return null;
+    var off = (clients[ck] && clients[ck].basicPayOffset) || 0;
+    return (periods[pIdx + off] || periods[pIdx]).attCov || '';
+  }
+  var activeCk = window.currentWsClient || window._wsClient || '';
+  var bpUntouched = autoBpFor(activeCk) !== null && autoBpFor(activeCk) === bpCutoff;
+
+  var btn = document.getElementById('pi-all-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader"></i> Generating…'; }
+  var made = [], skipped = [];
+  for (var i = 0; i < subs.length; i++) {
+    var ck = subs[i];
+    var name = (clients[ck] && clients[ck].name) || ck;
+    var bp = bpUntouched ? autoBpFor(ck) : bpCutoff;
+    var built = piBuild(ck, payout, attCutoff, bp);
+    if (!built.hasContent) { skipped.push(name); continue; }
+    if (typeof markTaskStarted === 'function') markTaskStarted(ck);
+    try { await built.download(); made.push(name); }
+    catch (e) { console.error(e); skipped.push(name + ' (error)'); }
+    await new Promise(function(r){ setTimeout(r, 700); });
+  }
+  if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-files"></i> Generate for all subcompanies'; }
+  var resultDiv = document.getElementById('pi-result');
+  if (resultDiv) {
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = '<div class="task-result">'
+      + '<div class="task-result-title"><i class="ti ti-files" style="color:#1679FA;font-size:18px;"></i> Payroll Instructions — all subcompanies</div>'
+      + '<div class="result-row"><span class="result-label">Generated</span><span class="result-val">' + (made.length ? made.join(', ') : '—') + '</span></div>'
+      + '<div class="result-row"><span class="result-label">Skipped (nothing to include)</span><span class="result-val">' + (skipped.length ? skipped.join(', ') : '—') + '</span></div>'
+      + '</div>';
+  }
+  if (!made.length && typeof showToast === 'function') showToast('No subcompany had anything to include — no files generated', '#e67e00');
+}
+
+// Builds one client's Payroll Instructions workbook. Returns { hasContent, download() -> Promise,
+// renderPreview(resultDiv) } -- nothing is written or downloaded until download() is called.
+function piBuild(clientKey, payout, attCutoff, bpCutoff) {
+  var cu = window.currentUser || currentUser;
 
   // ── Shared helpers ────────────────────────────────────────────────────
   var wb = XLSX.utils.book_new();
@@ -12478,32 +12583,30 @@ function runPayrollInstructions() {
 
   // Build variance rows (Previous Attendance only — already processed)
   var varRows = [];
-  if (window.varResults && Object.keys(window.varResults).length) {
-    Object.keys(window.varResults).forEach(function(cutoffPayout) {
-      var vr = window.varResults[cutoffPayout];
-      if (!vr.finalized) return;
-      vr.attData.forEach(function(emp) {
-        if (!emp.hasVar) return;
-        for (var ci = 2; ci < 35; ci++) {
-          var diff = emp.row[ci];
-          if (Math.abs(diff) < 0.001) continue;
-          var colLabel = VAR_KEEP[ci];
-          var unit = varUnit(colLabel);
-          // All columns: positive diff = Addition (blue), negative = Deduction (red)
-          var isAddition = diff > 0;
-          varRows.push([
-            '', 'Variance Analysis',
-            emp.id, emp.name,
-            colLabel,
-            Math.abs(diff).toFixed(2),
-            unit,
-            isAddition ? 'Addition' : 'Deduction',
-            cutoffPayout
-          ]);
-        }
-      });
+  varFinalizedCutoffsFor(clientKey).forEach(function(vr) {
+    var cutoffPayout = vr.payout;
+    (vr.attData || []).forEach(function(emp) {
+      if (!emp.hasVar) return;
+      for (var ci = 2; ci < 35; ci++) {
+        var diff = emp.row[ci];
+        if (Math.abs(diff) < 0.001) continue;
+        var colLabel = VAR_KEEP[ci];
+        var unit = varUnit(colLabel);
+        // All columns: positive diff = Addition (blue), negative = Deduction (red)
+        var isAddition = diff > 0;
+        varRows.push([
+          '', 'Variance Analysis',
+          emp.id, emp.name,
+          colLabel,
+          Math.abs(diff).toFixed(2),
+          unit,
+          isAddition ? 'Addition' : 'Deduction',
+          cutoffPayout
+        ]);
+      }
     });
-  }
+  });
+  var nhList = piNewHiresFor(clientKey);
 
   // Helper: ticket → one row per payroll-instruction line (flattens piLines)
   function ticketRows(d) {
@@ -12529,8 +12632,8 @@ function runPayrollInstructions() {
      'Payroll Group', 'EE Status', 'Birthday (MM/DD/YYYY)', 'TIN', 'Gender', 'Civil Status', 'Email Address',
      'Workdays Per Year', 'SSS No.', 'HDMF No.', 'PHIC No.', 'With OT (Yes/No)', 'Bank Name', 'Bank Account Number',
      'Consultant or not?', 'Tax Percent (if Consultant)', 'Remarks']);
-  if (window.newHiresData && window.newHiresData.length) {
-    window.newHiresData.forEach(function(nh) {
+  if (nhList.length) {
+    nhList.forEach(function(nh) {
       mfRows.push(['', nh.empNo||'', nh.name||'', nh.hireDate||'', nh.basicPay||'', nh.allowName||'', nh.allowAmt||'', nh.jobTitle||'', nh.dept||'', nh.costCenter||'',
         nh.payrollGroup||'', nh.eeStatus||'', nh.birthday||'', nh.tin||'', nh.gender||'', nh.civilStatus||'', nh.email||'',
         nh.workdays||'', nh.sss||'', nh.hdmf||'', nh.phic||'', nh.withOT||'', nh.bankName||'', nh.bankAccount||'',
@@ -12596,7 +12699,7 @@ function runPayrollInstructions() {
   XLSX.utils.book_append_sheet(wb, ws1, 'Masterfile Changes');
 
   // ── Sheet 2: Disputes — rows collected here, but the actual styled sheet is built later
-  // (async) using the SAME colored template as Variance's "Download Disputes Tab", instead
+  // (async) using the SAME colored template as Variance's "Download Attendance Items", instead
   // of a plain custom color scheme, so both look identical.
   var piPrevRows = [], piCurrRows = [];
   // Split per PI LINE now, not per ticket -- each line carries its own Attendance Period, so a
@@ -12608,8 +12711,10 @@ function runPayrollInstructions() {
   });
   // Variance findings are already-processed differences from a resolved prior period, so they
   // bucket with Previous Attendance, matching the same convention used elsewhere in the app.
+  // vr[2] is the EMPLOYEE id -- it belongs in Employee No. (empNo -> column C), not the
+  // Ticket# column (id -> column A); variance findings have no ticket.
   varRows.forEach(function(vr) {
-    piPrevRows.push({ id: vr[2]||'', name: vr[3]||'', detail: vr[4]||'', number: vr[5], unit: vr[6], kind: vr[7], remarks: vr[8]||'' });
+    piPrevRows.push({ id: '', empNo: vr[2]||'', name: vr[3]||'', detail: vr[4]||'', number: vr[5], unit: vr[6], kind: vr[7], remarks: vr[8]||'' });
   });
 
   // ── Write and optionally style via JSZip ──────────────────────────────
@@ -12720,12 +12825,17 @@ function runPayrollInstructions() {
 
   var filename = (clientKey||'PI') + '_Payroll Instructions_' + payout.replace(/[^a-zA-Z0-9]/g,'_') + '.xlsx';
 
-  // Store a closure so the "Download Excel File" button (clicked only after review) can
-  // trigger the actual styled write — nothing downloads automatically anymore.
-  window._piConfirmDownload = function() {
-    if (typeof JSZip === 'undefined') { writeAndStyle(wb, filename, { 'Masterfile Changes': styleMap1 }); return; }
+  var hasAttItems = piPrevRows.length > 0 || piCurrRows.length > 0;
+  var hasContent = hasAttItems || nhList.length > 0 || (pd.resigned||[]).length > 0
+    || (pd.changes||[]).length > 0 || (pd.salaryIncrease||[]).length > 0;
+
+  // Returned as download() so the "Download Excel File" button (clicked only after review), or
+  // piGenerateAll, can trigger the actual styled write — nothing downloads automatically.
+  // The Attendance Items sheet is left out entirely when there are no rows for it.
+  var download = function() {
+    if (typeof JSZip === 'undefined') { writeAndStyle(wb, filename, { 'Masterfile Changes': styleMap1 }); return Promise.resolve(); }
     var arr = XLSX.write(wb, {bookType:'xlsx', type:'array'});
-    JSZip.loadAsync(arr).then(function(zip) {
+    return JSZip.loadAsync(arr).then(function(zip) {
       zip.file('xl/styles.xml', piStylesXml);
       return zip.file('xl/workbook.xml').async('string').then(function(wbXml) {
         return zip.file('xl/_rels/workbook.xml.rels').async('string').then(function(relsXml) {
@@ -12735,7 +12845,8 @@ function runPayrollInstructions() {
         });
       });
     }).then(function(ctx) {
-      // Merge in the Disputes sheet using the SAME colored template as Variance's Download Disputes Tab
+      if (!hasAttItems) return ctx.zip.generateAsync({type:'arraybuffer', compression:'DEFLATE'});
+      // Merge in the Attendance Items sheet using the SAME colored template as Variance's Download Attendance Items
       return JSZip.loadAsync(dsB64ToUint8Array(DISPUTES_TEMPLATE_B64)).then(function(templZip) {
         return templZip.file('xl/worksheets/sheet1.xml').async('string').then(function(baseSheetXml) {
           var filledXml = dsFillDisputesTemplateSheet(baseSheetXml, piPrevRows, piCurrRows);
@@ -12755,7 +12866,7 @@ function runPayrollInstructions() {
 
             var sheetIdNums = (wbXml.match(/sheetId="(\d+)"/g) || []).map(function(m){ return parseInt(m.match(/\d+/)[0], 10); });
             var maxSheetId = sheetIdNums.length ? Math.max.apply(null, sheetIdNums) : 0;
-            var newSheetEntry = '<sheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" name="Disputes" sheetId="' + (maxSheetId + 1) + '" state="visible" r:id="' + newRId + '"/>';
+            var newSheetEntry = '<sheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" name="Attendance Items" sheetId="' + (maxSheetId + 1) + '" state="visible" r:id="' + newRId + '"/>';
             wbXml = wbXml.replace('</sheets>', newSheetEntry + '</sheets>');
             zip.file('xl/workbook.xml', wbXml);
 
@@ -12810,12 +12921,12 @@ function runPayrollInstructions() {
   mfHeaderRows.forEach(function(ri){ mfHeaderSet[ri] = true; });
   mfNoteRows.forEach(function(ri){ mfNoteSet[ri] = true; });
 
-  var resultDiv = document.getElementById('pi-result');
+  function renderPreview(resultDiv) {
   if (resultDiv) {
     resultDiv.style.display = 'block';
     resultDiv.innerHTML = '<div class="task-result">'
       + '<div class="task-result-title"><i class="ti ti-eye" style="color:#1679FA;font-size:18px;"></i> Review before downloading</div>'
-      + '<div class="result-row"><span class="result-label">New hires</span><span class="result-val">' + (window.newHiresData||[]).length + '</span></div>'
+      + '<div class="result-row"><span class="result-label">New hires</span><span class="result-val">' + nhList.length + '</span></div>'
       + '<div class="result-row"><span class="result-label">Resigned/ON HOLD</span><span class="result-val">' + (pd.resigned||[]).length + '</span></div>'
       + '<div class="result-row"><span class="result-label">Personal info changes</span><span class="result-val">' + (pd.changes||[]).length + '</span></div>'
       + '<div class="result-row"><span class="result-label">Salary increases</span><span class="result-val">' + (pd.salaryIncrease||[]).length + '</span></div>'
@@ -12826,14 +12937,19 @@ function runPayrollInstructions() {
       + '<div style="margin-top:14px;">'
       + '<div style="font-size:12px;font-weight:600;color:#1a1a2e;margin-bottom:6px;">Masterfile Changes sheet</div>'
       + previewTable(mfRows, 10, mfTitleSet, mfHeaderSet, mfNoteSet)
-      + '<div style="font-size:12px;font-weight:600;color:#1a1a2e;margin-bottom:6px;margin-top:12px;">Disputes sheet (styled like Variance\u2019s Disputes Tab)</div>'
-      + previewTable(prevPreview.rows, 8, prevTitleSet, prevHeaderSet, {})
-      + previewTable(currPreview.rows, 8, currTitleSet, currHeaderSet, {})
+      + (hasAttItems
+          ? '<div style="font-size:12px;font-weight:600;color:#1a1a2e;margin-bottom:6px;margin-top:12px;">Attendance Items sheet (styled like Variance\u2019s Attendance Items)</div>'
+            + previewTable(prevPreview.rows, 8, prevTitleSet, prevHeaderSet, {})
+            + previewTable(currPreview.rows, 8, currTitleSet, currHeaderSet, {})
+          : '<div style="font-size:12px;color:#9898a6;margin-top:12px;">No Attendance Items \u2014 that sheet will be left out of the file.</div>')
       + '</div>'
       + '<button onclick="window._piConfirmDownload && window._piConfirmDownload()" style="margin-top:12px;padding:9px 18px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:Rubik,sans-serif;display:inline-flex;align-items:center;gap:6px;">'
       + '<i class="ti ti-download" style="font-size:15px;"></i> Looks good — Download Excel File</button>'
       + '<div style="font-size:11px;color:#9898a6;margin-top:6px;">If something looks off, close this and go fix it in the source task (New Hires, Profile Updates, Variance, or Disputes), then re-run.</div>';
   }
+  }
+
+  return { hasContent: hasContent, download: download, renderPreview: renderPreview };
 }
 
 // Given a Variance cutoff's shown/saved payout date (Date object or a parseable date string),
@@ -13530,6 +13646,8 @@ function renderVarBatchList() {
       }).join('')
     + (varBatchGroups.some(function(g){return g.status==='done';})
         ? '<button onclick="varDownloadAllGroups()" class="dl-btn" style="margin-top:8px;"><i class="ti ti-download"></i> Download all processed subcompanies</button>'
+          + '<button onclick="varDownloadAllAttItems()" class="dl-btn" style="margin-top:8px;"><i class="ti ti-ticket"></i> Download consolidated Attendance Items</button>'
+          + '<div style="font-size:11px;color:#9898a6;margin-top:4px;">One file, one sheet per subcompany with variances. Subcompanies with none get no sheet.</div>'
         : '');
 }
 
@@ -13574,17 +13692,17 @@ function varDownloadAllGroups() {
   doneGroups.forEach(function(x) {
     varBatchGroups[x.gi].cutoffs.forEach(function(co) {
       queue.push({ gi: x.gi, fn: function(){ varDownload(co.id); } });
-      if (co._withVar && co._withVar.length) {
-        queue.push({ gi: x.gi, fn: function(){ varDisputesDownload(co.id); } });
-      }
     });
   });
+  // Attendance Items go into ONE consolidated file (a sheet per sub with findings) instead of
+  // a separate file per sub -- runs last, independent of the active-group swapping below.
+  queue.push({ gi: -1, fn: function(){ varDownloadAllAttItems(); } });
   var i = 0;
   var lastGi = -1;
   function next() {
     if (i >= queue.length) return;
     var item = queue[i];
-    if (item.gi !== lastGi) {
+    if (item.gi >= 0 && item.gi !== lastGi) {
       varCutoffs.length = 0;
       Array.prototype.push.apply(varCutoffs, varBatchGroups[item.gi].cutoffs);
       varActiveGroupIdx = item.gi;
@@ -13601,7 +13719,7 @@ function varDownloadAllGroups() {
 // Short (3+ letter) code for whichever subcompany is actually active in the Variance
 // Analysis tool right now (e.g. "ADV", "CGI") — falls back to the outer workspace's
 // client only when no batch group is active, and to the client's full name/key if it
-// has no short code set. Used for both the filename and the Disputes Tab sheet name so
+// has no short code set. Used for both the filename and the Attendance Items sheet name so
 // they always reflect what's selected in this tool's own dropdown, not a stale/unrelated
 // workspace elsewhere in the app.
 function varActiveSubShortName() {
@@ -13609,6 +13727,9 @@ function varActiveSubShortName() {
   var key = (gi >= 0 && varBatchGroups[gi] && varBatchGroups[gi].clientKey)
     ? varBatchGroups[gi].clientKey
     : ((typeof currentWsClient !== 'undefined' ? currentWsClient : null) || window._wsClient || null);
+  return varSubShortName(key);
+}
+function varSubShortName(key) {
   if (!key) return 'Client';
   var c = clients[key];
   return (c && (c.av || c.name)) || key;
@@ -13729,145 +13850,144 @@ function varDownload(coId) {
 // because we inject values directly into this file's XML rather than rebuilding it.
 var DISPUTES_TEMPLATE_B64 = "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";
 
-function varDisputesDownload(coId) {
-  var co = varCutoffs.find(function(c){ return c.id === coId; });
-  if (!co || !co._withVar || !co._withVar.length) {
-    if (typeof showToast === 'function') showToast('No variances detected for this cut-off', '#e67e00');
-    return;
-  }
-  if (typeof JSZip === 'undefined') {
-    if (typeof showToast === 'function') showToast('JSZip not loaded \u2014 cannot build Disputes Tab', '#e67e00');
-    return;
-  }
-
+// Verified variance findings for one cut-off, as Attendance Items rows (same {id,empNo,name,...}
+// shape dsFillDisputesTemplateSheet takes). Employees flagged as missing aren't verified
+// variances -- they're counted in skippedFlagged instead and need manual review first.
+function varAttItemsRows(co) {
   var VAR_KEEP = ['ID','Name','Days Absent','Undertime (min)',
     'Ord-OT','Ord-ND','Ord-ND-OT','RD','RD-OT','RD-ND','RD-ND-OT',
     'SH','SH-OT','SH-ND','SH-ND-OT','LH','LH-OT','LH-ND','LH-ND-OT',
     'SH-RD','SH-RD-OT','SH-RD-ND','SH-RD-ND-OT','LH-RD','LH-RD-OT','LH-RD-ND','LH-RD-ND-OT',
     'DH','DH-OT','DH-ND','DH-ND-OT','DH-RD','DH-RD-OT','DH-RD-ND','DH-RD-ND-OT'];
-
   var UNIT_BY_COL = {2:'Days', 3:'Mins'}; // everything else defaults to Hrs
-  var rows = [];
-  var skippedFlagged = 0;
-  co._withVar.forEach(function(emp) {
-    if (emp.missing) { skippedFlagged++; return; } // not a verified variance — needs manual review first
+  var rows = [], skippedFlagged = 0;
+  ((co && co._withVar) || []).forEach(function(emp) {
+    if (emp.missing) { skippedFlagged++; return; }
     for (var ci = 2; ci < 35; ci++) {
       var v = emp.row[ci];
       if (Math.abs(v) < 0.001) continue;
       rows.push({
-        id: emp.id, name: emp.name, detail: VAR_KEEP[ci], number: Math.abs(v),
-        unit: UNIT_BY_COL[ci] || 'Hrs',
-        kind: v > 0 ? 'Addition' : 'Deduction'
+        id: '', empNo: emp.id, name: emp.name, detail: VAR_KEEP[ci], number: Math.abs(v),
+        unit: UNIT_BY_COL[ci] || 'Hrs', kind: v > 0 ? 'Addition' : 'Deduction',
+        remarks: 'Based on Attendance Variance Analysis Report'
       });
     }
   });
-  if (!rows.length) {
-    if (typeof showToast === 'function') showToast('No verified variances to log' + (skippedFlagged ? ' \u2014 ' + skippedFlagged + ' employee(s) flagged as missing need manual review first' : ''), '#e67e00');
-    return;
-  }
-  if (skippedFlagged && typeof showToast === 'function') {
-    showToast(skippedFlagged + ' flagged employee(s) excluded \u2014 check the Attendance tab\'s Flag column', '#e67e00');
-  }
+  return { rows: rows, skippedFlagged: skippedFlagged };
+}
 
-  var sheetName = (varActiveSubShortName() + '_Disputes Tab').replace(/[:\\\/\?\*\[\]]/g, '-').slice(0,31);
+function varSafeSheetName(name) {
+  return String(name).replace(/[:\\\/\?\*\[\]]/g, '-').slice(0, 31);
+}
 
-  function b64ToUint8Array(b64) {
-    var bin = atob(b64);
-    var bytes = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes;
-  }
-  function escXml(s) {
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  }
-  // The embedded template has exactly ONE pre-styled blank row (row 3) under the
-  // "Previous Attendance" header. We clone that row's style N times (one per finding),
-  // then shift everything below (the gap + "Current Attendance" table) down to follow
-  // immediately \u2014 so there's no long scroll of unused blank rows.
-  function cloneStyleRow(rowXml, newRowNum, values) {
-    // rowXml looks like: <c r="A3" s="6" t="n"></c><c r="B3" s="6" t="n"></c>...
-    return rowXml.replace(/<c r="([A-Z]+)\d+" s="(\d+)" t="n"><\/c>/g, function(m, col, s) {
-      var val = values[col];
-      if (val === undefined || val === '' ) return '<c r="' + col + newRowNum + '" s="' + s + '" t="n"></c>';
-      if (val.isNumber) return '<c r="' + col + newRowNum + '" s="' + s + '" t="n"><v>' + val.v + '</v></c>';
-      return '<c r="' + col + newRowNum + '" s="' + s + '" t="inlineStr"><is><t>' + escXml(val.v) + '</t></is></c>';
-    });
-  }
-  // Shifts every <row> after `afterRow` (and its cell refs) down by `delta`.
-  function shiftRowsAfter(xml, afterRow, delta) {
-    if (delta === 0) return xml;
-    return xml.replace(/<row r="(\d+)"([^>]*)>([\s\S]*?)<\/row>/g, function(full, rNum, attrs, inner) {
-      var n = parseInt(rNum, 10);
-      if (n <= afterRow) return full;
-      var newN = n + delta;
-      var newInner = inner.replace(/r="([A-Z]+)(\d+)"/g, function(m2, col, rr) {
-        return parseInt(rr, 10) === n ? ('r="' + col + newN + '"') : m2;
-      });
-      return '<row r="' + newN + '"' + attrs + '>' + newInner + '</row>';
-    });
-  }
-  // Shifts row numbers embedded in cell-range strings like "C6:I6" or "A1:I10".
-  function shiftCellRangeRefs(str, afterRow, delta) {
-    if (delta === 0) return str;
-    return str.replace(/([A-Z]+)(\d+)/g, function(m, col, rr) {
-      var n = parseInt(rr, 10);
-      return col + (n > afterRow ? (n + delta) : n);
-    });
-  }
-
-  JSZip.loadAsync(b64ToUint8Array(DISPUTES_TEMPLATE_B64)).then(function(zip) {
+// Builds an Attendance Items workbook from the embedded colored template -- one sheet per entry
+// in `sheets` ([{name, prevRows, currRows}]), each a filled copy of the template's single sheet.
+// Resolves to an ArrayBuffer.
+function buildAttItemsWorkbook(sheets) {
+  var CT_SHEET = 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml';
+  var REL_SHEET = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet';
+  function escAttr(s) { return dsEscXml(s).replace(/"/g, '&quot;'); }
+  return JSZip.loadAsync(dsB64ToUint8Array(DISPUTES_TEMPLATE_B64)).then(function(zip) {
     return Promise.all([
       zip.file('xl/worksheets/sheet1.xml').async('string'),
-      zip.file('xl/workbook.xml').async('string')
-    ]).then(function(files) {
-      var sheetXml = files[0];
-      var wbXml = files[1];
-      var n = rows.length;
-      var delta = n - 1; // template ships with exactly 1 pre-styled blank row (row 3)
-
-      // 1. Shift everything after row 3 (the gap + Current Attendance table) down by delta
-      sheetXml = shiftRowsAfter(sheetXml, 3, delta);
-      sheetXml = sheetXml.replace(/<mergeCells[^>]*>([\s\S]*?)<\/mergeCells>/, function(m, inner) {
-        return m.replace(inner, shiftCellRangeRefs(inner, 3, delta));
+      zip.file('xl/workbook.xml').async('string'),
+      zip.file('xl/_rels/workbook.xml.rels').async('string'),
+      zip.file('[Content_Types].xml').async('string')
+    ]).then(function(f) {
+      var baseXml = f[0], wbXml = f[1], relsXml = f[2], ctXml = f[3];
+      var sheetEntries = '', extraRels = '', extraCts = '', used = {};
+      sheets.forEach(function(s, i) {
+        var n = i + 1;
+        // Sheet names must be unique in a workbook -- truncation to 31 chars can collide.
+        var nm = varSafeSheetName(s.name), k = 2;
+        while (used[nm.toLowerCase()]) { var sfx = ' (' + k++ + ')'; nm = varSafeSheetName(s.name).slice(0, 31 - sfx.length) + sfx; }
+        used[nm.toLowerCase()] = true;
+        zip.file('xl/worksheets/sheet' + n + '.xml', dsFillDisputesTemplateSheet(baseXml, s.prevRows || [], s.currRows || []));
+        var rId = n === 1 ? 'rId1' : ('rIdAI' + n);
+        if (n > 1) {
+          extraRels += '<Relationship Type="' + REL_SHEET + '" Target="/xl/worksheets/sheet' + n + '.xml" Id="' + rId + '"/>';
+          extraCts += '<Override PartName="/xl/worksheets/sheet' + n + '.xml" ContentType="' + CT_SHEET + '"/>';
+        }
+        sheetEntries += '<sheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" name="' + escAttr(nm) + '" sheetId="' + n + '" state="visible" r:id="' + rId + '"/>';
       });
-      sheetXml = sheetXml.replace(/<dimension ref="([^"]+)"\/>/, function(m, ref) {
-        return '<dimension ref="' + shiftCellRangeRefs(ref, 3, delta) + '"/>';
-      });
-
-      // 2. Replace the single style row (row 3) with N cloned+filled rows
-      var styleRowMatch = sheetXml.match(/<row r="3">([\s\S]*?)<\/row>/);
-      var styleRowInner = styleRowMatch ? styleRowMatch[1] : '';
-      var newRowsXml = rows.map(function(row, i) {
-        var r = 3 + i;
-        var values = {
-          C: {v: row.id, isNumber:false}, D: {v: row.name, isNumber:false},
-          E: {v: row.detail, isNumber:false}, F: {v: row.number, isNumber:true},
-          G: {v: row.unit, isNumber:false}, H: {v: row.kind, isNumber:false},
-          I: {v: 'Based on Attendance Variance Analysis Report', isNumber:false}
-        };
-        return '<row r="' + r + '">' + cloneStyleRow(styleRowInner, r, values) + '</row>';
-      }).join('');
-      sheetXml = sheetXml.replace(/<row r="3">[\s\S]*?<\/row>/, newRowsXml);
-
-      zip.file('xl/worksheets/sheet1.xml', sheetXml);
-
-      wbXml = wbXml.replace('name="Template_Disputes Tab"', 'name="' + escXml(sheetName) + '"');
-      zip.file('xl/workbook.xml', wbXml);
-
+      zip.file('xl/workbook.xml', wbXml.replace(/<sheets>[\s\S]*<\/sheets>/, '<sheets>' + sheetEntries + '</sheets>'));
+      zip.file('xl/_rels/workbook.xml.rels', relsXml.replace('</Relationships>', extraRels + '</Relationships>'));
+      zip.file('[Content_Types].xml', ctXml.replace('</Types>', extraCts + '</Types>'));
       return zip.generateAsync({type:'arraybuffer', compression:'DEFLATE'});
     });
-  }).then(function(arrBuf) {
-    var fname = (varActiveSubShortName() + '_Disputes Tab_' + co._payout).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx';
-    var blob = new Blob([arrBuf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url; a.download = fname; a.click();
-    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
-    if (typeof showToast === 'function') showToast('Downloaded: ' + fname);
-  }).catch(function(err) {
-    console.error('Disputes Tab build error:', err);
-    if (typeof showToast === 'function') showToast('Error building Disputes Tab: ' + (err.message || err), '#e67e00');
   });
+}
+
+function varSaveArrayBuffer(arrBuf, fname) {
+  var blob = new Blob([arrBuf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = fname; a.click();
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+  if (typeof showToast === 'function') showToast('Downloaded: ' + fname);
+}
+
+// Single cut-off's Attendance Items file (formerly "Disputes Tab"). Never builds an empty file:
+// the button is disabled when there are no verified variance rows, and this re-checks anyway.
+function varDisputesDownload(coId) {
+  var co = varCutoffs.find(function(c){ return c.id === coId; });
+  var res = varAttItemsRows(co);
+  if (!res.rows.length) {
+    if (typeof showToast === 'function') showToast('No verified variances to log' + (res.skippedFlagged ? ' — ' + res.skippedFlagged + ' employee(s) flagged as missing need manual review first' : ''), '#e67e00');
+    return;
+  }
+  if (typeof JSZip === 'undefined') {
+    if (typeof showToast === 'function') showToast('JSZip not loaded — cannot build Attendance Items', '#e67e00');
+    return;
+  }
+  if (res.skippedFlagged && typeof showToast === 'function') {
+    showToast(res.skippedFlagged + ' flagged employee(s) excluded — check the Attendance tab\'s Flag column', '#e67e00');
+  }
+  var shortName = varActiveSubShortName();
+  return buildAttItemsWorkbook([{ name: shortName + '_Attendance Items', prevRows: res.rows, currRows: [] }])
+    .then(function(arrBuf) {
+      varSaveArrayBuffer(arrBuf, (shortName + '_Attendance Items_' + co._payout).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx');
+    }).catch(function(err) {
+      console.error('Attendance Items build error:', err);
+      if (typeof showToast === 'function') showToast('Error building Attendance Items: ' + (err.message || err), '#e67e00');
+    });
+}
+
+// One file for every processed subcompany, one sheet per subcompany cut-off that actually has
+// verified variance rows -- subs/cut-offs with none get no sheet, and no file at all if nothing
+// in the whole batch has any.
+function varDownloadAllAttItems() {
+  if (typeof JSZip === 'undefined') {
+    if (typeof showToast === 'function') showToast('JSZip not loaded — cannot build Attendance Items', '#e67e00');
+    return Promise.resolve();
+  }
+  var sheets = [], payouts = [];
+  varBatchGroups.forEach(function(g) {
+    if (g.status !== 'done' || !g.clientKey) return;
+    var withRows = (g.cutoffs || []).map(function(co){ return { co: co, rows: varAttItemsRows(co).rows }; })
+      .filter(function(x){ return x.rows.length; });
+    withRows.forEach(function(x) {
+      var label = varSubShortName(g.clientKey);
+      // Only disambiguate by payout when this sub has more than one cut-off with findings.
+      if (withRows.length > 1) {
+        var d = new Date(x.co._payout);
+        label += ' ' + (isNaN(d.getTime()) ? String(x.co._payout || '') : d.toLocaleDateString('en-US', {month:'short', day:'numeric'}));
+      }
+      sheets.push({ name: label + ' Attendance Items', prevRows: x.rows, currRows: [] });
+      if (x.co._payout && payouts.indexOf(x.co._payout) < 0) payouts.push(x.co._payout);
+    });
+  });
+  if (!sheets.length) {
+    if (typeof showToast === 'function') showToast('No subcompany has verified variances — no Attendance Items file generated', '#e67e00');
+    return Promise.resolve();
+  }
+  var grpKey = window.currentWsGroup || window.currentWsClient || 'Client';
+  var fname = (grpKey + '_Attendance Items' + (payouts.length === 1 ? '_' + payouts[0] : '')).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx';
+  return buildAttItemsWorkbook(sheets).then(function(arrBuf) { varSaveArrayBuffer(arrBuf, fname); })
+    .catch(function(err) {
+      console.error('Attendance Items build error:', err);
+      if (typeof showToast === 'function') showToast('Error building Attendance Items: ' + (err.message || err), '#e67e00');
+    });
 }
 
 function varFinalize(coId) {
@@ -17261,6 +17381,7 @@ function runNewHires() {
     });
     window.nhRows = merged;
     window.newHiresData = merged;
+    if (clientKey) { window.newHiresByClient = window.newHiresByClient || {}; window.newHiresByClient[clientKey] = merged; }
     btn.disabled = false;
     btn.innerHTML = '<i class="ti ti-sparkles"></i> Re-extract';
     nhRenderPreview(payout, '', '', clientKey);
@@ -17458,6 +17579,8 @@ function nhFinalize() {
 function nhFinalizeConfirmed() {
   window.nhFinalized = true;
   window.newHiresData = window.nhRows || [];
+  var _nhCk = (typeof currentWsClient !== 'undefined' ? currentWsClient : null) || window._wsClient || '';
+  if (_nhCk) { window.newHiresByClient = window.newHiresByClient || {}; window.newHiresByClient[_nhCk] = window.newHiresData; }
   var badge = document.getElementById('nh-finalized-badge');
   if (badge) badge.style.display = 'flex';
   var btn = document.getElementById('nh-finalize-btn');
