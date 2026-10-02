@@ -10960,8 +10960,10 @@ function findMostRecentlyCompletedPeriodIdx(periods) {
 // though the next one's attendance-coverage date range has technically already begun on the
 // calendar. Returns -1 if no period's first deadline has started yet (e.g. before the very
 // first cutoff in an uploaded calendar).
-function findCurrentCutoffStartedIdx(periods) {
-  var now = new Date(); now.setHours(0,0,0,0);
+// asOfDate (optional) asks "which cut-off had started as of that date" instead of today --
+// used by dtmReceivedCutoffLabel for a ticket's Email Received date.
+function findCurrentCutoffStartedIdx(periods, asOfDate) {
+  var now = asOfDate ? new Date(asOfDate.getTime()) : new Date(); now.setHours(0,0,0,0);
   var idx = -1, idxFirstDl = null;
   periods.forEach(function(p, i) {
     var firstDl = p.deadlines && p.deadlines[0] && p.deadlines[0].date;
@@ -26899,18 +26901,19 @@ function dtmSaveCutoff(value) {
 // rather than stored anywhere, so it can never drift from what Email Received actually says
 // and never gets overwritten by transferring the ticket to a different cut-off below.
 //
-// Deliberately does NOT use ticketApplicableCutoffKey -- that function (and the
-// findCurrentCutoffStartedIdx it calls) resolves against today's real date internally, with no
-// way to ask "what was current back on this other date". Reusing it here would have silently
-// shown whichever period is current *now* for any ticket older than the current cut-off,
-// instead of the period that was genuinely active when the email came in. Uses the real
-// calendar's attendance-coverage windows directly instead (findCalendarPeriodIdxAsOf).
+// Uses the same "cut-off has started" rule as the ticket's own Cut-off (findCurrentCutoffStartedIdx,
+// evaluated as of the Email Received date rather than today). It used to use the raw attendance-
+// coverage window (findCalendarPeriodIdxAsOf) instead, which runs ahead of the started cut-off --
+// e.g. a ticket logged during Oct 1st (and shown as Oct 1st in the Disputes tab) came out as
+// "received during Oct 2nd" in the Dispute Summary report, because Oct 2nd's attendance window
+// had already begun. Only falls back to the attendance window when no cut-off had started yet.
 function dtmReceivedCutoffLabel(d) {
   var receivedDt = (typeof parseTATEmailTime === 'function') ? parseTATEmailTime(d.emailTime) : null;
   if (!receivedDt) return '';
   var realPeriods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
   if (!realPeriods.length) return '';
-  var p = realPeriods[findCalendarPeriodIdxAsOf(realPeriods, receivedDt)];
+  var startedIdx = findCurrentCutoffStartedIdx(realPeriods, receivedDt);
+  var p = realPeriods[startedIdx >= 0 ? startedIdx : findCalendarPeriodIdxAsOf(realPeriods, receivedDt)];
   return p ? (p.monthName + ' ' + (p.period === 1 ? '1st' : '2nd')) : '';
 }
 
