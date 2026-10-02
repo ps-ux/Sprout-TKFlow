@@ -13645,7 +13645,7 @@ function renderVarBatchList() {
         return rowHtml + (isActive ? '<div id="var-result" style="display:block;margin:-2px 0 14px;"></div>' : '');
       }).join('')
     + (varBatchGroups.some(function(g){return g.status==='done';})
-        ? '<button onclick="varDownloadAllGroups()" class="dl-btn" style="margin-top:8px;"><i class="ti ti-download"></i> Download all processed subcompanies</button>'
+        ? '<button onclick="varDownloadAllGroups()" class="dl-btn" style="margin-top:8px;"><i class="ti ti-download"></i> Download Variance Report and Attendance Items of all processed subcompanies</button>'
           + '<button onclick="varDownloadAllAttItems()" class="dl-btn" style="margin-top:8px;"><i class="ti ti-ticket"></i> Download consolidated Attendance Items</button>'
           + '<div style="font-size:11px;color:#9898a6;margin-top:4px;">One file, one sheet per subcompany with variances. Subcompanies with none get no sheet.</div>'
         : '');
@@ -13716,10 +13716,9 @@ function varDownloadAllGroups() {
 }
 
 
-// Short (3+ letter) code for whichever subcompany is actually active in the Variance
-// Analysis tool right now (e.g. "ADV", "CGI") — falls back to the outer workspace's
-// client only when no batch group is active, and to the client's full name/key if it
-// has no short code set. Used for both the filename and the Attendance Items sheet name so
+// Short key for whichever subcompany is actually active in the Variance
+// Analysis tool right now (e.g. "ADV", "KNLSI") — falls back to the outer workspace's
+// client only when no batch group is active. Used for both the filename and the Attendance Items sheet name so
 // they always reflect what's selected in this tool's own dropdown, not a stale/unrelated
 // workspace elsewhere in the app.
 function varActiveSubShortName() {
@@ -13730,9 +13729,9 @@ function varActiveSubShortName() {
   return varSubShortName(key);
 }
 function varSubShortName(key) {
-  if (!key) return 'Client';
-  var c = clients[key];
-  return (c && (c.av || c.name)) || key;
+  // The client's own short key (e.g. "KNLSI"), same as Current Attendance's filename --
+  // not c.av, which is the 3-letter avatar badge code and truncated KNLSI to "KNL".
+  return key || 'Client';
 }
 
 function varDownload(coId) {
