@@ -20854,11 +20854,19 @@ async function emailDetectVar() {
   var out = [];
   var cks = emailClientKeys();
   var byClient = {}; // k -> [{payout, attData}, ...]
+  // Only the payout Variance itself targets right now (most recently completed payout, same as
+  // buildVarCard's Cut-off 1 default) -- previously took EVERY finalized run it could find with
+  // no payout filter at all, so an older finalized run (confirmed live: Aug 28 on KN while the
+  // email covered Sept 16-30) showed up in place of the current one.
+  var _vPeriods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
+  var _vP = _vPeriods.length ? _vPeriods[findMostRecentlyCompletedPeriodIdx(_vPeriods)] : null;
+  var targetPayout = (_vP && _vP.payout) ? _vP.payout.toLocaleDateString('en-US', {month:'long', day:'numeric', year:'numeric'}) : '';
   var varGroups = (typeof varBatchGroups !== 'undefined') ? varBatchGroups : [];
   varGroups.forEach(function(g) {
     if (!g.clientKey) return;
     (g.cutoffs || []).forEach(function(co) {
       if (co._attData === undefined || !co._finalized) return;
+      if (targetPayout && co._payout !== targetPayout) return;
       if (!byClient[g.clientKey]) byClient[g.clientKey] = [];
       byClient[g.clientKey].push({ payout: co._payout, attData: co._attData });
     });
@@ -20875,8 +20883,10 @@ async function emailDetectVar() {
     var companyId = clients[k] && clients[k].companyId;
     if (!companyId) continue;
     try {
-      var res = await supabaseClient.from('task_cutoff_review_state').select('*')
+      var q = supabaseClient.from('task_cutoff_review_state').select('*')
         .eq('company_id', companyId).eq('task_key', 'variance');
+      if (targetPayout) q = q.eq('cutoff_label', targetPayout);
+      var res = await q;
       if (res.error || !res.data) continue;
       res.data.forEach(function(row) {
         var data = row.data || {};
@@ -20889,6 +20899,10 @@ async function emailDetectVar() {
 
   var keysToUse = cks.length ? cks : Object.keys(byClient);
   keysToUse.forEach(function(k) {
+    if (targetPayout && !(byClient[k] && byClient[k].length)) {
+      out.push({ id: 'var-' + k + '-' + targetPayout, client: k, text: targetPayout + ': Variance Analysis not finalized yet.' });
+      return;
+    }
     (byClient[k] || []).forEach(function(entry) {
       var p = entry.payout;
       var attData = entry.attData || [];
