@@ -1738,6 +1738,7 @@ function signInWithGoogle() {
             <button onclick="document.getElementById('cal-file-input').click()" style="display:flex;align-items:center;gap:6px;padding:6px 14px;background:#fff;color:#6b6b80;border:1px solid #EBEBEF;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-upload" style="font-size:13px;"></i> Upload TK Calendar (.xlsx) — or drag it here</button>
             <input type="file" id="cal-file-input" accept=".xlsx,.xls" style="display:none;" onchange="loadTKCalendarFile(this)">
             <div id="cal-file-name" style="font-size:11px;color:#9898a6;font-style:italic;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title=""></div>
+            <button id="cal-remove-btn" onclick="removeTKCalendar()" style="display:none;align-items:center;gap:4px;padding:4px 10px;background:none;color:#c0392b;border:1px solid #EBEBEF;border-radius:10px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-trash" style="font-size:12px;"></i> Remove</button>
             <div style="margin-left:auto;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
               <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#6b6b80;"><span style="width:10px;height:10px;border-radius:3px;background:#EBFCF1;border:1px solid #95F0B7;display:inline-block;"></span>Payout</span>
               <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#6b6b80;"><span style="width:10px;height:10px;border-radius:3px;background:#dbeafe;border:1px solid #93c5fd;display:inline-block;"></span>Deadline</span>
@@ -6255,7 +6256,7 @@ function renderDashSchedule() {
     var seenGroups = {};
     currentUser.assignedClients.forEach(function(ck) {
       var cl = (typeof clients !== 'undefined') && clients[ck];
-      if (!cl) return;
+      if (!cl || cl._isTest) return; // test clients are private sandboxes -- keep their dates off the dashboard
       // Use group key if available, else client key
       var grpKey = cl.group || ck;
       if (seenGroups[grpKey]) return;
@@ -6450,7 +6451,7 @@ function renderMiniCal() {
     var seenHolidayKeys = {};
     currentUser.assignedClients.forEach(function(ck) {
       var cl = (typeof clients !== 'undefined') && clients[ck];
-      if (!cl) return;
+      if (!cl || cl._isTest) return; // test clients are private sandboxes -- keep their dates off the dashboard
       var grpKey = cl.group || ck;
       if (seenGrps[grpKey]) return;
       seenGrps[grpKey] = true;
@@ -6654,6 +6655,7 @@ function renderNotifCard() {
   var oneHourOut = new Date(nowForDl.getTime() + 60 * 60 * 1000);
   var seenCalStores = {};
   (currentUser.processClients || []).forEach(function(ck) {
+    if (clients[ck] && clients[ck]._isTest) return; // test clients' deadlines stay off the dashboard
     var storeKey = Object.keys(clientGroups).find(function(gk){ return (clientGroups[gk].subs||[gk]).indexOf(ck) >= 0; }) || ck;
     if (seenCalStores[storeKey]) return;
     seenCalStores[storeKey] = true;
@@ -7307,10 +7309,10 @@ function renderAdminCalendar() {
     var grp = (typeof clientGroups !== 'undefined') ? clientGroups[storeKey] : null;
     if (grp) {
       var subs = grp.subs || [storeKey];
-      return subs.every(function(sk){ return !clients[sk] || clients[sk]._churned; });
+      return subs.every(function(sk){ return !clients[sk] || clients[sk]._churned || clients[sk]._isTest; });
     }
     var c = (typeof clients !== 'undefined') ? clients[storeKey] : null;
-    return !!(c && c._churned);
+    return !!(c && (c._churned || c._isTest)); // test clients are hidden here too, same as churned
   }
   Object.keys(window._calStore || {}).forEach(function(storeKey) {
     var store = window._calStore[storeKey];
@@ -28821,6 +28823,44 @@ async function _persistCalendar(scope, fileName, arrayBuffer, calPeriods, calHol
   }
 }
 
+// Removes this client's (or group's) active calendar -- the calendars row and its Storage file.
+// The Policy Bank copy archived at upload time is a separate historical record and stays.
+// Scope/key captured up front for the same reason loadTKCalendarFile does: _calKey()/_calScope()
+// read the live workspace, which could change while the confirm dialog is open.
+function removeTKCalendar() {
+  var key = _calKey();
+  var scope = _calScope();
+  var store = _calStore[key];
+  var fileName = (store && store.calFileName) || 'this calendar';
+  var label = (typeof _clientNameFor === 'function' && _clientNameFor(key)) || key;
+  appConfirm('Remove calendar', 'Remove ' + fileName + ' from ' + label + '? Its payouts and deadlines disappear from the Hub until a new calendar is uploaded. The copy in Policy Bank is kept.', async function() {
+    if (scope) {
+      var existingRes = await supabaseClient.from('calendars').select('storage_path').eq('scope_type', scope.type).eq('scope_id', scope.id).maybeSingle();
+      // .select() so a delete silently blocked by RLS (0 rows, no error) is caught instead of
+      // reappearing on the next reload.
+      var delRes = await supabaseClient.from('calendars').delete().eq('scope_type', scope.type).eq('scope_id', scope.id).select('id');
+      if (delRes.error) { if (typeof showToast === 'function') showToast('Could not remove calendar: ' + delRes.error.message, '#c0392b'); return; }
+      if (existingRes.data && !(delRes.data || []).length) { if (typeof showToast === 'function') showToast('Calendar was not removed — permission denied', '#c0392b'); return; }
+      if (existingRes.data && existingRes.data.storage_path) {
+        var rmRes = await supabaseClient.storage.from('calendars').remove([existingRes.data.storage_path]);
+        if (rmRes.error) console.warn('Could not remove calendar file', rmRes.error);
+      }
+      if (typeof logAudit === 'function') {
+        logAudit({ action: 'calendar_removed', entityType: 'client', entityId: scope.id, entityLabel: label, field: 'calendar', oldValue: fileName, newValue: null, description: 'Removed calendar file ' + fileName });
+      }
+    }
+    _calStore[key] = { calPeriods: [], calHolidays: {}, calFileName: '' };
+    // Cleared so re-uploading the same file right after still fires the input's onchange.
+    var calInput = document.getElementById('cal-file-input');
+    if (calInput) calInput.value = '';
+    renderTKCalendar();
+    if (typeof renderDashSchedule === 'function') renderDashSchedule();
+    if (typeof renderMiniCal === 'function') renderMiniCal();
+    if (typeof renderNotifCard === 'function') renderNotifCard();
+    if (typeof showToast === 'function') showToast('Calendar removed');
+  }, { okLabel: 'Remove' });
+}
+
 function loadTKCalendarFile(input) {
   var file = input.files[0]; if (!file) return;
   // Captured synchronously, before the async file read -- _calGet()/_calKey()/_calScope() all
@@ -29074,6 +29114,8 @@ function renderTKCalendar() {
   // you'd since switched to, since nothing re-synced it on render.
   var fnEl = document.getElementById('cal-file-name');
   if (fnEl) { fnEl.textContent = store.calFileName || ''; fnEl.title = store.calFileName || ''; }
+  var rmBtn = document.getElementById('cal-remove-btn');
+  if (rmBtn) rmBtn.style.display = (store.calFileName || (store.calPeriods && store.calPeriods.length)) ? 'inline-flex' : 'none';
 
   // Weekly-cadence clients can't use calendar upload yet -- swap the upload row for a notice
   // instead of letting _parseTKCalWb silently mis-parse a Weekly file as semi-monthly.
