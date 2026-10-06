@@ -12019,7 +12019,7 @@ function varDownloadWorkbook(path) {
 // pattern elsewhere in this file rather than blocking the UI on a round-trip.
 async function varSaveCutoffSnapshot(clientKey, co) {
   var companyId = clients[clientKey] && clients[clientKey].companyId;
-  if (!companyId || !co._payout) return;
+  if (!companyId || !co._payout || co._spot) return; // one-employee checks are never saved
   var wbPath = null;
   try {
     var wbArr = XLSX.write(co._varWb, { bookType: 'xlsx', type: 'array' });
@@ -12102,7 +12102,7 @@ function varRenderResultCard(co, cutoffIdx, attData) {
   var additions  = withVar.filter(function(e){ return e.row.slice(2,35).reduce(function(s,v){return s+v;},0)>=0; });
   var deductions = withVar.filter(function(e){ return e.row.slice(2,35).reduce(function(s,v){return s+v;},0)<0; });
 
-  window.varResults[co._payout] = {additions:additions, deductions:deductions, noChange:noChange, attData:attData, finalized: !!co._finalized};
+  if (!co._spot) window.varResults[co._payout] = {additions:additions, deductions:deductions, noChange:noChange, attData:attData, finalized: !!co._finalized};
   co._withVar = withVar;
   co._adds    = additions.length;
   co._deds    = deductions.length;
@@ -12119,7 +12119,7 @@ function varRenderResultCard(co, cutoffIdx, attData) {
   var flagged = attData.filter(function(e){ return e.missing; });
 
   var cardHdr = '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#F4F4F8;border-bottom:1px solid #EBEBEF;">'
-    + '<div><div style="font-size:11px;color:#9898a6;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">Cut-off ' + (cutoffIdx+1) + '</div>'
+    + '<div><div style="font-size:11px;color:#9898a6;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">' + (co._spot ? 'One-employee check · not saved' : 'Cut-off ' + (cutoffIdx+1)) + '</div>'
     + '<div style="font-size:14px;font-weight:600;color:#1a1a2e;">' + co._payout + '</div></div>'
     + '<div style="display:flex;gap:8px;align-items:center;">'
     + '<span style="font-size:11px;background:#edfae8;color:#32CE13;padding:2px 10px;border-radius:20px;font-weight:600;">' + additions.length + ' additions</span>'
@@ -12138,7 +12138,7 @@ function varRenderResultCard(co, cutoffIdx, attData) {
     + (_aiRes.rows.length ? '' : ('disabled title="' + (_aiRes.skippedFlagged ? 'Only flagged employees — review them first; nothing verified to log' : 'No variances detected — nothing to log') + '"')) + '>'
     + '<i class="ti ti-ticket"></i> Download Attendance Items</button>'
     + '<button id="finalize-var-' + co.id + '" onclick="varFinalize(' + co.id + ')" '
-    + 'style="padding:8px 16px;background:#F4F4F8;color:#9898a6;border:1.5px solid #EBEBEF;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:' + (co._finalized ? 'none' : 'inline-flex') + ';align-items:center;gap:6px;">'
+    + 'style="padding:8px 16px;background:#F4F4F8;color:#9898a6;border:1.5px solid #EBEBEF;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;display:' + (co._finalized || co._spot ? 'none' : 'inline-flex') + ';align-items:center;gap:6px;">'
     + '<i class="ti ti-lock" style="font-size:13px;"></i> Mark as finalized</button>'
     + '<span id="finalized-badge-' + co.id + '" style="display:' + (co._finalized ? 'inline-flex' : 'none') + ';font-size:11px;background:#edfae8;color:#32CE13;padding:3px 10px;border-radius:20px;font-weight:600;">'
     + '<i class="ti ti-circle-check" style="font-size:11px;"></i> Finalized — included in Payroll Instructions</span>'
@@ -12301,7 +12301,7 @@ function removeVarCutoffInGroup(gi, coId) {
   if (list) {
     Array.from(list.querySelectorAll('.var-cutoff-card')).forEach(function(card, idx) {
       var label = card.querySelector('[style*="color:#32CE13"]');
-      if (label) label.textContent = 'Cut-off ' + (idx+1);
+      if (label && !card.dataset.spot) label.textContent = 'Cut-off ' + (idx+1);
     });
     if (g.cutoffs.length === 1) {
       var onlyCard = document.getElementById('var-co-' + g.cutoffs[0].id);
@@ -12433,7 +12433,7 @@ function varFinalizedCutoffsFor(clientKey) {
   varBatchGroups.forEach(function(g) {
     if (g.clientKey !== clientKey) return;
     (g.cutoffs || []).forEach(function(co) {
-      if (co._attData === undefined || !co._finalized) return;
+      if (co._attData === undefined || !co._finalized || co._spot) return;
       out.push({ payout: co._payout, attData: co._attData });
     });
   });
@@ -12443,7 +12443,7 @@ function varProcessedCutoffCountFor(clientKey) {
   if (!clientKey || typeof varBatchGroups === 'undefined') return 0;
   return varBatchGroups.reduce(function(s, g) {
     if (g.clientKey !== clientKey) return s;
-    return s + (g.cutoffs || []).filter(function(co){ return co._attData !== undefined; }).length;
+    return s + (g.cutoffs || []).filter(function(co){ return co._attData !== undefined && !co._spot; }).length;
   }, 0);
 }
 // New Hires rows are kept per client (window.newHiresByClient, set on extract/finalize) --
@@ -13011,17 +13011,34 @@ function buildVarCard(co, index, showRemove, gi) {
     // cut-off cards (Sept 15's file showed "Aug 1-15", the Aug 30 card's file showed "Aug 16-31").
     co._origAttCov = _p ? formatAttCovShort(_p.attCov) : null;
   }
-  return '<div class="var-cutoff-card" id="var-co-' + id + '" style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:14px;margin-bottom:10px;">'
+  // One-employee check (co._spot): the payout field becomes a free-text label (e.g. an
+  // employee's name) used for the card title and download filenames. These runs are never
+  // saved to Supabase, can't be finalized, don't refresh the employee-name list, and stay out
+  // of Payroll Instructions / Email findings / the consolidated Attendance Items -- so a quick
+  // single-employee check can't overwrite or leak into the real cut-off's snapshot.
+  var spot = !!co._spot;
+  var _escAttr = function(s){ return String(s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); };
+  var spotLocked = co._attData !== undefined; // already processed -- can't switch modes after the fact
+  var payoutFieldHtml = spot
+    ? '<div style="margin-bottom:8px;"><label class="task-field-label">Name for this check</label>'
+      + '<input class="task-input" type="text" id="var-payout-' + id + '" placeholder="e.g. Joanna Sta Maria" value="' + _escAttr(co._spotLabel) + '" oninput="varSetSpotLabel(' + id + ', this.value)" style="margin-bottom:8px;"></div>'
+    : '<div style="margin-bottom:8px;"><label class="task-field-label">Payout date</label>'
+      + '<input class="task-input" type="text" id="var-payout-' + id + '" readonly placeholder="Upload the client’s calendar in Client Profile to see this" value="' + _varPayoutVal + '" style="margin-bottom:8px;background:var(--bg-secondary,#F4F4F8);color:var(--text-primary);cursor:default;"></div>';
+  var spotToggleHtml = '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#6b6b80;margin:-4px 0 8px;cursor:' + (spotLocked ? 'default' : 'pointer') + ';"' + (spotLocked ? ' title="Already processed — reset to change this"' : '') + '>'
+    + '<input type="checkbox"' + (spot ? ' checked' : '') + (spotLocked ? ' disabled' : '') + ' onchange="varToggleSpot(' + (gi !== undefined ? gi : -1) + ',' + id + ', this.checked)">'
+    + ' One-employee check (type a name instead of using the payout)</label>'
+    + (spot ? '<div style="font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:6px 10px;margin-bottom:8px;">Not saved and can’t be finalized — stays out of Payroll Instructions, Email findings and the consolidated Attendance Items. Download the reports before leaving the page.</div>' : '');
+  return '<div class="var-cutoff-card" id="var-co-' + id + '"' + (spot ? ' data-spot="1"' : '') + ' style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:14px;margin-bottom:10px;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
-    + '<div style="font-size:12px;font-weight:600;color:#32CE13;">Cut-off ' + index + '</div>'
+    + '<div style="font-size:12px;font-weight:600;color:#32CE13;">' + (spot ? 'One-employee check' : 'Cut-off ' + index) + '</div>'
     // Shared between the batch/consolidated flow (real gi passed in) and the single-client
     // flow (gi omitted/undefined) -- must call the matching function for whichever one this
     // card actually belongs to, since they operate on entirely different arrays/DOM ids (see
     // addVarCutoffInGroup/removeVarCutoffInGroup's note on the bug this used to cause).
     + (showRemove ? '<button onclick="' + (gi !== undefined ? 'removeVarCutoffInGroup(' + gi + ',' + id + ')' : 'removeVarCutoff(' + id + ')') + '" style="font-size:11px;color:#9898a6;background:none;border:1px solid #EBEBEF;border-radius:6px;padding:2px 8px;cursor:pointer;font-family:Rubik,sans-serif;">Remove</button>' : '')
     + '</div>'
-    + '<div style="margin-bottom:8px;"><label class="task-field-label">Payout date</label>'
-    + '<input class="task-input" type="text" id="var-payout-' + id + '" readonly placeholder="Upload the client\u2019s calendar in Client Profile to see this" value="' + _varPayoutVal + '" style="margin-bottom:8px;background:var(--bg-secondary,#F4F4F8);color:var(--text-primary);cursor:default;"></div>'
+    + payoutFieldHtml
+    + spotToggleHtml
     + varFileDZ(id, 'orig',   'Previous Attendance Template (Orig)')
     + varFileDZ(id, 'aco',    'Current ACO Template')
     + varFileDZ(id, 'payreg', 'Payroll Summary (PayReg)')
@@ -13052,6 +13069,26 @@ function varFileDZ(id, type, label) {
     + 'onchange="handleVarFile(' + id + ',' + "'" + type + "'" + ',this)">'
     + '</div>';
   return html;
+}
+
+// gi = -1 for the single-client flow (window.varCutoffs). Re-renders just this card in place
+// (uploaded files survive -- varFileDZ reads them back from taskFiles).
+function varToggleSpot(gi, coId, on) {
+  var list = gi >= 0 ? (varBatchGroups[gi] || {}).cutoffs || [] : varCutoffs;
+  var idx = list.findIndex(function(c){ return c.id === coId; });
+  var co = list[idx];
+  if (!co || co._attData !== undefined) return;
+  co._spot = !!on;
+  var el = document.getElementById('var-co-' + coId);
+  if (el) el.outerHTML = buildVarCard(co, idx + 1, list.length > 1, gi >= 0 ? gi : undefined);
+  var inp = on && document.getElementById('var-payout-' + coId);
+  if (inp) inp.focus();
+}
+function varSetSpotLabel(coId, val) {
+  var all = varCutoffs.slice();
+  varBatchGroups.forEach(function(g){ all = all.concat(g.cutoffs || []); });
+  var co = all.find(function(c){ return c.id === coId; });
+  if (co) co._spotLabel = val;
 }
 
 function renderVarCutoffs() {
@@ -13102,7 +13139,7 @@ function removeVarCutoff(coId) {
   if (list) {
     Array.from(list.querySelectorAll('.var-cutoff-card')).forEach(function(card, idx) {
       var label = card.querySelector('[style*="color:#32CE13"]');
-      if (label) label.textContent = 'Cut-off ' + (idx+1);
+      if (label && !card.dataset.spot) label.textContent = 'Cut-off ' + (idx+1);
     });
     // Hide remove button if only 1 card left
     if (varCutoffs.length === 1) {
@@ -13307,14 +13344,15 @@ function runVariance(opts) {
       // round -- leave its existing results/workbook alone instead of complaining about files
       // it was never supposed to have in the first place.
       if (co._attData !== undefined && !res.origWb && !res.acoWb && !res.payregWb) return;
-      var payout = (document.getElementById('var-payout-' + co.id) || {}).value || ('Cut-off '+(cutoffIdx+1));
+      var payout = ((document.getElementById('var-payout-' + co.id) || {}).value || '').trim() || ('Cut-off '+(cutoffIdx+1));
       var safeN  = payout.replace(/[^a-zA-Z0-9]/g, '_');
 
       var orig   = readAttSheet(res.origWb);
       var aco    = readAttSheet(res.acoWb);
       // Every employee in the Orig/ACO templates (ID + Name) refreshes this subcompany's slice of
-      // the employee-name list used by Ad hoc Logs' suggestions.
-      try {
+      // the employee-name list used by Ad hoc Logs' suggestions. Skipped for one-employee checks,
+      // whose files hold only that employee and would shrink the list down to just them.
+      if (!co._spot) try {
         var _rsSub = (typeof varActiveGroupIdx !== 'undefined' && varActiveGroupIdx >= 0 && varBatchGroups[varActiveGroupIdx] && varBatchGroups[varActiveGroupIdx].clientKey)
           || window.currentWsClient || window._wsClient || '';
         var _rsSeen = {}, _rsList = [];
@@ -13415,7 +13453,8 @@ function runVariance(opts) {
       // the Sept 15 payout cutoff), not a payout date -- co._filenamePayout is the PREVIOUS
       // payout's date, a different thing, used only as a fallback here if no calendar was
       // uploaded to compute the real range. See buildVarCard's co._origAttCov comment.
-      var origSheetName = sanitizeSheetName('Orig ' + (co._origAttCov || co._filenamePayout || payout));
+      // A one-employee check's files can be from any period, so the calendar-derived range doesn't apply.
+      var origSheetName = co._spot ? 'Orig' : sanitizeSheetName('Orig ' + (co._origAttCov || co._filenamePayout || payout));
       var acoSheetName   = 'ACO';
       var attSheetName   = 'Attendance';
       var amtSheetName   = 'Amt';
@@ -13538,7 +13577,8 @@ function runVarianceBatch() {
   }
   // Mark the start of processing for each subcompany actually being run right now
   varBatchGroups.forEach(function(g) {
-    if (g.clientKey && typeof markTaskStarted === 'function') markTaskStarted(g.clientKey);
+    var hasRealCutoff = g.cutoffs.some(function(co){ return !co._spot; });
+    if (g.clientKey && hasRealCutoff && typeof markTaskStarted === 'function') markTaskStarted(g.clientKey);
   });
   var btn = document.getElementById('var-run-btn');
   if (btn) btn.disabled = true;
@@ -13579,7 +13619,7 @@ function runVarianceBatch() {
     });
     if (!ready) {
       g.status = 'skipped';
-      g.errorMsg = 'Missing files or payout date \u2014 skipped';
+      g.errorMsg = 'Missing files, payout date or check name \u2014 skipped';
       idx++; next();
       return;
     }
@@ -13960,7 +14000,7 @@ function varDisputesDownload(coId) {
   var shortName = varActiveSubShortName();
   return buildAttItemsWorkbook([{ name: shortName + '_Attendance Items', prevRows: res.rows, currRows: [] }])
     .then(function(arrBuf) {
-      varSaveArrayBuffer(arrBuf, (shortName + '_Attendance Items_' + varAttItemsFilenamePayout(co._payout)).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx');
+      varSaveArrayBuffer(arrBuf, (shortName + '_Attendance Items_' + (co._spot ? co._payout : varAttItemsFilenamePayout(co._payout))).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx');
     }).catch(function(err) {
       console.error('Attendance Items build error:', err);
       if (typeof showToast === 'function') showToast('Error building Attendance Items: ' + (err.message || err), '#e67e00');
@@ -13978,7 +14018,8 @@ function varDownloadAllAttItems() {
   var sheets = [], payouts = [];
   varBatchGroups.forEach(function(g) {
     if (g.status !== 'done' || !g.clientKey) return;
-    var withRows = (g.cutoffs || []).map(function(co){ return { co: co, rows: varAttItemsRows(co).rows }; })
+    var withRows = (g.cutoffs || []).filter(function(co){ return !co._spot; })
+      .map(function(co){ return { co: co, rows: varAttItemsRows(co).rows }; })
       .filter(function(x){ return x.rows.length; });
     withRows.forEach(function(x) {
       var label = varSubShortName(g.clientKey);
@@ -14007,7 +14048,7 @@ function varDownloadAllAttItems() {
 
 function varFinalize(coId) {
   var co = varCutoffs.find(function(c){ return c.id === coId; });
-  if (!co) return;
+  if (!co || co._spot) return;
   co._finalized = true;
 
   // Update UI
