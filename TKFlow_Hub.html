@@ -17267,12 +17267,131 @@ function nhApplyPdfs(rows, pdfMetas) {
         if (k === 'name') return;
         if (!row[k]) { row[k] = parsed.fields[k]; filled.push(k); }
       });
+      if (filled.length) row._pdfFilled = (row._pdfFilled || []).concat(filled);
       window.nhPdfSheets.push({
         fid: res.meta.id, fileName: res.meta.name, rowName: row.name, isNew: isNew, filled: filled,
         scanned: String(res.text || '').replace(/\s+/g, '').length < 40
       });
     });
   });
+}
+
+// "Given [Middle] Last" -> "Last, Given" (Masterfile format). Surname particles (Sta, Dela,
+// De Los, Van...) stay with the surname and Jr/Sr/III stays after the given name. Returns a
+// reason in .flag whenever the split is a guess -- anything other than exactly two plain words
+// (e.g. "Charlie Lorenzo Rosales": is Lorenzo a second given name or a middle name?).
+var NH_SURNAME_PARTICLES = ['sta','sta.','santa','sto','sto.','santo','san','de','del','dela','della','delos','des','la','las','los','da','das','do','dos','du','van','von','der','den','di','mac','mc','le','el','bin','binti','al'];
+function nhFlipName(name) {
+  var s = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!s || s.indexOf(',') >= 0 || s.charAt(0) === '(') return { name: s, flag: null };
+  var parts = s.split(' ');
+  if (parts.length < 2) return { name: s, flag: 'Only one word — could not tell surname from given name' };
+  var suffix = '';
+  if (/^(jr|sr|i{2,3}|iv|v)\.?$/i.test(parts[parts.length - 1]) && parts.length > 2) suffix = parts.pop();
+  var surname = [parts.pop()];
+  while (parts.length > 1 && NH_SURNAME_PARTICLES.indexOf(parts[parts.length - 1].toLowerCase()) >= 0) surname.unshift(parts.pop());
+  var given = parts.join(' ') + (suffix ? ' ' + suffix : '');
+  var out = surname.join(' ') + ', ' + given;
+  var flag = null;
+  if (surname.length > 1) flag = 'Surname taken as "' + surname.join(' ') + '"';
+  else if (parts.length > 1) flag = '"' + parts.slice(1).join(' ') + '" could be a middle name or part of the given name';
+  else if (suffix) flag = 'Suffix "' + suffix + '" kept after the given name';
+  return { name: out, flag: flag ? flag + ' (was "' + s + '")' : null };
+}
+
+// ── Validation window shown before Finalize / Download ─────────────────────────────────────
+var NH_COL_LABELS = { empNo:'Employee No.', name:'Name', hireDate:'Hire Date', basicPay:'Basic Pay', allowName:'Allowance Name',
+  allowAmt:'Allowance Amount', jobTitle:'Job Title', dept:'Department', costCenter:'Cost Center', payrollGroup:'Payroll Group',
+  eeStatus:'EE Status', birthday:'Birthday', tin:'TIN', gender:'Gender', civilStatus:'Civil Status', email:'Email',
+  workdays:'Workdays', sss:'SSS', hdmf:'HDMF', phic:'PHIC', withOT:'With OT', bankName:'Bank Name', bankAccount:'Bank Account',
+  consultant:'Consultant', taxPct:'Tax %', remarks:'Remarks' };
+// Commonly blank on purpose -- not listed as "still empty".
+var NH_OPTIONAL = ['allowName','allowAmt','taxPct','remarks'];
+
+function nhValidate(rows) {
+  var issues = []; // {row, level:'error'|'warn', msg}
+  function add(ri, level, msg) { issues.push({ row: ri, level: level, msg: msg }); }
+  function digits(v) { return String(v || '').replace(/\D/g, ''); }
+  function validDate(v) {
+    var m = String(v || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) return false;
+    var d = new Date(+m[3], +m[1] - 1, +m[2]);
+    return d.getMonth() === +m[1] - 1 && d.getDate() === +m[2];
+  }
+  var seenEmp = {};
+  rows.forEach(function(r, ri) {
+    var emp = String(r.empNo || '').trim();
+    if (!emp) add(ri, 'error', 'No Employee No.');
+    else if (seenEmp[emp] !== undefined) add(ri, 'error', 'Employee No. ' + emp + ' is used twice');
+    else seenEmp[emp] = ri;
+    if (!String(r.name || '').trim() || String(r.name).charAt(0) === '(') add(ri, 'error', 'No name');
+    if (!String(r.hireDate || '').trim()) add(ri, 'error', 'No Hire Date');
+    else if (!validDate(r.hireDate)) add(ri, 'error', 'Hire Date "' + r.hireDate + '" isn’t MM/DD/YYYY');
+    var pay = String(r.basicPay || '').replace(/,/g, '').trim();
+    if (!pay) add(ri, 'error', 'No Basic Pay');
+    else if (isNaN(parseFloat(pay)) || !/^\d+(\.\d+)?$/.test(pay)) add(ri, 'error', 'Basic Pay "' + r.basicPay + '" isn’t a number');
+
+    if (r._nameFlag) add(ri, 'warn', 'Name flipped automatically — ' + r._nameFlag);
+    if (r._pdfFilled && r._pdfFilled.length) add(ri, 'warn', 'Filled from PDF, double-check: ' + r._pdfFilled.map(function(k){ return NH_COL_LABELS[k] || k; }).join(', '));
+    if (r.birthday && !validDate(r.birthday)) add(ri, 'warn', 'Birthday "' + r.birthday + '" isn’t MM/DD/YYYY');
+    if (r.sss && digits(r.sss).length !== 10) add(ri, 'warn', 'SSS should be 10 digits (has ' + digits(r.sss).length + ')');
+    if (r.hdmf && digits(r.hdmf).length !== 12) add(ri, 'warn', 'HDMF should be 12 digits (has ' + digits(r.hdmf).length + ')');
+    if (r.phic && digits(r.phic).length !== 12) add(ri, 'warn', 'PHIC should be 12 digits (has ' + digits(r.phic).length + ')');
+    if (r.tin && [9, 12, 13, 14].indexOf(digits(r.tin).length) < 0) add(ri, 'warn', 'TIN should be 9–14 digits (has ' + digits(r.tin).length + ')');
+    if (r.gender && !/^(male|female)$/i.test(r.gender)) add(ri, 'warn', 'Gender "' + r.gender + '" should be Male or Female');
+    if (r.withOT && !/^(yes|no)$/i.test(r.withOT)) add(ri, 'warn', 'With OT "' + r.withOT + '" should be Yes or No');
+    if (r.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.email)) add(ri, 'warn', 'Email "' + r.email + '" doesn’t look valid');
+    var empty = Object.keys(NH_COL_LABELS).filter(function(k){
+      return NH_OPTIONAL.indexOf(k) < 0 && ['empNo','name','hireDate','basicPay'].indexOf(k) < 0 && !String(r[k] || '').trim();
+    });
+    if (empty.length) add(ri, 'warn', 'Still empty: ' + empty.map(function(k){ return NH_COL_LABELS[k]; }).join(', '));
+  });
+  return issues;
+}
+
+// action: 'finalize' | 'download'. onProceed runs only when the user clicks through.
+function nhOpenValidation(action, onProceed) {
+  var rows = window.nhRows || [];
+  var issues = nhValidate(rows);
+  var errs = issues.filter(function(i){ return i.level === 'error'; }).length;
+  var warns = issues.length - errs;
+  var esc = function(s){ return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
+  var verb = action === 'finalize' ? 'Finalize' : 'Download';
+  var byRow = {};
+  issues.forEach(function(i){ (byRow[i.row] = byRow[i.row] || []).push(i); });
+  var listHtml = rows.map(function(r, ri) {
+    var mine = byRow[ri] || [];
+    var hasErr = mine.some(function(i){ return i.level === 'error'; });
+    var icon = !mine.length ? '<i class="ti ti-circle-check" style="color:#32CE13;"></i>'
+      : hasErr ? '<i class="ti ti-circle-x" style="color:#c0392b;"></i>' : '<i class="ti ti-alert-triangle" style="color:#e67e00;"></i>';
+    return '<div style="padding:8px 0;border-bottom:1px solid #F4F4F8;">'
+      + '<div style="font-size:12.5px;font-weight:600;color:#1a1a2e;display:flex;gap:6px;align-items:center;">' + icon + ' '
+      + esc(r.name || '(no name)') + ' <span style="font-weight:400;color:#9898a6;">' + esc(r.empNo || '') + '</span></div>'
+      + (mine.length ? '<ul style="margin:4px 0 0 22px;padding:0;font-size:11.5px;">' + mine.map(function(i){
+          return '<li style="color:' + (i.level === 'error' ? '#c0392b' : '#92400e') + ';margin:2px 0;">' + esc(i.msg) + '</li>';
+        }).join('') + '</ul>' : '<div style="font-size:11.5px;color:#32CE13;margin-left:22px;">All checks passed</div>')
+      + '</div>';
+  }).join('');
+  var summary = !issues.length ? 'All ' + rows.length + ' employee(s) passed every check.'
+    : (errs ? errs + ' problem(s) that will likely be rejected by payroll' : '') + (errs && warns ? ', ' : '') + (warns ? warns + ' thing(s) to double-check' : '') + '.';
+  var old = document.getElementById('nh-validate-modal');
+  if (old) old.remove();
+  var modal = document.createElement('div');
+  modal.id = 'nh-validate-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:5000;display:flex;align-items:center;justify-content:center;padding:16px;';
+  modal.innerHTML = '<div style="background:var(--bg-card,#fff);border-radius:16px;max-width:560px;width:100%;max-height:85vh;display:flex;flex-direction:column;font-family:Rubik,sans-serif;">'
+    + '<div style="padding:16px 18px 10px;border-bottom:1px solid #EBEBEF;">'
+    + '<div style="font-size:15px;font-weight:600;color:#1a1a2e;">Check before you ' + verb.toLowerCase() + '</div>'
+    + '<div style="font-size:12px;color:' + (errs ? '#c0392b' : warns ? '#92400e' : '#32CE13') + ';margin-top:4px;">' + summary + '</div></div>'
+    + '<div style="padding:4px 18px;overflow-y:auto;flex:1;">' + listHtml + '</div>'
+    + '<div style="padding:12px 18px;border-top:1px solid #EBEBEF;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">'
+    + '<button id="nh-validate-back" style="padding:8px 16px;border:1px solid #EBEBEF;border-radius:12px;background:#fff;font-size:12px;cursor:pointer;font-family:Rubik,sans-serif;">Go back and fix</button>'
+    + '<button id="nh-validate-go" style="padding:8px 16px;border:none;border-radius:12px;background:' + (errs ? '#c0392b' : 'var(--ub-500)') + ';color:#fff;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">'
+    + (issues.length ? verb + ' anyway' : verb) + '</button>'
+    + '</div></div>';
+  document.body.appendChild(modal);
+  document.getElementById('nh-validate-back').onclick = function(){ modal.remove(); };
+  document.getElementById('nh-validate-go').onclick = function(){ modal.remove(); onProceed(); };
 }
 
 var NH_FIELD_LABELS = { birthday:'Birthday', gender:'Gender', civilStatus:'Civil Status', sss:'SSS', phic:'PHIC', tin:'TIN', hdmf:'HDMF' };
@@ -17635,6 +17754,13 @@ function runNewHires() {
       if (r.workdays) r.workdays = String(r.workdays).replace(/^(\d+)\.0+$/, '$1'); // "261.00" -> "261"
     });
     nhApplyPdfs(merged, pdfMetas).then(function() {
+      merged.forEach(function(r) {
+        var flipped = nhFlipName(r.name);
+        r.name = flipped.name;
+        if (flipped.flag) r._nameFlag = flipped.flag;
+        // KN: "with OT" / "No OT" -> Masterfile's Yes/No
+        if (r.withOT) r.withOT = /^\s*no\b/i.test(r.withOT) ? 'No' : /\bwith\b|^\s*yes\b/i.test(r.withOT) ? 'Yes' : r.withOT;
+      });
       window.nhRows = merged;
       window.newHiresData = merged;
       if (clientKey) { window.newHiresByClient = window.newHiresByClient || {}; window.newHiresByClient[clientKey] = merged; }
@@ -17723,9 +17849,13 @@ function nhRenderPreview(payout, att, basic, clientKey) {
       var val = r[k] || '';
       var isEmpty = !val.toString().trim();
       if (isEmpty) missingCount++;
-      var bg = isEmpty ? 'background:#FFF9C4;' : '';
+      // Orange = name flipped by guess, blue = filled from a PDF; both cleared once edited.
+      var nameFlag = k === 'name' && r._nameFlag;
+      var fromPdf = !isEmpty && r._pdfFilled && r._pdfFilled.indexOf(k) >= 0;
+      var bg = isEmpty ? 'background:#FFF9C4;' : nameFlag ? 'background:#FFE7C2;' : fromPdf ? 'background:#E8F0FE;' : '';
+      var tip = isEmpty ? 'Required' : nameFlag ? ('Check: ' + r._nameFlag) : fromPdf ? 'Filled from PDF — double-check' : '';
       return '<td style="padding:5px 8px;border:1px solid #EBEBEF;font-size:11px;min-width:80px;' + bg + '"'
-        + (isEmpty ? ' title="Required"' : '')
+        + (tip ? ' title="' + String(tip).replace(/"/g, '&quot;') + '"' : '')
         + ' contenteditable="true" data-ri="' + ri + '" data-key="' + k + '"'
         + ' onblur="nhUpdateCell(this.dataset.ri,this.dataset.key,this.innerText.trim());nhRefreshStatus();">'
         + val + '</td>';
@@ -17822,17 +17952,8 @@ function nhFinalize() {
   var MF_KEYS = ['empNo','name','hireDate','basicPay','allowName','allowAmt','jobTitle','dept',
     'costCenter','payrollGroup','eeStatus','birthday','tin','gender','civilStatus','email',
     'workdays','sss','hdmf','phic','withOT','bankName','bankAccount','consultant','taxPct','remarks'];
-  var missingCount = 0;
-  rows.forEach(function(r) {
-    MF_KEYS.forEach(function(k) { if (!String(r[k]||'').trim()) missingCount++; });
-  });
-  if (missingCount > 0) {
-    appConfirm('Finalize with empty cells?',
-      missingCount + ' cell(s) are still empty (highlighted yellow). They will go into Payroll Instructions blank. Finalize anyway?',
-      nhFinalizeConfirmed, { okLabel: 'Finalize anyway' });
-    return;
-  }
-  nhFinalizeConfirmed();
+  // Validation window (nhOpenValidation) replaces the old empty-cell-count confirm.
+  nhOpenValidation('finalize', nhFinalizeConfirmed);
 }
 
 function nhFinalizeConfirmed() {
@@ -17920,6 +18041,12 @@ function nhFinalizeConfirmed() {
 
 function nhUpdateCell(rowIdx, key, val) {
   if (window.nhRows && window.nhRows[rowIdx] !== undefined) {
+    var r = window.nhRows[rowIdx];
+    // Editing a flagged cell counts as having checked it.
+    if (r[key] !== val) {
+      if (key === 'name') delete r._nameFlag;
+      if (r._pdfFilled) r._pdfFilled = r._pdfFilled.filter(function(k){ return k !== key; });
+    }
     window.nhRows[rowIdx][key] = val;
     window.newHiresData = window.nhRows;
   }
@@ -17941,6 +18068,11 @@ function nhAddRow() {
 }
 
 function nhDownloadXLSX() {
+  if (!(window.nhRows || []).length) return nhDownloadXLSXConfirmed();
+  nhOpenValidation('download', nhDownloadXLSXConfirmed);
+}
+
+function nhDownloadXLSXConfirmed() {
   if (typeof XLSX === 'undefined') { if(typeof showToast==='function') showToast('XLSX not loaded','#e67e00'); return; }
   var payout    = ((document.getElementById('nh-payout')||{}).value||'').trim();
   var att       = ((document.getElementById('nh-att')||{}).value||'').trim();
