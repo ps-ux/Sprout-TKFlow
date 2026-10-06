@@ -13928,6 +13928,19 @@ function varSaveArrayBuffer(arrBuf, fname) {
   if (typeof showToast === 'function') showToast('Downloaded: ' + fname);
 }
 
+// Attendance Items files are named after the CURRENT payout (the cut-off in progress now, same
+// findCurrentCutoffStartedIdx rule as the Overview banner), not the reviewed cut-off's payout --
+// e.g. running Variance on the Sept 30 payout during the Oct 15 cut-off names the Variance
+// reports "September 30" but the Attendance Items file "October 15", since that's the payroll
+// its items go into. Falls back to the reviewed cut-off's payout if no calendar is uploaded.
+function varAttItemsFilenamePayout(fallback) {
+  var periods = getRealCalendarPeriods();
+  var idx = periods.length ? findCurrentCutoffStartedIdx(periods) : -1;
+  var p = idx >= 0 ? periods[idx] : null;
+  if (p && p.payout) return p.payout.toLocaleDateString('en-US', {month:'long', day:'numeric', year:'numeric'});
+  return fallback || '';
+}
+
 // Single cut-off's Attendance Items file (formerly "Disputes Tab"). Never builds an empty file:
 // the button is disabled when there are no verified variance rows, and this re-checks anyway.
 function varDisputesDownload(coId) {
@@ -13947,7 +13960,7 @@ function varDisputesDownload(coId) {
   var shortName = varActiveSubShortName();
   return buildAttItemsWorkbook([{ name: shortName + '_Attendance Items', prevRows: res.rows, currRows: [] }])
     .then(function(arrBuf) {
-      varSaveArrayBuffer(arrBuf, (shortName + '_Attendance Items_' + co._payout).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx');
+      varSaveArrayBuffer(arrBuf, (shortName + '_Attendance Items_' + varAttItemsFilenamePayout(co._payout)).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx');
     }).catch(function(err) {
       console.error('Attendance Items build error:', err);
       if (typeof showToast === 'function') showToast('Error building Attendance Items: ' + (err.message || err), '#e67e00');
@@ -13983,7 +13996,8 @@ function varDownloadAllAttItems() {
     return Promise.resolve();
   }
   var grpKey = window.currentWsGroup || window.currentWsClient || 'Client';
-  var fname = (grpKey + '_Attendance Items' + (payouts.length === 1 ? '_' + payouts[0] : '')).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx';
+  var curPayout = varAttItemsFilenamePayout(payouts.length === 1 ? payouts[0] : '');
+  var fname = (grpKey + '_Attendance Items' + (curPayout ? '_' + curPayout : '')).replace(/[\\\/:\*\?"<>\|]/g, '-') + '.xlsx';
   return buildAttItemsWorkbook(sheets).then(function(arrBuf) { varSaveArrayBuffer(arrBuf, fname); })
     .catch(function(err) {
       console.error('Attendance Items build error:', err);
