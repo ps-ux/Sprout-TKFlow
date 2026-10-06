@@ -17041,6 +17041,7 @@ function buildNewHiresRunner(body) {
   window.nhFiles    = {};   // id -> File object
   window.nhFileList = [];   // [{id, name, type}]
   window.nhRows     = [];   // [{empNo,name,hireDate,basicPay,allowName,allowAmt,jobTitle,dept,costCenter}]
+  window.nhPdfSheets = [];  // per-PDF match/fill status, see nhApplyPdfs
   var nhCounter = 0;
 
   body.innerHTML =
@@ -17132,6 +17133,180 @@ function buildNewHiresRunner(body) {
   };
 }
 
+// ── New Hires: date cleanup + per-employee PDF info sheets ──────────────────────────────
+// Dates to MM/DD/YYYY from the shapes clients actually send: Excel serials, "2026/09/14",
+// "September 14, 2026" (KN's endorsement sheet). Anything unrecognized is left as typed.
+function nhNormDate(v) {
+  var s = String(v || '').trim();
+  if (!s) return s;
+  function out(y, m, d) { return String(m).padStart(2,'0') + '/' + String(d).padStart(2,'0') + '/' + y; }
+  if (/^\d{5}$/.test(s)) { var dt = new Date(Math.round((+s - 25569) * 86400000)); return out(dt.getUTCFullYear(), dt.getUTCMonth()+1, dt.getUTCDate()); }
+  var m = s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);
+  if (m) return out(m[1], +m[2], +m[3]);
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return out(m[3], +m[1], +m[2]);
+  if (/[a-z]/i.test(s) && /\d{4}/.test(s)) { var p = new Date(s); if (!isNaN(p.getTime())) return out(p.getFullYear(), p.getMonth()+1, p.getDate()); }
+  return s;
+}
+
+function nhBlankRow(name) {
+  return {empNo:'',name:name||'',hireDate:'',basicPay:'',allowName:'',allowAmt:'',jobTitle:'',dept:'',costCenter:'',
+    payrollGroup:'',eeStatus:'',birthday:'',tin:'',gender:'',civilStatus:'',email:'',workdays:'',
+    sss:'',hdmf:'',phic:'',withOT:'',bankName:'',bankAccount:'',consultant:'',taxPct:'',remarks:''};
+}
+
+// pdf.js (free, cdnjs) loaded only the first time a PDF is uploaded to New Hires.
+var _nhPdfJsPromise = null;
+function nhLoadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (_nhPdfJsPromise) return _nhPdfJsPromise;
+  _nhPdfJsPromise = new Promise(function(resolve, reject) {
+    var s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    s.onload = function() {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      resolve(window.pdfjsLib);
+    };
+    s.onerror = function() { _nhPdfJsPromise = null; reject(new Error('Could not load the PDF reader')); };
+    document.head.appendChild(s);
+  });
+  return _nhPdfJsPromise;
+}
+
+// All text in a PDF's text layer, pages joined. Scanned PDFs (handwritten or typed on paper)
+// have no text layer and come back (nearly) empty -- those need manual entry.
+function nhPdfText(file) {
+  return nhLoadPdfJs().then(function(pdfjs) {
+    return file.arrayBuffer().then(function(buf) { return pdfjs.getDocument({ data: buf }).promise; });
+  }).then(function(doc) {
+    var pages = [];
+    for (var i = 1; i <= doc.numPages; i++) pages.push(doc.getPage(i).then(function(pg){ return pg.getTextContent(); }));
+    return Promise.all(pages).then(function(contents) {
+      return contents.map(function(c){ return c.items.map(function(it){ return it.str; }).join(' '); }).join(' ');
+    });
+  });
+}
+
+// Reads the KN "Employee Information Sheet" fields that the Masterfile needs, from a typed PDF's
+// text: each value is whatever sits between its label and the next label on the form. Only
+// section 1-9 (before "10. TYPE & NO. OF DRIVER'S LICENSE") is searched so family-section
+// labels like a parent's "AGE:" can't be picked up.
+function nhParseInfoSheet(text) {
+  var t = String(text || '').replace(/_+/g, ' ').replace(/\s+/g, ' ');
+  var endM = t.search(/\b10\s*\.\s*TYPE/i);
+  if (endM > 0) t = t.slice(0, endM);
+  // Numbered labels include their optional "7." prefix, so the number isn't left trailing on
+  // the PREVIOUS field's value (e.g. Pag-IBIG "1234-5678-9012 7").
+  var N = '(?:\\b\\d{1,2}\\s*\\.\\s*)?';
+  function L(src) { return new RegExp(N + src, 'i'); }
+  var LABELS = [
+    ['name', /\b1\s*\.\s*NAME\s*:/i], ['_nick', /NICKNAME\s*:/i], ['_pos', L('Position title')], ['_kn', /KN Code/i],
+    ['_dept', /Department/i], ['_pres', L('PRESENT ADDRESS\\s*:')], ['_perm', L('PERMANENT ADDRESS\\s*:')],
+    ['_prov', L('PROVINCIAL ADDRESS\\s*:')], ['sss', L('SSS\\s*Number')], ['phic', /PHIL\s*HEALTH\s*Number/i],
+    ['tin', /\bTIN\s*Number/i], ['hdmf', /PAG-?\s*IBIG\s*Number/i], ['birthday', L('DATE OF BIRTH\\s*:')],
+    ['_age', /\bAGE\s*:/i], ['_pob', /PLACE OF BIRTH\s*:/i], ['_nat', L('NATIONALITY\\s*:')], ['_rel', /RELIGION\s*:/i],
+    ['gender', /\bSEX\s*:/i], ['_ht', /\bHT\s*:/i], ['_wt', /\bWT\s*:/i], ['civilStatus', L('CIVIL STATUS\\s*:')],
+    ['_cell', /CELLPHONE NO/i], ['_land', /LANDLINE NO/i], ['_hired', /DATE HIRED/i]
+  ];
+  var hits = [];
+  LABELS.forEach(function(l) {
+    var m = l[1].exec(t);
+    if (m) hits.push({ key: l[0], start: m.index, end: m.index + m[0].length });
+  });
+  hits.sort(function(a, b){ return a.start - b.start; });
+  var out = {};
+  hits.forEach(function(h, i) {
+    if (h.key.charAt(0) === '_') return;
+    var stop = i + 1 < hits.length ? hits[i + 1].start : t.length;
+    var v = t.slice(h.end, stop).replace(/^[\s:.]+|[\s:.]+$/g, '');
+    if (v) out[h.key] = v;
+  });
+  if (out.gender) out.gender = /^m(ale)?$/i.test(out.gender) ? 'Male' : /^f(emale)?$/i.test(out.gender) ? 'Female' : out.gender;
+  if (out.civilStatus) {
+    var cs = out.civilStatus;
+    out.civilStatus = /^s(ingle)?$/i.test(cs) ? 'Single' : /^m(arried)?$/i.test(cs) ? 'Married' : /^w(idow(ed|er)?)?$/i.test(cs) ? 'Widowed' : /^sep/i.test(cs) ? 'Separated' : cs;
+  }
+  if (out.birthday) out.birthday = nhNormDate(out.birthday.replace(/\s+/g, ''));
+  ['sss','phic','tin','hdmf'].forEach(function(k){ if (out[k] && !/\d/.test(out[k])) delete out[k]; });
+  return { fields: out, labelCount: hits.length };
+}
+
+function nhNameTokens(s) {
+  return String(s || '').toLowerCase().replace(/[^a-zÀ-ɏ\s]/g, ' ').split(/\s+/).filter(function(w){ return w.length > 1; });
+}
+
+// Matches each PDF onto its employee's row (by the name on the form, else the file name, e.g.
+// "Shoji Baba Employee Information Sheet .pdf"), filling only cells that are still empty.
+// A PDF with no matching row gets a row of its own. window.nhPdfSheets drives the PDF list
+// (with View buttons) shown above the preview table.
+function nhApplyPdfs(rows, pdfMetas) {
+  window.nhPdfSheets = [];
+  if (!pdfMetas.length) return Promise.resolve();
+  return Promise.all(pdfMetas.map(function(meta) {
+    var file = window.nhFiles[meta.id];
+    return (file ? nhPdfText(file) : Promise.resolve('')).catch(function(err) {
+      console.warn('Could not read PDF ' + meta.name, err);
+      return '';
+    }).then(function(text) { return { meta: meta, text: text }; });
+  })).then(function(results) {
+    results.forEach(function(res) {
+      var parsed = nhParseInfoSheet(res.text);
+      var fileNameGuess = res.meta.name.replace(/\.pdf$/i, '').replace(/employee\s*info(rmation)?\s*sheet/i, '').replace(/[_\-]+/g, ' ').trim();
+      var pdfName = parsed.fields.name || fileNameGuess;
+      var pdfTok = nhNameTokens(pdfName);
+      var row = pdfTok.length >= 2 ? rows.find(function(r) {
+        var rt = nhNameTokens(r.name);
+        if (rt.length < 2) return false;
+        var small = pdfTok.length <= rt.length ? pdfTok : rt, big = small === pdfTok ? rt : pdfTok;
+        return small.every(function(w){ return big.indexOf(w) >= 0; });
+      }) : null;
+      var isNew = !row;
+      if (!row) { row = nhBlankRow(pdfName || ('(PDF: ' + res.meta.name + ' — fill manually)')); rows.push(row); }
+      var filled = [];
+      Object.keys(parsed.fields).forEach(function(k) {
+        if (k === 'name') return;
+        if (!row[k]) { row[k] = parsed.fields[k]; filled.push(k); }
+      });
+      window.nhPdfSheets.push({
+        fid: res.meta.id, fileName: res.meta.name, rowName: row.name, isNew: isNew, filled: filled,
+        scanned: String(res.text || '').replace(/\s+/g, '').length < 40
+      });
+    });
+  });
+}
+
+var NH_FIELD_LABELS = { birthday:'Birthday', gender:'Gender', civilStatus:'Civil Status', sss:'SSS', phic:'PHIC', tin:'TIN', hdmf:'HDMF' };
+function nhPdfSheetsHtml() {
+  var list = window.nhPdfSheets || [];
+  if (!list.length) return '';
+  var esc = function(s){ return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
+  return '<div style="border:1px solid #EBEBEF;border-radius:14px;padding:10px 12px;margin-bottom:10px;">'
+    + '<div style="font-size:12px;font-weight:600;color:#1a1a2e;margin-bottom:6px;">Employee info sheets (PDF)</div>'
+    + list.map(function(p) {
+        var status = p.scanned
+          ? '<span style="color:#e67e00;">Scanned — open it and type the yellow cells from it</span>'
+          : (p.filled.length
+              ? '<span style="color:#32CE13;">Filled ' + p.filled.map(function(k){ return NH_FIELD_LABELS[k] || k; }).join(', ') + ' — double-check</span>'
+              : '<span style="color:#9898a6;">No new fields found — check it manually</span>');
+        return '<div style="display:flex;align-items:center;gap:8px;font-size:11.5px;padding:4px 0;flex-wrap:wrap;">'
+          + '<i class="ti ti-file-type-pdf" style="color:#c0392b;font-size:14px;"></i>'
+          + '<span style="font-weight:500;color:#1a1a2e;">' + esc(p.rowName) + '</span>'
+          + (p.isNew ? '<span style="font-size:10px;background:#fff4e6;color:#e67e00;padding:1px 7px;border-radius:999px;">no match in Excel — added as new row</span>' : '')
+          + status
+          + '<button onclick="nhViewPdf(\'' + p.fid + '\')" style="margin-left:auto;padding:3px 10px;border:1px solid #EBEBEF;border-radius:8px;background:#fff;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;color:#1679FA;"><i class="ti ti-eye" style="font-size:11px;"></i> View</button>'
+          + '</div>';
+      }).join('')
+    + '</div>';
+}
+
+function nhViewPdf(fid) {
+  var f = window.nhFiles && window.nhFiles[fid];
+  if (!f) return;
+  var url = URL.createObjectURL(f);
+  window.open(url, '_blank');
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
+}
+
 function runNewHires() {
   var btn = document.getElementById('nh-run-btn');
   if (typeof XLSX === 'undefined') { if(typeof showToast==='function') showToast('XLSX not loaded yet','#e67e00'); return; }
@@ -17150,6 +17325,7 @@ function runNewHires() {
   if (clientKey && typeof markTaskStarted === 'function') markTaskStarted(clientKey);
 
   var allExtracted = [];
+  var pdfMetas = [];
   var processed = 0;
 
   function clean(v) {
@@ -17214,7 +17390,10 @@ function runNewHires() {
     Object.values(FIELD_MAP).forEach(function(arr){ arr.forEach(function(k){ if(k.length>3) ALL_KEYWORDS.push(k); }); });
 
     function matchField(label) {
-      var lbl = lc(label);
+      // Trailing colon stripped -- KN's endorsement sheet labels read "Name: ", "Basic Pay: ".
+      var lbl = lc(label).replace(/[\s:]+$/, '');
+      // Bare "Name" (KN) -- exact match only, so "Log In Name for Access Level" doesn't hit it.
+      if (lbl === 'name') return 'name';
       for (var key in FIELD_MAP) {
         var terms = FIELD_MAP[key];
         for (var t = 0; t < terms.length; t++) {
@@ -17255,11 +17434,22 @@ function runNewHires() {
       return score;
     }
 
+    // Label column for a vertical (label: value) row -- the first non-empty, non-numeric cell
+    // among the first 3. KN numbers each employee block ("1", "2"...) in column A on the same
+    // row as "Name:", which used to be taken as the label, dropping every employee's name.
+    function verticalLabelCol(row) {
+      for (var c = 0; c < Math.min(row.length, 3); c++) {
+        var v = cleanVal(row[c]);
+        if (v && !/^\d+\.?$/.test(v)) return c;
+      }
+      return -1;
+    }
+
     function scoreVerticalLayout() {
       var score = 0;
       raw.forEach(function(row) {
-        var lbl = lc(row[0])||lc(row[1]);
-        if (matchField(lbl)) score++;
+        var lc0 = verticalLabelCol(row);
+        if (lc0 >= 0 && matchField(row[lc0])) score++;
       });
       return score;
     }
@@ -17297,12 +17487,12 @@ function runNewHires() {
       for (var ri2 = 0; ri2 < raw.length; ri2++) {
         var row = raw[ri2];
 
-        // Get label: try col 0 first, then col 1
-        var labelRaw = cleanVal(row[0]) || cleanVal(row[1]);
-        if (!labelRaw) continue;
+        // Label: first non-empty, non-numeric cell (see verticalLabelCol)
+        var labelCol = verticalLabelCol(row);
+        if (labelCol < 0) continue;
+        var labelRaw = cleanVal(row[labelCol]);
 
         // Get value: first non-empty cell after the label cell
-        var labelCol = cleanVal(row[0]) ? 0 : 1;
         var valueRaw = '';
         for (var vc = labelCol+1; vc < Math.min(row.length, 8); vc++) {
           var cand = cleanVal(row[vc]);
@@ -17437,13 +17627,22 @@ function runNewHires() {
         merged.push(r);
       }
     });
-    window.nhRows = merged;
-    window.newHiresData = merged;
-    if (clientKey) { window.newHiresByClient = window.newHiresByClient || {}; window.newHiresByClient[clientKey] = merged; }
-    btn.disabled = false;
-    btn.innerHTML = '<i class="ti ti-sparkles"></i> Re-extract';
-    nhRenderPreview(payout, '', '', clientKey);
-    if(typeof showToast==='function') showToast('Extracted ' + allExtracted.length + ' employee(s)');
+    merged.forEach(function(r) {
+      if (r.hireDate) r.hireDate = nhNormDate(r.hireDate);
+      if (r.birthday) r.birthday = nhNormDate(r.birthday);
+      // "Php 120,000.00" (KN) -> "120,000.00"
+      if (r.basicPay) r.basicPay = String(r.basicPay).replace(/^\s*(php|p|₱)\s*/i, '').trim();
+      if (r.workdays) r.workdays = String(r.workdays).replace(/^(\d+)\.0+$/, '$1'); // "261.00" -> "261"
+    });
+    nhApplyPdfs(merged, pdfMetas).then(function() {
+      window.nhRows = merged;
+      window.newHiresData = merged;
+      if (clientKey) { window.newHiresByClient = window.newHiresByClient || {}; window.newHiresByClient[clientKey] = merged; }
+      btn.disabled = false;
+      btn.innerHTML = '<i class="ti ti-sparkles"></i> Re-extract';
+      nhRenderPreview(payout, '', '', clientKey);
+      if(typeof showToast==='function') showToast('Extracted ' + merged.length + ' employee(s)');
+    });
   }
 
   files.forEach(function(fMeta) {
@@ -17451,12 +17650,9 @@ function runNewHires() {
     if (!file) { tryComplete(); return; }
 
     if (fMeta.type === 'pdf') {
-      // PDF can't be parsed in browser — add placeholder
-      allExtracted.push({empNo:'',name:'(PDF: '+fMeta.name+' — fill manually)',hireDate:'',
-        basicPay:'',allowName:'',allowAmt:'',jobTitle:'',dept:'',costCenter:'',payrollGroup:'',
-        eeStatus:'',birthday:'',tin:'',gender:'',civilStatus:'',email:'',workdays:'',
-        sss:'',hdmf:'',phic:'',withOT:'',bankName:'',bankAccount:'',
-        consultant:'',taxPct:'',remarks:''});
+      // PDFs are handled after all spreadsheets are read (nhApplyPdfs, in tryComplete) so each
+      // one can be matched onto its employee's row instead of becoming a row of its own.
+      pdfMetas.push(fMeta);
       tryComplete();
       return;
     }
@@ -17465,9 +17661,13 @@ function runNewHires() {
     reader.onload = function(e) {
       try {
         var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', raw:false});
-        // Try 'Employee Information' sheet first (Sprout template), then first sheet
+        // Try 'Employee Information' sheet first (Sprout template), then the first VISIBLE
+        // sheet -- KN keeps every past month in the same workbook as hidden sheets, with the
+        // current month the only visible one (and an old hidden sheet first in order).
+        var _wbSheetMeta = (wb.Workbook && wb.Workbook.Sheets) || [];
+        var _firstVisible = wb.SheetNames.find(function(n, i){ return !(_wbSheetMeta[i] && _wbSheetMeta[i].Hidden); }) || wb.SheetNames[0];
         var sheetName = wb.SheetNames.indexOf('Employee Information') >= 0
-          ? 'Employee Information' : wb.SheetNames[0];
+          ? 'Employee Information' : _firstVisible;
         var ws = wb.Sheets[sheetName];
         var extracted = extractFromSheet(ws, fMeta.name);
         extracted.forEach(function(r){ allExtracted.push(r); });
@@ -17546,6 +17746,7 @@ function nhRenderPreview(payout, att, basic, clientKey) {
         ? '<i class="ti ti-circle-check" style="font-size:13px;color:#32CE13;"></i> All fields filled'
         : '<i class="ti ti-alert-circle" style="font-size:13px;color:#e67e00;"></i> ' + missingCount + ' empty cell(s) — highlighted yellow')
     + '</div></div>'
+    + nhPdfSheetsHtml()
     + '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-radius:14px;margin-bottom:12px;max-height:300px;overflow-y:auto;">'
     + '<table style="width:100%;border-collapse:collapse;font-size:11px;">'
     + '<thead style="position:sticky;top:0;z-index:1;"><tr style="background:#2E75B6;">'
