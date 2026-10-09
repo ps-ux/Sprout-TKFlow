@@ -28880,8 +28880,10 @@ body.dark-mode{
   background:var(--bg);
 }
 body.dark-mode .sidebar{border-right-color:var(--border) !important;}
-body.dark-mode .nav-item{background:transparent !important;}
-body.dark-mode .nav-item.active{background:rgba(34,197,94,0.14) !important;}
+/* solid, not transparent: nav items sit above the sidebar's decorative doodles (z-index) and
+   are what hides them behind the list -- a see-through background let the shapes show through */
+body.dark-mode .nav-item{background:var(--bg-card) !important;}
+body.dark-mode .nav-item.active{background:#283B2C !important;}
 body.dark-mode .nav-item:hover{background:var(--bg-secondary) !important;}
 body.dark-mode .nav-badge{background:var(--bg-secondary);color:var(--text-secondary);}
 body.dark-mode .page-title{color:var(--text-primary);}
@@ -28902,6 +28904,22 @@ body.dark-mode [style*="border-bottom:1px solid #F4F4F8"],body.dark-mode [style*
 body.dark-mode [style*="border-top:1px solid #F4F4F8"]{border-top-color:var(--bg-secondary) !important;}
 body.dark-mode [style*="border-right:1px solid #F4F4F8"]{border-right-color:var(--bg-secondary) !important;}
 body.dark-mode [style*="color:#d0d0dc"]{color:var(--n-300) !important;}
+/* Once JS touches el.style (e.g. style.display=...), the browser re-serializes the whole style
+   attribute as "background: rgb(...)", so the hex-based selectors above stop matching. */
+body.dark-mode [style*="background: rgb(255, 255, 255)"],body.dark-mode [style*="background-color: rgb(255, 255, 255)"]{background:var(--bg-card) !important;}
+body.dark-mode [style*="background: rgb(244, 244, 248)"],body.dark-mode [style*="background: rgb(248, 248, 250)"],body.dark-mode [style*="background: rgb(250, 250, 250)"]{background:var(--bg-secondary) !important;}
+body.dark-mode [style*="border: 1px solid rgb(235, 235, 239)"]{border-color:var(--border) !important;}
+body.dark-mode [style*="border-bottom: 1px solid rgb(235, 235, 239)"]{border-bottom-color:var(--border) !important;}
+body.dark-mode [style*="border-bottom: 1px solid rgb(244, 244, 248)"]{border-bottom-color:var(--bg-secondary) !important;}
+body.dark-mode [style*="color: rgb(26, 26, 46)"]{color:var(--text-primary) !important;}
+body.dark-mode [style*="color: rgb(107, 107, 128)"]{color:var(--text-secondary) !important;}
+body.dark-mode [style*="color: rgb(152, 152, 166)"]{color:var(--text-muted) !important;}
+/* Email tab findings panel (display toggled by JS, so matched by id) */
+body.dark-mode #email-findings-panel{background:rgba(34,197,94,0.06) !important;border-color:rgba(34,197,94,0.3) !important;}
+/* Scratchpad sticky notes keep their paper colours; the global dark input rule was painting
+   the title/body fields dark on top of them */
+body.dark-mode .sp-note .sp-title,body.dark-mode .sp-note .sp-body{background:transparent !important;border:none !important;color:#3a3410 !important;}
+body.dark-mode .sp-note .sp-title::placeholder,body.dark-mode .sp-note .sp-body::placeholder{color:#8a8460 !important;}
 </style>
 </body>
 </html><script>
