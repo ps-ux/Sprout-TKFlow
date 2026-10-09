@@ -28863,6 +28863,46 @@ function openPreviewAllTickets() {
   }, 50);
 }</script>
 
+<style>
+/* ── Dark mode: token remap + inline-style catch-alls ──────────────────────
+   Placed last so it wins over the duplicated dark-mode blocks above. The earlier
+   blocks only swapped --bg/--text vars; the base --n-* scale and the green/orange/
+   blue/red tints stayed light, which left white nav items, a green sidebar edge,
+   white workweek day pills and bright dividers in dark mode. */
+body.dark-mode{
+  --n-0:#292524;--n-50:#1c1917;--n-100:#3a3532;--n-200:#57534e;--n-300:#78716c;
+  --n-400:#a8a29e;--n-500:#a8a29e;--n-600:#d6d3d1;--n-700:#e7e5e4;--n-800:#f5f5f4;--n-900:#fafaf9;
+  --kk-50:rgba(50,206,19,0.12);--kk-100:rgba(50,206,19,0.16);--kk-200:rgba(50,206,19,0.38);--kk-700:#4ADE80;--kk-800:#86EFAC;
+  --ub-50:rgba(50,206,19,0.12);--ub-100:rgba(50,206,19,0.16);--ub-200:rgba(50,206,19,0.38);--ub-300:rgba(50,206,19,0.5);--ub-700:#4ADE80;
+  --ca-50:rgba(230,126,0,0.16);--ca-700:#FB923C;
+  --bb-100:rgba(59,130,246,0.18);--bb-600:#60A5FA;--bb-700:#93C5FD;
+  --tm-50:rgba(220,38,38,0.16);--tm-600:#F87171;--tm-700:#FCA5A5;
+  background:var(--bg);
+}
+body.dark-mode .sidebar{border-right-color:var(--border) !important;}
+body.dark-mode .nav-item{background:transparent !important;}
+body.dark-mode .nav-item.active{background:rgba(34,197,94,0.14) !important;}
+body.dark-mode .nav-item:hover{background:var(--bg-secondary) !important;}
+body.dark-mode .nav-badge{background:var(--bg-secondary);color:var(--text-secondary);}
+body.dark-mode .page-title{color:var(--text-primary);}
+body.dark-mode .tab .tab-badge{background:var(--bg-secondary);color:var(--text-secondary);}
+body.dark-mode #start-menu{background:var(--bg-secondary) !important;border-color:var(--border) !important;box-shadow:0 -8px 32px rgba(0,0,0,0.5) !important;}
+body.dark-mode #sidebar-user-block{border-top-color:var(--border) !important;}
+/* inline white / light-gray backgrounds the earlier rules missed */
+body.dark-mode [style*="background:#ffffff"],body.dark-mode [style*="background:#FFFFFF"],body.dark-mode [style*="background: #fff;"]{background:var(--bg-card) !important;}
+body.dark-mode [style*="background:#EBEBEF"],body.dark-mode [style*="background: #EBEBEF"]{background:var(--border) !important;}
+/* inline light borders: recolor per side so coloured accent edges (e.g. border-left) survive */
+body.dark-mode [style*="border:1px solid #EBEBEF"],body.dark-mode [style*="border: 1px solid #EBEBEF"],body.dark-mode [style*="border:1px dashed #EBEBEF"]{border-top-color:var(--border) !important;border-right-color:var(--border) !important;border-bottom-color:var(--border) !important;}
+body.dark-mode [style*="border:1px solid #EBEBEF"]:not([style*="border-left"]),body.dark-mode [style*="border: 1px solid #EBEBEF"]:not([style*="border-left"]),body.dark-mode [style*="border:1px dashed #EBEBEF"]:not([style*="border-left"]){border-left-color:var(--border) !important;}
+body.dark-mode [style*="border-bottom:1px solid #EBEBEF"]{border-bottom-color:var(--border) !important;}
+body.dark-mode [style*="border-top:1px solid #EBEBEF"],body.dark-mode [style*="border-top:1px dashed #EBEBEF"]{border-top-color:var(--border) !important;}
+body.dark-mode [style*="border-right:1px solid #EBEBEF"]{border-right-color:var(--border) !important;}
+body.dark-mode [style*="border-left:1px solid #EBEBEF"]{border-left-color:var(--border) !important;}
+body.dark-mode [style*="border-bottom:1px solid #F4F4F8"],body.dark-mode [style*="border-bottom: 1px solid #F4F4F8"]{border-bottom-color:var(--bg-secondary) !important;}
+body.dark-mode [style*="border-top:1px solid #F4F4F8"]{border-top-color:var(--bg-secondary) !important;}
+body.dark-mode [style*="border-right:1px solid #F4F4F8"]{border-right-color:var(--bg-secondary) !important;}
+body.dark-mode [style*="color:#d0d0dc"]{color:var(--n-300) !important;}
+</style>
 </body>
 </html><script>
 // ══════════════════════════════════════════════════════════════════
