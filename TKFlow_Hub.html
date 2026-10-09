@@ -7949,6 +7949,38 @@ var AUDIT_TASK_LABELS = {variance:'Variance Analysis',validation:'Current Attend
 function _auditTaskLabel(clientKey, taskKey) {
   return _clientNameFor(clientKey) + ' — ' + (AUDIT_TASK_LABELS[taskKey] || taskKey);
 }
+// "Reset and start over" in a task runner -- discards that run's uploads/results for the open workspace.
+function _auditTaskReset(taskKey) {
+  if (typeof logAudit !== 'function') return;
+  var ck = window.currentWsGroup || window.currentWsClient || window._wsClient || '';
+  logAudit({ action: 'task_reset', entityType: 'task', entityId: ck + ':' + taskKey, entityLabel: _auditTaskLabel(ck, taskKey), description: 'Reset and started over' });
+}
+
+// Every file download in the app (task outputs, Variance/Att Items, Dispute reports, New Hires,
+// Policy Bank, .ics/.csv exports, and XLSX.writeFile, which clicks an <a download> internally)
+// ends in an anchor click with a download attribute -- hooked once here instead of at ~20
+// separate call sites. Attributed to whichever workspace/task is open at the time.
+(function() {
+  if (typeof HTMLAnchorElement === 'undefined' || HTMLAnchorElement.prototype._auditHooked) return;
+  var _origClick = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function() {
+    try {
+      if (this.hasAttribute('download') && typeof logAudit === 'function') {
+        var fname = this.getAttribute('download') || '';
+        var ck = window.currentWsClient || window.currentWsGroup || null;
+        var tk = window._openTaskKey || null;
+        logAudit({
+          action: 'file_downloaded', entityType: tk ? 'task' : (ck ? 'client' : null),
+          entityId: ck ? (tk ? ck + ':' + tk : ck) : null,
+          entityLabel: ck ? (tk ? _auditTaskLabel(ck, tk) : _clientNameFor(ck)) : null,
+          field: 'file', newValue: fname, description: 'Downloaded ' + fname
+        });
+      }
+    } catch (e) { console.warn('Download audit failed', e); }
+    return _origClick.apply(this, arguments);
+  };
+  HTMLAnchorElement.prototype._auditHooked = true;
+})();
 
 // Cut-off Schedule starts locked (read-only) every time the profile renders -- this just flips
 // the flag cutoffsHtmlFor checks and re-renders, matching the re-render idiom used by every
@@ -11224,8 +11256,14 @@ function checkCutoffRollover(key) {
     if (window.newHiresByClient) delete window.newHiresByClient[key];
     window.nhFinalized = false;
 
+    var _oldCutoffLabel = clientObj.cutoff;
     clientObj.cutoff = newLabel;
     _persistCutoffRolloverReset(key, newLabel);
+    if (typeof logAudit === 'function') {
+      logAudit({ action: 'cutoff_rollover', entityType: 'client', entityId: key, entityLabel: clientObj.name || key,
+        field: 'cutoff', oldValue: _oldCutoffLabel || null, newValue: newLabel,
+        description: 'Tasks reset for new cut-off ' + newLabel });
+    }
     if (typeof showToast === 'function') showToast('Tasks reset for ' + clientObj.name + ' \u2014 ' + newLabel);
     // keepSwitcher=true so this reload stays on Tasks (currentWsTab is 'ws-tasks' at this
     // point, since that's the only tab checkCutoffRollover ever fires from now) instead of
@@ -12207,6 +12245,7 @@ function buildVarianceRunner(body) {
 // Explicit reset — clears cached files/results for this task and starts a blank run
 function varResetAll() {
     appConfirm('Reset Variance Analysis', 'This clears all uploaded files and processed results for this workspace.', function() {
+  _auditTaskReset('variance');
   Object.keys(taskFiles).forEach(function(k) { if (k.indexOf('var-') === 0) delete taskFiles[k]; });
   varCutoffCounter = 1;
   var _defaultSubs = subOptionsForCurrentGroup();
@@ -14281,6 +14320,7 @@ function buildValidationRunner(body) {
 // Explicit reset — clears cached files/results for this task and starts a blank run
 function tkResetAll() {
     appConfirm('Reset Current Attendance Validation', 'This clears all uploaded files for this workspace and starts a blank run. Anything already processed and saved is kept, and can still be reviewed later from Processing History.', function() {
+  _auditTaskReset('validation');
   Object.keys(taskFiles).forEach(function(k) { if (k.indexOf('tk-') === 0) delete taskFiles[k]; });
   window.tkLegacyFormat = false;
   tkReviewRows.length = 0;
@@ -14948,11 +14988,6 @@ function tkDownloadOutput() {
   // is also captured synchronously) but the wrong filename.
   var tkSubNameAtCallTime = (typeof tkActiveGroupIdx !== 'undefined' && tkActiveGroupIdx >= 0 && tkBatchGroups[tkActiveGroupIdx])
     ? (tkBatchGroups[tkActiveGroupIdx].clientKey || tkBatchGroups[tkActiveGroupIdx].name || '') : '';
-  if (typeof logAudit === 'function') {
-    var _tkDlCk = (tkActiveGroupIdx >= 0 && tkBatchGroups[tkActiveGroupIdx] && tkBatchGroups[tkActiveGroupIdx].clientKey) || clientKey;
-    logAudit({ action: 'task_output_downloaded', entityType: 'task', entityId: _tkDlCk + ':validation',
-      entityLabel: _auditTaskLabel(_tkDlCk, 'validation'), description: 'Downloaded validated attendance output' });
-  }
 
   function clean(v) { return String(v==null?'':v).trim(); }
 
@@ -19303,6 +19338,7 @@ function parseSingleLogDate(str) {
 function profilePullFromAdhocLogs() {
   var entries = _adhocGet();
   if (!entries.length) { if (typeof showToast==='function') showToast('No ad hoc logs found', '#e67e00'); return; }
+  if (typeof logAudit === 'function') { var _ppCk = window.currentWsClient || window._wsClient || ''; logAudit({ action: 'task_processed', entityType: 'task', entityId: _ppCk + ':profile', entityLabel: _auditTaskLabel(_ppCk, 'profile'), description: 'Pulled profile updates from Ad hoc logs' }); }
 
   var attInput = (document.getElementById('prof-att') || {}).value || '';
   var basicInput = (document.getElementById('prof-basic') || {}).value || '';
@@ -20045,6 +20081,7 @@ function buildDisputeSummaryRunner(body) {
 // Explicit reset — clears pulled results for this task and starts a blank run
 function dsResetAll() {
     appConfirm('Reset Dispute Summary', 'This clears all pulled tickets and findings for this workspace.', function() {
+  _auditTaskReset('disputes_summary');
   var ck = window.currentWsClient || window._wsClient || '';
   if (window._taskBodyCache) window._taskBodyCache['disputes_summary_' + ck] = null;
   // Also clear any saved snapshot for each sub's CURRENT cut-off (older cut-offs' snapshots
@@ -21752,10 +21789,20 @@ function generateEmail() {
   var eb = document.getElementById('email-body'); if (eb) eb.value = body;
   var eo = document.getElementById('email-output'); if (eo) eo.style.display = 'block';
   if (typeof _emailSave === 'function') _emailSave();
+  if (typeof logAudit === 'function') {
+    var _emGenCk = window.currentWsGroup || window.currentWsClient;
+    logAudit({ action: 'email_generated', entityType: 'client', entityId: _emGenCk || null, entityLabel: _emGenCk ? _clientNameFor(_emGenCk) : null,
+      field: 'cutoff', newValue: cutoff, description: 'Generated submission email for ' + cutoff });
+  }
 }
 
 function copyEmail() {
   const body = document.getElementById('email-body').value;
+  if (typeof logAudit === 'function') {
+    var _emCk = window.currentWsGroup || window.currentWsClient;
+    logAudit({ action: 'email_copied', entityType: 'client', entityId: _emCk || null, entityLabel: _emCk ? _clientNameFor(_emCk) : null,
+      description: 'Copied generated email (' + body.length + ' chars)' });
+  }
   navigator.clipboard.writeText(body).then(() => {
     showToast('Email body copied to clipboard!');
   }).catch(() => {
@@ -28404,6 +28451,13 @@ function receiveTicketUpdate(payload) {
     }
     dtmScheduleDisputeSave(existing.id);
     if (pushedNewPiLine) dtmSyncPiLines(existing.id);
+    if (typeof logAudit === 'function') {
+      logAudit({ action: 'ticket_edit', entityType: 'dispute', entityId: existing.id,
+        entityLabel: _clientNameFor(existing.client) + ' — ' + existing.id,
+        field: oldLabel !== statusLabel ? 'status' : null,
+        oldValue: oldLabel !== statusLabel ? oldLabel : null, newValue: oldLabel !== statusLabel ? statusLabel : null,
+        description: 'Updated from Ticketing Tool' + (pushedNewPiLine ? ' (new payroll-instruction line)' : '') });
+    }
   } else {
     var newDispute = {
       id: payload.id,
@@ -28429,6 +28483,11 @@ function receiveTicketUpdate(payload) {
       if (res.error) { dtmReportSaveError('Could not save ticket ' + newDispute.id, res.error); return; }
       if (newDispute.piLines.length) dtmSyncPiLines(newDispute.id);
     });
+    if (typeof logAudit === 'function') {
+      logAudit({ action: 'ticket_created', entityType: 'dispute', entityId: newDispute.id,
+        entityLabel: (newDispute.client ? _clientNameFor(newDispute.client) : (rawCompany || '')) + ' — ' + newDispute.id + (newDispute.name ? ' (' + newDispute.name + ')' : ''),
+        description: 'Received from Ticketing Tool' });
+    }
   }
 
   if (typeof renderDisputes === 'function') renderDisputes('all');
