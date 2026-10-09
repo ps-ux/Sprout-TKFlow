@@ -7941,6 +7941,15 @@ function logAudit(opts) {
   } catch (e) { console.warn('Audit log failed', e); }
 }
 
+// "<Client> — <Task name>" label for task-related audit rows, so the Entity column reads
+// "HDI Group of Companies — Current Attendance Validation" instead of a raw task key.
+var AUDIT_TASK_LABELS = {variance:'Variance Analysis',validation:'Current Attendance Validation',
+  disputes_summary:'Dispute Summary',newhires:'New Hires Upload',profile:'Profile Updates',
+  payroll_instructions:'Payroll Instructions',leave_credits_validation:'Leave Credits Validation'};
+function _auditTaskLabel(clientKey, taskKey) {
+  return _clientNameFor(clientKey) + ' — ' + (AUDIT_TASK_LABELS[taskKey] || taskKey);
+}
+
 // Cut-off Schedule starts locked (read-only) every time the profile renders -- this just flips
 // the flag cutoffsHtmlFor checks and re-renders, matching the re-render idiom used by every
 // other Cut-off Schedule mutator in this file.
@@ -11430,7 +11439,7 @@ function setTaskStatus(taskKey, st, reason, targetOverride) {
     if (_oldTaskSt !== st && typeof logAudit === 'function') {
       logAudit({
         action: 'task_status', entityType: 'task', entityId: k + ':' + taskKey,
-        entityLabel: (clients[k] && clients[k].name || k) + ' — ' + taskKey,
+        entityLabel: _auditTaskLabel(k, taskKey),
         field: 'status', oldValue: _oldTaskSt || 'pending', newValue: st
       });
     }
@@ -11641,8 +11650,19 @@ function finalizeBatchTaskIfApplicable(taskKey, st, reason) {
   if (!doneGroups.length) return null;
   doneGroups.forEach(function(g) {
     if (!taskStatus[g.clientKey]) taskStatus[g.clientKey] = {};
+    var _oldBatchSt = taskStatus[g.clientKey][taskKey] && taskStatus[g.clientKey][taskKey].st;
     taskStatus[g.clientKey][taskKey] = { st: st, reason: reason || '', timestamp: new Date().toISOString() };
     saveTaskRun(g.clientKey, taskKey, st, reason);
+    // Same task_status audit row as setTaskStatus() -- Current Attendance, Variance and Dispute
+    // Summary are marked done/skipped through here instead, so they never showed in the Audit Log.
+    if (_oldBatchSt !== st && typeof logAudit === 'function') {
+      logAudit({
+        action: 'task_status', entityType: 'task', entityId: g.clientKey + ':' + taskKey,
+        entityLabel: _auditTaskLabel(g.clientKey, taskKey),
+        field: 'status', oldValue: _oldBatchSt || 'pending', newValue: st,
+        description: st === 'skipped' && reason ? 'Skipped: ' + reason : ''
+      });
+    }
 
     // Same per-run history append as setTaskStatus() -- without this, a batch task finalized
     // through here (currently only disputes_summary; Variance/Validation have their own
@@ -13536,7 +13556,13 @@ function runVariance(opts) {
       // co._withVar/_adds/_deds/_nc/_total (what the batch-list badge and Disputes tab both
       // read) before its own internal check skips the DOM-card-building part.
       varRenderResultCard(co, cutoffIdx, attData);
-      varSaveCutoffSnapshot((varBatchGroups[varActiveGroupIdx] || {}).clientKey, co);
+      var _varCk = (varBatchGroups[varActiveGroupIdx] || {}).clientKey;
+      varSaveCutoffSnapshot(_varCk, co);
+      if (_varCk && typeof logAudit === 'function') {
+        logAudit({ action: 'task_processed', entityType: 'task', entityId: _varCk + ':variance',
+          entityLabel: _auditTaskLabel(_varCk, 'variance'), field: 'payout', newValue: payout,
+          description: 'Ran Variance Analysis for ' + payout + (co._spot ? ' (one-employee check)' : '') });
+      }
     });
 
     if (opts.onDone) { opts.onDone(); return; }
@@ -14068,6 +14094,11 @@ function varFinalize(coId) {
 
   var activeG = (typeof varActiveGroupIdx !== 'undefined' && varActiveGroupIdx >= 0) ? varBatchGroups[varActiveGroupIdx] : null;
   if (activeG && activeG.clientKey) varSaveCutoffSnapshot(activeG.clientKey, co);
+  if (activeG && activeG.clientKey && typeof logAudit === 'function') {
+    logAudit({ action: 'variance_finalized', entityType: 'task', entityId: activeG.clientKey + ':variance',
+      entityLabel: _auditTaskLabel(activeG.clientKey, 'variance'), field: 'payout', newValue: co._payout || null,
+      description: 'Finalized Variance Analysis for ' + (co._payout || 'cut-off') });
+  }
 
   if (typeof showToast === 'function') showToast('Cut-off ' + co._payout + ' finalized \u2014 findings will be included in Payroll Instructions');
 }
@@ -14917,6 +14948,11 @@ function tkDownloadOutput() {
   // is also captured synchronously) but the wrong filename.
   var tkSubNameAtCallTime = (typeof tkActiveGroupIdx !== 'undefined' && tkActiveGroupIdx >= 0 && tkBatchGroups[tkActiveGroupIdx])
     ? (tkBatchGroups[tkActiveGroupIdx].clientKey || tkBatchGroups[tkActiveGroupIdx].name || '') : '';
+  if (typeof logAudit === 'function') {
+    var _tkDlCk = (tkActiveGroupIdx >= 0 && tkBatchGroups[tkActiveGroupIdx] && tkBatchGroups[tkActiveGroupIdx].clientKey) || clientKey;
+    logAudit({ action: 'task_output_downloaded', entityType: 'task', entityId: _tkDlCk + ':validation',
+      entityLabel: _auditTaskLabel(_tkDlCk, 'validation'), description: 'Downloaded validated attendance output' });
+  }
 
   function clean(v) { return String(v==null?'':v).trim(); }
 
@@ -15903,6 +15939,11 @@ function runValidationBatch() {
         g.tkAbsentEmpFull = window.tkAbsentEmpFull; // needed so "+ Add" still works after switching back to this subcompany
         g.status = 'done';
         tkSaveFullSnapshot(g.clientKey);
+        if (typeof logAudit === 'function') {
+          logAudit({ action: 'task_processed', entityType: 'task', entityId: g.clientKey + ':validation',
+            entityLabel: _auditTaskLabel(g.clientKey, 'validation'),
+            description: 'Processed attendance files for ' + _clientNameFor(g.clientKey) + ' (' + tkReviewRows.length + ' row(s) to review)' });
+        }
         // Headcount now moves with whatever this cut-off's Attendance Report actually says —
         // full roster count from the Summary sheet, not the old static/hardcoded number.
         if (typeof window._tkFullHeadcount === 'number' && clients[g.clientKey]) {
@@ -20051,6 +20092,11 @@ function runDisputeSummaryBatch() {
     g.priorOpenCount = findings.priorOpenCount;
     g.status = 'done';
     dsSaveCutoffSnapshot(g.clientKey, g);
+    if (typeof logAudit === 'function') {
+      logAudit({ action: 'task_processed', entityType: 'task', entityId: g.clientKey + ':disputes_summary',
+        entityLabel: _auditTaskLabel(g.clientKey, 'disputes_summary'), field: 'cutoff', newValue: applicableCutoff || null,
+        description: 'Generated Dispute Summary (' + (findings.included || []).length + ' ticket(s))' });
+    }
   });
 
   renderDsBatchList();
@@ -20335,6 +20381,12 @@ function dsFinalizeFindings() {
   if (finalizedGi >= 0 && dsBatchGroups[finalizedGi]) {
     dsBatchGroups[finalizedGi].finalized = true;
     dsSaveCutoffSnapshot(dsBatchGroups[finalizedGi].clientKey, dsBatchGroups[finalizedGi]);
+    var _dsFinCk = dsBatchGroups[finalizedGi].clientKey;
+    if (_dsFinCk && typeof logAudit === 'function') {
+      logAudit({ action: 'disputes_summary_finalized', entityType: 'task', entityId: _dsFinCk + ':disputes_summary',
+        entityLabel: _auditTaskLabel(_dsFinCk, 'disputes_summary'), field: 'cutoff', newValue: dsBatchGroups[finalizedGi].applicableCutoff || null,
+        description: 'Finalized Dispute Summary findings' });
+    }
     renderDsBatchList();
   }
   if (typeof showToast === 'function') showToast('Findings finalized \u2014 ready to generate');
@@ -23641,6 +23693,9 @@ async function saveTicket() {
   supabaseClient.from('disputes').insert(Object.assign({ id: newTicket.id, source: 'manual' }, dtmBuildDisputeRow(newTicket))).then(function(res) {
     if (res.error) dtmReportSaveError('Could not save new ticket ' + newTicket.id, res.error);
   });
+  if (typeof logAudit === 'function') {
+    logAudit({ action: 'ticket_created', entityType: 'dispute', entityId: newTicket.id, entityLabel: _clientNameFor(newTicket.client) + ' — ' + newTicket.id + (newTicket.name ? ' (' + newTicket.name + ')' : '') });
+  }
 
   // Re-render workspace disputes
   if (currentWsClient) openWorkspace(currentWsClient);
@@ -23953,6 +24008,10 @@ async function ildConfirmImport() {
   }
   if (succeeded) {
     if (typeof showToast === 'function') showToast(succeeded + ' legacy ticket' + (succeeded!==1?'s':'') + ' imported');
+    if (typeof logAudit === 'function') {
+      logAudit({ action: 'tickets_imported', entityType: 'dispute', entityLabel: window.currentWsClient ? _clientNameFor(window.currentWsClient) : null,
+        description: 'Imported ' + succeeded + ' legacy ticket(s)' + (failed.length ? ', ' + failed.length + ' failed' : '') });
+    }
     if (typeof loadDisputesFromSupabase === 'function') await loadDisputesFromSupabase();
     if (window.currentWsClient && typeof refreshWsDisputesBadgesAndList === 'function') refreshWsDisputesBadgesAndList(window.currentWsClient);
     if (typeof renderDisputes === 'function') renderDisputes();
