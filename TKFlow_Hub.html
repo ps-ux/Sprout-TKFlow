@@ -10911,10 +10911,13 @@ function getRealCalendarPeriods() {
 // previous cycle, e.g. an "August 1st" payout covering July 16-31 attendance).
 function findCurrentCalendarPeriodIdx(periods) {
   var now = new Date();
-  function parseAttCov(attCov, yr) {
+  function parseAttCov(attCov, yr, payMon) {
     var m = (attCov || '').match(/(\d{1,2})\/(\d{1,2})\s*[-\u2013\u2014]\s*(\d{1,2})\/(\d{1,2})/);
     if (!m) return null;
-    return { start: new Date(yr, +m[1]-1, +m[2]), end: new Date(yr, +m[3]-1, +m[4]) };
+    // yr is the PAYOUT year -- a January payout covering December attendance (e.g. "12/16-12/31"
+    // on a January 1st 2027 payout) means LAST year's December, not this year's.
+    function y(mon) { return (payMon != null && mon - payMon > 6) ? yr - 1 : yr; }
+    return { start: new Date(y(+m[1]-1), +m[1]-1, +m[2]), end: new Date(y(+m[3]-1), +m[3]-1, +m[4]) };
   }
   // "Current" = the period whose attendance window actually contains today — this is what
   // most things (Overview banner, rollover check, New Hires, Current Attendance Validation,
@@ -10922,7 +10925,7 @@ function findCurrentCalendarPeriodIdx(periods) {
   // in right now. Only Variance Analysis is genuinely staggered (see
   // findMostRecentlyCompletedPeriodIdx below) — everything else should NOT lag by one period.
   var idx = periods.findIndex(function(p) {
-    var r = parseAttCov(p.attCov, p.yr);
+    var r = parseAttCov(p.attCov, p.yr, p.month);
     return r && now >= r.start && now <= r.end;
   });
   if (idx >= 0) return idx;
@@ -10933,7 +10936,7 @@ function findCurrentCalendarPeriodIdx(periods) {
   // happened yet.
   var fallbackIdx = -1;
   for (var i = 0; i < periods.length; i++) {
-    var r = parseAttCov(periods[i].attCov, periods[i].yr);
+    var r = parseAttCov(periods[i].attCov, periods[i].yr, periods[i].month);
     if (r && r.end <= now) fallbackIdx = i;
   }
   return fallbackIdx >= 0 ? fallbackIdx : 0;
@@ -10953,19 +10956,22 @@ function findCurrentCalendarPeriodIdx(periods) {
 // dtmReceivedCutoffLabel). Falls back the same way: most recently completed period as of that
 // date, never a future one, or period 0 if nothing qualifies.
 function findCalendarPeriodIdxAsOf(periods, asOfDate) {
-  function parseAttCov(attCov, yr) {
+  function parseAttCov(attCov, yr, payMon) {
     var m = (attCov || '').match(/(\d{1,2})\/(\d{1,2})\s*[-–—]\s*(\d{1,2})\/(\d{1,2})/);
     if (!m) return null;
-    return { start: new Date(yr, +m[1]-1, +m[2]), end: new Date(yr, +m[3]-1, +m[4]) };
+    // yr is the PAYOUT year -- a January payout covering December attendance (e.g. "12/16-12/31"
+    // on a January 1st 2027 payout) means LAST year's December, not this year's.
+    function y(mon) { return (payMon != null && mon - payMon > 6) ? yr - 1 : yr; }
+    return { start: new Date(y(+m[1]-1), +m[1]-1, +m[2]), end: new Date(y(+m[3]-1), +m[3]-1, +m[4]) };
   }
   var idx = periods.findIndex(function(p) {
-    var r = parseAttCov(p.attCov, p.yr);
+    var r = parseAttCov(p.attCov, p.yr, p.month);
     return r && asOfDate >= r.start && asOfDate <= r.end;
   });
   if (idx >= 0) return idx;
   var fallbackIdx = -1;
   for (var i = 0; i < periods.length; i++) {
-    var r = parseAttCov(periods[i].attCov, periods[i].yr);
+    var r = parseAttCov(periods[i].attCov, periods[i].yr, periods[i].month);
     if (r && r.end <= asOfDate) fallbackIdx = i;
   }
   return fallbackIdx >= 0 ? fallbackIdx : 0;
@@ -11030,10 +11036,12 @@ function generateCutoffOptions(clientKey) {
       if (!m) return p.attCov + ', ' + p.yr;
       var startMon = parseInt(m[1],10) - 1, startDay = parseInt(m[2],10);
       var endMon = parseInt(m[3],10) - 1, endDay = parseInt(m[4],10);
+      // p.yr is the payout year -- December attendance on a January payout is last year's.
+      var attYr = endMon - p.month > 6 ? p.yr - 1 : p.yr;
       if (startMon === endMon) {
-        return CUTOFF_MONTH_NAMES[startMon] + ' ' + startDay + '-' + endDay + ', ' + p.yr;
+        return CUTOFF_MONTH_NAMES[startMon] + ' ' + startDay + '-' + endDay + ', ' + attYr;
       }
-      return CUTOFF_MONTH_NAMES[startMon] + ' ' + startDay + '-' + CUTOFF_MONTH_NAMES[endMon] + ' ' + endDay + ', ' + p.yr;
+      return CUTOFF_MONTH_NAMES[startMon] + ' ' + startDay + '-' + CUTOFF_MONTH_NAMES[endMon] + ' ' + endDay + ', ' + attYr;
     });
   }
   var c = clients[clientKey];
@@ -19807,23 +19815,74 @@ function codeUnit(code, number) {
 }
 
 var DTM_MONTH_SHORT = {January:'Jan',February:'Feb',March:'Mar',April:'Apr',May:'May',June:'Jun',July:'Jul',August:'Aug',September:'Sep',October:'Oct',November:'Nov',December:'Dec'};
-// "September 1st" -> "Sep 1st", for a narrow display column. Falls back to the original
-// string unchanged if it doesn't match the "<Month> 1st/2nd" convention (e.g. an old
-// free-typed value) -- purely a display shortener, the stored/compared value never changes.
+// "September 1st" -> "Sep 1st", for a narrow display column. A year suffix ("January 1st 2027",
+// see dtmPayoutKeyForPeriod) is kept only when it isn't this year ("Jan 1st '27"), so the
+// everyday case stays as short as before. Falls back to the original string unchanged if it
+// doesn't match the "<Month> 1st/2nd [yyyy]" convention (e.g. an old free-typed value) --
+// purely a display shortener, the stored/compared value never changes.
 function dtmShortPayoutLabel(fullLabel) {
   if (!fullLabel) return '';
-  var m = fullLabel.match(/^([A-Za-z]+)\s+(1st|2nd)$/);
+  var m = fullLabel.match(/^([A-Za-z]+)\s+(1st|2nd)(?:\s+(\d{4}))?$/);
   if (!m) return fullLabel;
-  return (DTM_MONTH_SHORT[m[1]] || m[1]) + ' ' + m[2];
+  var yr = m[3] && +m[3] !== new Date().getFullYear() ? " '" + m[3].slice(2) : '';
+  return (DTM_MONTH_SHORT[m[1]] || m[1]) + ' ' + m[2] + yr;
 }
-// Payout Inclusion options for a PI line -- value stays the exact canonical string
-// (dsApplicableCutoffKey/ticketApplicableCutoffKey/dtmCutoffOptions' own format, e.g.
-// "September 1st") so equality checks against a batch's applicableCutoff keep working
-// unchanged; only the visible label is shortened, per the user's ask for a narrow field.
+// Payout Inclusion values carry their payout YEAR ("January 1st 2027") -- a bare
+// "January 1st" can't tell this coming January from the one a year later, so a closed ticket's
+// line would otherwise get pulled into the same payout's Dispute Summary again next year.
+// Ticket-level d.cutoff/d.piPayout and every line saved before this change are still yearless;
+// dtmResolvePayoutKey infers their year from when the ticket came in.
+function dtmPayoutKeyForPeriod(p) {
+  return p.monthName + ' ' + (p.period === 1 ? '1st' : '2nd') + ' ' + p.yr;
+}
+function dtmParsePayoutKey(v) {
+  var s = String(v || '').trim();
+  var m = s.match(/^([A-Za-z]+\s+(?:1st|2nd))(?:\s+(\d{4}))?$/);
+  return m ? { label: m[1], yr: m[2] ? +m[2] : null } : { label: s, yr: null };
+}
+// The year whose "<Month> 1st/2nd" payout falls closest to refDate (checks the year before,
+// of, and after) -- e.g. a "January 1st" on a ticket received in December means next January,
+// a "November 2nd" on that same ticket means the November just past.
+function dtmInferPayoutYear(label, refDate) {
+  var mon = Object.keys(DTM_MONTH_SHORT).indexOf(label.split(' ')[0]);
+  var ref = refDate || new Date();
+  if (mon < 0) return ref.getFullYear();
+  var best = null, bestDiff = Infinity;
+  [-1, 0, 1].forEach(function(off) {
+    var yr = ref.getFullYear() + off;
+    var diff = Math.abs(new Date(yr, mon, 15) - ref);
+    if (diff < bestDiff) { bestDiff = diff; best = yr; }
+  });
+  return best;
+}
+// When the ticket came in -- the anchor for inferring a yearless payout's year.
+function dtmTicketRefDate(d) {
+  var dt = (d && typeof parseTATEmailTime === 'function') ? parseTATEmailTime(d.emailTime) : null;
+  if (!dt && d && d.submittedAt) dt = new Date(d.submittedAt);
+  if (!dt && d && d.dateSubmitted) dt = new Date(d.dateSubmitted);
+  return (dt && !isNaN(dt)) ? dt : null;
+}
+// Any payout value -> its full "Month 1st/2nd yyyy" key. Yearless values get their year from
+// the ticket's received date (d), or from today when there's no ticket (a Dispute Summary
+// run's own applicableCutoff, which is always "now").
+function dtmResolvePayoutKey(v, d) {
+  var k = dtmParsePayoutKey(v);
+  if (!k.label || !/\s(1st|2nd)$/.test(k.label)) return k.label;
+  return k.label + ' ' + (k.yr != null ? k.yr : dtmInferPayoutYear(k.label, d ? dtmTicketRefDate(d) : null));
+}
+// Does this ticket's payout value (a PI line's, or d.cutoff) land on this run's payout?
+function dtmPayoutMatchesRun(d, v, runCutoff) {
+  if (!v || !runCutoff) return false;
+  return dtmResolvePayoutKey(v, d) === dtmResolvePayoutKey(runCutoff, null);
+}
+// Payout Inclusion options for a PI line -- value is the full year-bearing key
+// (dtmPayoutKeyForPeriod); only the visible label is shortened, per the user's ask for a
+// narrow field. Compare against it through dtmResolvePayoutKey/dtmPayoutMatchesRun, never ===
+// on a raw stored value, since older values have no year.
 function dtmPiPayoutOptions() {
   var periods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
   return periods.map(function(p) {
-    var value = p.monthName + ' ' + (p.period === 1 ? '1st' : '2nd');
+    var value = dtmPayoutKeyForPeriod(p);
     return { value: value, label: dtmShortPayoutLabel(value) };
   });
 }
@@ -19956,7 +20015,7 @@ function dsAddTicket() {
   var d = allDisputes.find(function(x){ return x.id === raw || x.id === '#' + raw; });
   if (!d) { if (typeof showToast === 'function') showToast('Ticket ' + raw + ' not found', '#e67e00'); return; }
   if (g.included.indexOf(d) === -1) g.included.push(d);
-  var hasLineForCutoff = getPiLines(d).some(function(l){ return dtmPiLineEffectivePayout(d, l) === g.applicableCutoff; });
+  var hasLineForCutoff = getPiLines(d).some(function(l){ return dtmPayoutMatchesRun(d, dtmPiLineEffectivePayout(d, l), g.applicableCutoff); });
   if (hasLineForCutoff && g.payroll.indexOf(d) === -1) g.payroll.push(d);
   if (input) input.value = '';
   renderDsResult(g);
@@ -19971,7 +20030,7 @@ function dsAddPiLine(ticketId) {
   var d = allDisputes.find(function(x){ return x.id === ticketId; });
   if (!g || !d) return;
   if (!Array.isArray(d.piLines)) d.piLines = [];
-  var line = { code: '', number: '', addDed: 'Addition', remarks: '', date: '', piPayout: g.applicableCutoff || '', attendancePeriod: '', _remarksAuto: true };
+  var line = { code: '', number: '', addDed: 'Addition', remarks: '', date: '', piPayout: g.applicableCutoff ? dtmResolvePayoutKey(g.applicableCutoff, null) : '', attendancePeriod: '', _remarksAuto: true };
   line.remarks = dtmPiLineRemarkTemplate(d, line);
   d.piLines.push(line);
   if (g.payroll.indexOf(d) === -1) g.payroll.push(d);
@@ -20021,8 +20080,8 @@ function computeDisputeFindings(clientKey, applicableCutoff) {
     if (clientKey) return d.client === clientKey;
     return (cu.assignedClients || []).includes(d.client);
   });
-  var thisCutoff = disputes.filter(function(d) { return d.cutoff === applicableCutoff; });
-  var priorOpen  = disputes.filter(function(d) { return d.cutoff !== applicableCutoff && d.status !== 'dst-closed'; });
+  var thisCutoff = disputes.filter(function(d) { return dtmPayoutMatchesRun(d, d.cutoff, applicableCutoff); });
+  var priorOpen  = disputes.filter(function(d) { return !dtmPayoutMatchesRun(d, d.cutoff, applicableCutoff) && d.status !== 'dst-closed'; });
   var included   = thisCutoff.concat(priorOpen);
   // Payroll inclusion is driven per PAYROLL-INSTRUCTION LINE now (l.piPayout), not one
   // ticket-level field -- a ticket with several disputed dates can have one date's line
@@ -20030,7 +20089,7 @@ function computeDisputeFindings(clientKey, applicableCutoff) {
   // the ticket itself staying open until every line is resolved. Falls back to the ticket's
   // own Cut-off (d.cutoff) for any line that predates this per-line field.
   function ticketHasLineForCutoff(d) {
-    return getPiLines(d).some(function(l) { return dtmPiLineEffectivePayout(d, l) === applicableCutoff; });
+    return getPiLines(d).some(function(l) { return dtmPayoutMatchesRun(d, dtmPiLineEffectivePayout(d, l), applicableCutoff); });
   }
   // Also surface any ticket with a line explicitly tagged for this payout, even if it
   // originated in an earlier cutoff and is already closed — so it isn't orphaned from the summary.
@@ -20246,7 +20305,7 @@ function renderDsResult(g) {
         + td(d.updateOpen, 'font-size:11px;')
         + td(d.otherRemarks, 'font-size:11px;color:#9898a6;')
         + '<td style="padding:6px 10px;border-bottom:1px solid #EBEBEF;">'
-        + (d.cutoff !== g.applicableCutoff ? '<span style="font-size:10px;background:#fff4e6;color:#e67e00;padding:1px 6px;border-radius:4px;">\u26A0 Prior</span>' : '')
+        + (!dtmPayoutMatchesRun(d, d.cutoff, g.applicableCutoff) ? '<span style="font-size:10px;background:#fff4e6;color:#e67e00;padding:1px 6px;border-radius:4px;">\u26A0 Prior</span>' : '')
         + '</td>'
         + '<td style="padding:6px 10px;border-bottom:1px solid #EBEBEF;">'
         + '<button onclick="dsRemoveTicket(\'' + d.id + '\')" title="Remove from this report" style="background:none;border:none;color:#c0392b;cursor:pointer;padding:2px;font-size:14px;"><i class="ti ti-x"></i></button>'
@@ -20270,9 +20329,9 @@ function renderDsResult(g) {
       if (!Array.isArray(d.piLines)) d.piLines = getPiLines(d);
       var dsDateOptions = dtmPiLineDateOptions(d);
       d.piLines.forEach(function(l, li) {
-        var effPayout = dtmPiLineEffectivePayout(d, l);
+        var effPayout = dtmResolvePayoutKey(dtmPiLineEffectivePayout(d, l), d);
         var effPeriod = dtmPiLineEffectivePeriod(d, l);
-        if (effPayout !== g.applicableCutoff) return;
+        if (!dtmPayoutMatchesRun(d, effPayout, g.applicableCutoff)) return;
         var isAdd = (l.addDed || 'Addition') !== 'Deduction';
         var remarkVal = (l.remarks || '').toString().replace(/"/g, '&quot;');
         var rowId = d.id.replace(/[^a-zA-Z0-9]/g, '') + '_' + li;
@@ -20537,7 +20596,7 @@ function dsFillDisputesTemplateSheet(baseSheetXml, prevRows, currRows) {
 function dsPiRowsForTicket(d, useEdited, applicableCutoff) {
   var lines = Array.isArray(d.piLines) ? d.piLines : getPiLines(d);
   if (applicableCutoff != null) {
-    lines = lines.filter(function(l) { return dtmPiLineEffectivePayout(d, l) === applicableCutoff; });
+    lines = lines.filter(function(l) { return dtmPayoutMatchesRun(d, dtmPiLineEffectivePayout(d, l), applicableCutoff); });
   }
   return lines.map(function(l) {
     var remarks = (useEdited && l.remarks) ? l.remarks : (d.recommendedResolution || d.otherRemarks || l.remarks || '');
@@ -21150,14 +21209,15 @@ function emailClientName(k) {
 // formatAttCovShort, just with full month names and a year for a client-facing sentence
 // instead of a compact sheet-tab label.
 var EMAIL_MONTH_NAMES_FULL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-function emailFormatAttCovFull(attCov, yr) {
+function emailFormatAttCovFull(attCov, yr, payMon) {
   var m = (attCov || '').match(/(\d{1,2})\/(\d{1,2})\s*[-–—]\s*(\d{1,2})\/(\d{1,2})/);
   if (!m) return attCov || '';
   var startMon = parseInt(m[1],10) - 1, startDay = parseInt(m[2],10);
   var endMon = parseInt(m[3],10) - 1, endDay = parseInt(m[4],10);
   var startStr = EMAIL_MONTH_NAMES_FULL[startMon] + ' ' + startDay;
   var endStr = (startMon === endMon ? '' : EMAIL_MONTH_NAMES_FULL[endMon] + ' ') + endDay;
-  return startStr + ' – ' + endStr + ', ' + yr;
+  // yr is the payout year -- December attendance on a January payout is last year's.
+  return startStr + ' – ' + endStr + ', ' + ((payMon != null && endMon - payMon > 6) ? yr - 1 : yr);
 }
 
 // Live prefill for a first-time-this-session open of the Email Generator -- only ever writes
@@ -21205,7 +21265,7 @@ function emailPrefillFromClient() {
     var cutoffEl = document.getElementById('email-cutoff');
     if (cutoffEl && !cutoffEl.value) cutoffEl.value = p.monthName + ' ' + (p.period === 1 ? '1st' : '2nd') + ' payroll';
     var coverageEl = document.getElementById('email-coverage');
-    if (coverageEl && !coverageEl.value) coverageEl.value = emailFormatAttCovFull(p.attCov, p.yr);
+    if (coverageEl && !coverageEl.value) coverageEl.value = emailFormatAttCovFull(p.attCov, p.yr, p.month);
 
     // Meeting/follow-up note: deadline labels are freeform per client's own uploaded calendar
     // file (not a fixed enum), so this matches by keyword rather than an exact label -- per
@@ -21749,7 +21809,7 @@ function generateEmail() {
     var curIdx = (periods.length && typeof findCurrentCutoffStartedIdx === 'function') ? findCurrentCutoffStartedIdx(periods) : -1;
     var idx = curIdx - 1;
     var p = idx >= 0 ? periods[idx] : null;
-    return p ? emailFormatAttCovFull(p.attCov, p.yr) : coverage;
+    return p ? emailFormatAttCovFull(p.attCov, p.yr, p.month) : coverage;
   }
 
   var greetLine = greeting ? greeting + '\n\n' : '';
@@ -28033,7 +28093,7 @@ function dtmRenderPiLines(d) {
     var dateOptsHtml = ['<option value="">\u2014</option>'].concat(dateOptions.map(function(dt) {
       return '<option value="' + dt.replace(/"/g,'&quot;') + '"' + (effDate === dt ? ' selected' : '') + '>' + dt + '</option>';
     })).join('');
-    var effPayout = dtmPiLineEffectivePayout(d, l);
+    var effPayout = dtmResolvePayoutKey(dtmPiLineEffectivePayout(d, l), d);
     var effPeriod = dtmPiLineEffectivePeriod(d, l);
     var hasPayoutMatch = payoutOptions.some(function(o){ return o.value === effPayout; });
     var payoutOptsHtml = ['<option value="">\u2014</option>']
