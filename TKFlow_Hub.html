@@ -19815,16 +19815,16 @@ function codeUnit(code, number) {
 }
 
 var DTM_MONTH_SHORT = {January:'Jan',February:'Feb',March:'Mar',April:'Apr',May:'May',June:'Jun',July:'Jul',August:'Aug',September:'Sep',October:'Oct',November:'Nov',December:'Dec'};
-// "September 1st" -> "Sep 1st", for a narrow display column. A year suffix ("January 1st 2027",
-// see dtmPayoutKeyForPeriod) is kept only when it isn't this year ("Jan 1st '27"), so the
-// everyday case stays as short as before. Falls back to the original string unchanged if it
+// "September 1st 2026" -> "Sep 1st '26", for a narrow display column. The year is always shown
+// (user found a year-less "Nov 1st" confusing next to "Jan 1st '27"); a legacy yearless value
+// shows without one. Falls back to the original string unchanged if it
 // doesn't match the "<Month> 1st/2nd [yyyy]" convention (e.g. an old free-typed value) --
 // purely a display shortener, the stored/compared value never changes.
 function dtmShortPayoutLabel(fullLabel) {
   if (!fullLabel) return '';
   var m = fullLabel.match(/^([A-Za-z]+)\s+(1st|2nd)(?:\s+(\d{4}))?$/);
   if (!m) return fullLabel;
-  var yr = m[3] && +m[3] !== new Date().getFullYear() ? " '" + m[3].slice(2) : '';
+  var yr = m[3] ? " '" + m[3].slice(2) : '';
   return (DTM_MONTH_SHORT[m[1]] || m[1]) + ' ' + m[2] + yr;
 }
 // Payout Inclusion values carry their payout YEAR ("January 1st 2027") -- a bare
