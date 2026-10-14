@@ -2899,17 +2899,18 @@ function renderGroupOverview(grpKey) {
     // (has a finishedAt, then more tasksDone, then most recently started).
     var bestByLabel = {};
     hist.forEach(function(e) {
-      var existing = bestByLabel[e.cutoffLabel];
-      if (!existing) { bestByLabel[e.cutoffLabel] = e; return; }
+      var bk = e.cutoffLabel + '#' + (e.cutoffYear || '');
+      var existing = bestByLabel[bk];
+      if (!existing) { bestByLabel[bk] = e; return; }
       var existingScore = (existing.finishedAt ? 1000 : 0) + (existing.tasksDone || 0);
       var eScore = (e.finishedAt ? 1000 : 0) + (e.tasksDone || 0);
       if (eScore > existingScore || (eScore === existingScore && new Date(e.startedAt) > new Date(existing.startedAt))) {
-        bestByLabel[e.cutoffLabel] = e;
+        bestByLabel[bk] = e;
       }
     });
     Object.keys(bestByLabel).forEach(function(label) {
       var e = bestByLabel[label];
-      mergedHist.push({ sub: c.name, subKey: k, cutoffLabel: e.cutoffLabel, startedAt: e.startedAt, finishedAt: e.finishedAt, tasksDone: e.tasksDone, totalTasks: e.totalTasks, processedBy: e.processedBy });
+      mergedHist.push({ sub: c.name, subKey: k, cutoffLabel: e.cutoffLabel, cutoffYear: e.cutoffYear, startedAt: e.startedAt, finishedAt: e.finishedAt, tasksDone: e.tasksDone, totalTasks: e.totalTasks, processedBy: e.processedBy });
     });
   });
   mergedHist.sort(function(a,b){ return new Date(b.startedAt) - new Date(a.startedAt); });
@@ -2996,12 +2997,13 @@ async function _renderHistorySnapshotBody(e, idx) {
   if (!body) return;
   body.innerHTML = '<div style="font-size:12px;color:#9898a6;"><i class="ti ti-loader"></i> Loading saved results…</div>';
   var companyId = clients[e.subKey] && clients[e.subKey].companyId;
+  var eYr = e.cutoffYear || cutoffYearOf(e.cutoffLabel, e.startedAt);
   if (!companyId) { body.innerHTML = '<div style="font-size:12px;color:#9898a6;">No company record found for this subcompany.</div>'; return; }
 
   var sectionsHtml = '';
   try {
     var tkRes = await supabaseClient.from('task_cutoff_review_state').select('*')
-      .eq('company_id', companyId).eq('task_key', 'validation').eq('cutoff_label', e.cutoffLabel).maybeSingle();
+      .eq('company_id', companyId).eq('task_key', 'validation').eq('cutoff_label', e.cutoffLabel).eq('cutoff_year', eYr).maybeSingle();
     sectionsHtml += _histValidationSectionHtml(tkRes.error ? null : tkRes.data);
   } catch (err) {
     sectionsHtml += _histSectionWrap('Validation', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
@@ -3021,13 +3023,13 @@ async function _renderHistorySnapshotBody(e, idx) {
     // same short/long mismatch _histStatusOnlySectionsHtml already strips off below.
     var dsShortLabel = String(e.cutoffLabel || '').split(' Payout')[0];
     var dsRes = await supabaseClient.from('task_cutoff_review_state').select('*')
-      .eq('company_id', companyId).eq('task_key', 'disputes_summary').eq('cutoff_label', dsShortLabel).maybeSingle();
+      .eq('company_id', companyId).eq('task_key', 'disputes_summary').eq('cutoff_label', dsShortLabel).eq('cutoff_year', eYr).maybeSingle();
     sectionsHtml += _histDisputesSectionHtml(dsRes.error ? null : dsRes.data);
   } catch (err) {
     sectionsHtml += _histSectionWrap('Dispute Summary', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
   }
 
-  sectionsHtml += _histStatusOnlySectionsHtml(e.subKey, e.cutoffLabel);
+  sectionsHtml += _histStatusOnlySectionsHtml(e.subKey, e.cutoffLabel, eYr);
 
   // Re-fetch the element rather than reusing the one captured above -- this row could have
   // been collapsed (and the DOM rebuilt by another render) while the awaits above were in flight.
@@ -3216,7 +3218,7 @@ var HIST_OTHER_TASK_LABELS = { newhires: 'New Hires', payroll_instructions: 'Pay
 // simple status line each, per the user's request: skipped is indicated, never a viewable row.
 // Tasks a client has switched off in their Applicable Tasks matrix (isTaskEnabled) are left out
 // entirely -- matching what the live Tasks tab itself shows.
-function _histStatusOnlySectionsHtml(subKey, cutoffLabel) {
+function _histStatusOnlySectionsHtml(subKey, cutoffLabel, cutoffYear) {
   // task_run_history keys its cutoff_label off clients[k].cutoff (the short "August 2nd" form,
   // only advanced by "Catch up"), while the row passed in here carries client_cutoff_processing's
   // longer getCurrentCutoffLabel form ("August 2nd Payout · att ..."). Both are built from the
@@ -3224,7 +3226,7 @@ function _histStatusOnlySectionsHtml(subKey, cutoffLabel) {
   // exactly that short form -- so strip that suffix back off rather than looking the long form
   // up directly, which would silently never match anything.
   var shortCutoffLabel = String(cutoffLabel || '').split(' Payout')[0];
-  var byCutoff = (window.taskRunHistory && window.taskRunHistory[subKey] && window.taskRunHistory[subKey][shortCutoffLabel]) || {};
+  var byCutoff = (window.taskRunHistory && window.taskRunHistory[subKey] && window.taskRunHistory[subKey][cutoffYear ? shortCutoffLabel + '#' + cutoffYear : shortCutoffLabel]) || {};
   var rows = Object.keys(HIST_OTHER_TASK_LABELS).filter(function(taskKey) {
     return typeof isTaskEnabled !== 'function' || isTaskEnabled(subKey, taskKey);
   }).map(function(taskKey) {
@@ -7782,8 +7784,8 @@ function _persistHeadcountHistory(clientKey, cutoffLabel, hc) {
   var companyId = clients[clientKey] && clients[clientKey].companyId;
   if (!companyId || !cutoffLabel) return;
   supabaseClient.from('company_headcount_history').upsert({
-    company_id: companyId, cutoff_label: cutoffLabel, headcount: hc, recorded_at: new Date().toISOString()
-  }, { onConflict: 'company_id,cutoff_label' }).then(function(res) {
+    company_id: companyId, cutoff_label: cutoffLabel, cutoff_year: cutoffYearOf(cutoffLabel), headcount: hc, recorded_at: new Date().toISOString()
+  }, { onConflict: 'company_id,cutoff_label,cutoff_year' }).then(function(res) {
     if (res.error) console.warn('Could not save headcount history for ' + clientKey, res.error);
   });
 }
@@ -10635,7 +10637,7 @@ function saveTaskRunHistory(clientKey, taskKey, cutoffLabel, st, reason) {
   var companyId = clients[clientKey] && clients[clientKey].companyId;
   if (!companyId) return;
   supabaseClient.from('task_run_history').insert({
-    company_id: companyId, task_key: taskKey, cutoff_label: cutoffLabel, status: st, reason: reason || ''
+    company_id: companyId, task_key: taskKey, cutoff_label: cutoffLabel, cutoff_year: cutoffYearOf(cutoffLabel), status: st, reason: reason || ''
   }).then(function(res) {
     if (res.error) console.warn('Could not save task run history for ' + clientKey + '/' + taskKey, res.error);
   });
@@ -10655,10 +10657,7 @@ async function loadTaskRunHistoryFromSupabase() {
   (res.data || []).forEach(function(row) {
     var k = companyIdToKey[row.company_id];
     if (!k) return;
-    if (!window.taskRunHistory[k]) window.taskRunHistory[k] = {};
-    if (!window.taskRunHistory[k][row.cutoff_label]) window.taskRunHistory[k][row.cutoff_label] = {};
-    if (!window.taskRunHistory[k][row.cutoff_label][row.task_key]) window.taskRunHistory[k][row.cutoff_label][row.task_key] = [];
-    window.taskRunHistory[k][row.cutoff_label][row.task_key].push({ st: row.status, reason: row.reason || '', timestamp: row.run_at });
+    _taskRunHistoryPush(k, row.cutoff_label, row.cutoff_year || cutoffYearOf(row.cutoff_label, row.run_at), row.task_key, { st: row.status, reason: row.reason || '', timestamp: row.run_at });
   });
 }
 
@@ -10668,11 +10667,11 @@ function saveCutoffProcessing(clientKey, entry) {
   var companyId = clients[clientKey] && clients[clientKey].companyId;
   if (!companyId) return;
   supabaseClient.from('client_cutoff_processing').upsert({
-    company_id: companyId, cutoff_label: entry.cutoffLabel,
+    company_id: companyId, cutoff_label: entry.cutoffLabel, cutoff_year: entry.cutoffYear || cutoffYearOf(entry.cutoffLabel),
     started_at: entry.startedAt || null, finished_at: entry.finishedAt || null,
     tasks_done: entry.tasksDone || 0, total_tasks: entry.totalTasks || 0,
     processed_by: entry.processedBy || null
-  }, { onConflict: 'company_id,cutoff_label' }).select().then(function(res) {
+  }, { onConflict: 'company_id,cutoff_label,cutoff_year' }).select().then(function(res) {
     if (res.error) { console.warn('Could not save cutoff processing history for ' + clientKey, res.error); return; }
     // RLS can let an upsert report success with res.error === null while returning 0 rows
     // (the write itself is invisible to its own RETURNING clause) -- confirmed happening on
@@ -10700,7 +10699,7 @@ async function loadCutoffProcessingFromSupabase() {
     if (!k) return;
     if (!window.groupProcessingHistory[k]) window.groupProcessingHistory[k] = [];
     window.groupProcessingHistory[k].push({
-      cutoffLabel: row.cutoff_label, startedAt: row.started_at, finishedAt: row.finished_at,
+      cutoffLabel: row.cutoff_label, cutoffYear: row.cutoff_year || cutoffYearOf(row.cutoff_label, row.started_at), startedAt: row.started_at, finishedAt: row.finished_at,
       tasksDone: row.tasks_done, totalTasks: row.total_tasks, processedBy: row.processed_by || null
     });
   });
@@ -11098,10 +11097,10 @@ async function setCutoffCoverage(key, cutoffLabel, userId) {
     // processClients -- without it, they'd see the cut-off but get zero alerts.
     _grantCoverageAccess(coveringUser, subKeys);
     var upsertRes = await supabaseClient.from('cutoff_coverage').upsert({
-      scope_type: scope.type, scope_id: scope.id, cutoff_label: cutoffLabel,
+      scope_type: scope.type, scope_id: scope.id, cutoff_label: cutoffLabel, cutoff_year: cutoffYearOf(cutoffLabel),
       covering_user_id: userId, assigned_by_user_id: actor && actor.id,
       assigned_by_role: actor ? (actor.roleType === 'admin' ? 'Admin' : 'Member') : null
-    });
+    }, { onConflict: 'scope_type,scope_id,cutoff_label,cutoff_year' });
     if (upsertRes.error) console.warn('Could not save cut-off coverage', upsertRes.error);
     if (typeof showToast === 'function') showToast(coveringUser.name + ' assigned to cover ' + cutoffLabel + ' for ' + (scope.obj.name || key));
     if (typeof logAudit === 'function') {
@@ -11111,7 +11110,7 @@ async function setCutoffCoverage(key, cutoffLabel, userId) {
     delete window.cutoffCoverage[repClientKey][cutoffLabel];
     delete window._coverageStore[storeKey];
     var delRes = await supabaseClient.from('cutoff_coverage').delete()
-      .eq('scope_type', scope.type).eq('scope_id', scope.id).eq('cutoff_label', cutoffLabel);
+      .eq('scope_type', scope.type).eq('scope_id', scope.id).eq('cutoff_label', cutoffLabel).eq('cutoff_year', cutoffYearOf(cutoffLabel));
     if (delRes.error) console.warn('Could not clear cut-off coverage', delRes.error);
     if (typeof logAudit === 'function' && _oldCoveringMember) {
       logAudit({ action: 'cutoff_coverage_cleared', entityType: 'client_group', entityId: key, entityLabel: scope.obj.name || key, field: 'coverage:' + cutoffLabel, oldValue: _oldCoveringMember, newValue: null });
@@ -11395,6 +11394,43 @@ window.groupProcessingHistory = window.groupProcessingHistory || {};
 // just displayed, so it can't drift stale the way clients[ck].cutoff does (that field is only
 // ever advanced by the Tasks-tab "Catch up" rollover dialog, which nothing guarantees has been
 // clicked through before a task is opened and its progress logged).
+// Which payout YEAR a cut-off label means ("November 1st", "November 1st Payout · att
+// 10/16-10/31", a Variance payout name) as of refDate (default today): the year whose <Month>
+// falls closest to it. Labels carry no year, so every table keyed on cutoff_label also stores
+// cutoff_year -- without it, next November's saved progress would load (or overwrite) this
+// November's. A label that doesn't start with a month name gets refDate's own year. The
+// database's tk_cutoff_year() fills the same value for any row saved without one.
+var _CUTOFF_MONTHS_LC = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+function cutoffYearOf(label, refDate) {
+  var ref = refDate ? new Date(refDate) : new Date();
+  if (isNaN(ref)) ref = new Date();
+  var explicit = String(label || '').match(/\b(20\d\d)\b/); // e.g. a Variance payout "September 28, 2026"
+  if (explicit) return +explicit[1];
+  var m = String(label || '').match(/^\s*([A-Za-z]+)/);
+  var mon = m ? _CUTOFF_MONTHS_LC.indexOf(m[1].toLowerCase()) : -1;
+  if (mon < 0) return ref.getFullYear();
+  var best = ref.getFullYear(), bestDiff = Infinity;
+  [-1, 0, 1].forEach(function(off) {
+    var yr = ref.getFullYear() + off, diff = Math.abs(new Date(yr, mon, 15) - ref);
+    if (diff < bestDiff) { bestDiff = diff; best = yr; }
+  });
+  return best;
+}
+// In-memory task-run-history append: under the bare label for live lookups
+// (getTaskRunHistory -- always this year's cut-off), and under "label#year" for Processing
+// History rows, which can be a past year's same-named cut-off.
+function _taskRunHistoryPush(k, label, yr, taskKey, entry) {
+  if (!window.taskRunHistory) window.taskRunHistory = {};
+  if (!window.taskRunHistory[k]) window.taskRunHistory[k] = {};
+  var keys = [label + '#' + yr];
+  if (yr === cutoffYearOf(label)) keys.push(label);
+  keys.forEach(function(key) {
+    if (!window.taskRunHistory[k][key]) window.taskRunHistory[k][key] = {};
+    if (!window.taskRunHistory[k][key][taskKey]) window.taskRunHistory[k][key][taskKey] = [];
+    window.taskRunHistory[k][key][taskKey].push(entry);
+  });
+}
+
 function getCurrentCutoffLabel(ck) {
   var realPeriods = (typeof getRealCalendarPeriods === 'function') ? getRealCalendarPeriods() : [];
   var idx = realPeriods.length ? findCurrentCutoffStartedIdx(realPeriods) : -1;
@@ -11414,9 +11450,10 @@ function markTaskStarted(clientKey) {
   var label = getCurrentCutoffLabel(clientKey);
   if (!window.groupProcessingHistory[clientKey]) window.groupProcessingHistory[clientKey] = [];
   var hist = window.groupProcessingHistory[clientKey];
-  var entry = hist.find(function(e){ return e.cutoffLabel === label; });
+  var labelYr = cutoffYearOf(label);
+  var entry = hist.find(function(e){ return e.cutoffLabel === label && (e.cutoffYear || cutoffYearOf(e.cutoffLabel, e.startedAt)) === labelYr; });
   if (!entry) {
-    entry = { cutoffLabel: label, startedAt: new Date().toISOString(), finishedAt: null, tasksDone: 0, totalTasks: 0, processedBy: null };
+    entry = { cutoffLabel: label, cutoffYear: labelYr, startedAt: new Date().toISOString(), finishedAt: null, tasksDone: 0, totalTasks: 0, processedBy: null };
     hist.unshift(entry); // most recent first
   }
   // Safety net: if an entry somehow already exists without a start time, backfill it now
@@ -11436,12 +11473,13 @@ function logTaskProgress(clientKey) {
   var label = getCurrentCutoffLabel(clientKey);
   if (!window.groupProcessingHistory[clientKey]) window.groupProcessingHistory[clientKey] = [];
   var hist = window.groupProcessingHistory[clientKey];
-  var entry = hist.find(function(e){ return e.cutoffLabel === label; });
+  var labelYr = cutoffYearOf(label);
+  var entry = hist.find(function(e){ return e.cutoffLabel === label && (e.cutoffYear || cutoffYearOf(e.cutoffLabel, e.startedAt)) === labelYr; });
   if (!entry) {
     // Fallback only — normally markTaskStarted() already created this entry when the task
     // was first opened. This just guards against a task somehow being marked done without
     // ever going through openTaskRunner first.
-    entry = { cutoffLabel: label, startedAt: new Date().toISOString(), finishedAt: null, tasksDone: 0, totalTasks: 0, processedBy: null };
+    entry = { cutoffLabel: label, cutoffYear: labelYr, startedAt: new Date().toISOString(), finishedAt: null, tasksDone: 0, totalTasks: 0, processedBy: null };
     hist.unshift(entry);
   }
   var cu = window.currentUser || currentUser;
@@ -11495,11 +11533,7 @@ function setTaskStatus(taskKey, st, reason, targetOverride) {
     // trace of the first run. This appends instead. Keyed by cutoff label (not just client)
     // so a rollover naturally starts a fresh history bucket without needing to wipe anything.
     var _cutoffLabel = (clients[k] && clients[k].cutoff) || 'Unlabeled period';
-    if (!window.taskRunHistory) window.taskRunHistory = {};
-    if (!window.taskRunHistory[k]) window.taskRunHistory[k] = {};
-    if (!window.taskRunHistory[k][_cutoffLabel]) window.taskRunHistory[k][_cutoffLabel] = {};
-    if (!window.taskRunHistory[k][_cutoffLabel][taskKey]) window.taskRunHistory[k][_cutoffLabel][taskKey] = [];
-    window.taskRunHistory[k][_cutoffLabel][taskKey].push({ st: st, reason: reason || '', timestamp: new Date().toISOString() });
+    _taskRunHistoryPush(k, _cutoffLabel, cutoffYearOf(_cutoffLabel), taskKey, { st: st, reason: reason || '', timestamp: new Date().toISOString() });
     saveTaskRunHistory(k, taskKey, _cutoffLabel, st, reason);
 
     logTaskProgress(k);
@@ -11716,11 +11750,7 @@ function finalizeBatchTaskIfApplicable(taskKey, st, reason) {
     // the Processing History snapshot view always showed "Not run" for it regardless of label
     // matching, even after it had genuinely been run and finalized.
     var _cutoffLabel = (clients[g.clientKey] && clients[g.clientKey].cutoff) || 'Unlabeled period';
-    if (!window.taskRunHistory) window.taskRunHistory = {};
-    if (!window.taskRunHistory[g.clientKey]) window.taskRunHistory[g.clientKey] = {};
-    if (!window.taskRunHistory[g.clientKey][_cutoffLabel]) window.taskRunHistory[g.clientKey][_cutoffLabel] = {};
-    if (!window.taskRunHistory[g.clientKey][_cutoffLabel][taskKey]) window.taskRunHistory[g.clientKey][_cutoffLabel][taskKey] = [];
-    window.taskRunHistory[g.clientKey][_cutoffLabel][taskKey].push({ st: st, reason: reason || '', timestamp: new Date().toISOString() });
+    _taskRunHistoryPush(g.clientKey, _cutoffLabel, cutoffYearOf(_cutoffLabel), taskKey, { st: st, reason: reason || '', timestamp: new Date().toISOString() });
     saveTaskRunHistory(g.clientKey, taskKey, _cutoffLabel, st, reason);
 
     logTaskProgress(g.clientKey);
@@ -12091,16 +12121,16 @@ async function varSaveCutoffSnapshot(clientKey, co) {
   var wbPath = null;
   try {
     var wbArr = XLSX.write(co._varWb, { bookType: 'xlsx', type: 'array' });
-    wbPath = await varUploadWorkbook(companyId, co._safeN, wbArr);
+    wbPath = await varUploadWorkbook(companyId, co._safeN + '_' + cutoffYearOf(co._payout), wbArr);
   } catch (e) {
     console.warn('Could not upload Variance workbook for ' + clientKey + ' / ' + co._payout, e);
   }
   var res = await supabaseClient.from('task_cutoff_review_state').upsert({
-    company_id: companyId, task_key: 'variance', cutoff_label: co._payout,
+    company_id: companyId, task_key: 'variance', cutoff_label: co._payout, cutoff_year: cutoffYearOf(co._payout),
     data: { attData: co._attData || [], attColors: co._attColors || {}, finalized: !!co._finalized, filenamePayout: co._filenamePayout || null },
     wb_storage_path: wbPath,
     updated_at: new Date().toISOString()
-  }, { onConflict: 'company_id,task_key,cutoff_label' });
+  }, { onConflict: 'company_id,task_key,cutoff_label,cutoff_year' });
   if (res.error) console.warn('Could not save Variance review state for ' + clientKey + ' / ' + co._payout, res.error);
 }
 
@@ -14227,13 +14257,13 @@ async function tkSaveFullSnapshot(clientKey) {
     console.warn('Could not upload Validation source files for ' + clientKey, e);
   }
   var res = await supabaseClient.from('task_cutoff_review_state').upsert({
-    company_id: companyId, task_key: 'validation', cutoff_label: getCurrentCutoffLabel(clientKey),
+    company_id: companyId, task_key: 'validation', cutoff_label: getCurrentCutoffLabel(clientKey), cutoff_year: cutoffYearOf(getCurrentCutoffLabel(clientKey)),
     data: {
       tkReviewRows: reviewRowsSnapshot, tkSummaryEmployees: summaryEmployeesSnapshot,
       attStoragePath: attPath, acStoragePath: acPath, bioStoragePath: bioPath
     },
     updated_at: new Date().toISOString()
-  }, { onConflict: 'company_id,task_key,cutoff_label' });
+  }, { onConflict: 'company_id,task_key,cutoff_label,cutoff_year' });
   if (res.error) console.warn('Could not save Validation review state for ' + clientKey, res.error);
 }
 
@@ -14259,11 +14289,11 @@ function tkScheduleReviewSave() {
     // review) -- merge onto whatever was last saved for this cutoff rather than clobbering
     // them with nulls, since this upsert doesn't have attPath/acPath/bioPath in scope.
     supabaseClient.from('task_cutoff_review_state').select('data').eq('company_id', companyId)
-      .eq('task_key', 'validation').eq('cutoff_label', getCurrentCutoffLabel(clientKey)).maybeSingle()
+      .eq('task_key', 'validation').eq('cutoff_label', getCurrentCutoffLabel(clientKey)).eq('cutoff_year', cutoffYearOf(getCurrentCutoffLabel(clientKey))).maybeSingle()
       .then(function(existingRes) {
         var prevData = (existingRes.data && existingRes.data.data) || {};
         return supabaseClient.from('task_cutoff_review_state').upsert({
-          company_id: companyId, task_key: 'validation', cutoff_label: getCurrentCutoffLabel(clientKey),
+          company_id: companyId, task_key: 'validation', cutoff_label: getCurrentCutoffLabel(clientKey), cutoff_year: cutoffYearOf(getCurrentCutoffLabel(clientKey)),
           data: {
             tkReviewRows: reviewRowsSnapshot, tkSummaryEmployees: summaryEmployeesSnapshot,
             attStoragePath: prevData.attStoragePath || null,
@@ -14271,7 +14301,7 @@ function tkScheduleReviewSave() {
             bioStoragePath: prevData.bioStoragePath || null
           },
           updated_at: new Date().toISOString()
-        }, { onConflict: 'company_id,task_key,cutoff_label' });
+        }, { onConflict: 'company_id,task_key,cutoff_label,cutoff_year' });
       }).then(function(res) {
         if (res.error) console.warn('Could not save Validation review progress for ' + clientKey, res.error);
       });
@@ -19844,16 +19874,7 @@ function dtmParsePayoutKey(v) {
 // of, and after) -- e.g. a "January 1st" on a ticket received in December means next January,
 // a "November 2nd" on that same ticket means the November just past.
 function dtmInferPayoutYear(label, refDate) {
-  var mon = Object.keys(DTM_MONTH_SHORT).indexOf(label.split(' ')[0]);
-  var ref = refDate || new Date();
-  if (mon < 0) return ref.getFullYear();
-  var best = null, bestDiff = Infinity;
-  [-1, 0, 1].forEach(function(off) {
-    var yr = ref.getFullYear() + off;
-    var diff = Math.abs(new Date(yr, mon, 15) - ref);
-    if (diff < bestDiff) { bestDiff = diff; best = yr; }
-  });
-  return best;
+  return cutoffYearOf(label, refDate);
 }
 // When the ticket came in -- the anchor for inferring a yearless payout's year.
 function dtmTicketRefDate(d) {
@@ -20066,10 +20087,10 @@ function dsSaveCutoffSnapshot(clientKey, g) {
     data.piCurr = g._lastGeneratedCurrRows || [];
   }
   supabaseClient.from('task_cutoff_review_state').upsert({
-    company_id: companyId, task_key: 'disputes_summary', cutoff_label: g.applicableCutoff,
+    company_id: companyId, task_key: 'disputes_summary', cutoff_label: g.applicableCutoff, cutoff_year: cutoffYearOf(g.applicableCutoff),
     data: data,
     updated_at: new Date().toISOString()
-  }, { onConflict: 'company_id,task_key,cutoff_label' }).then(function(res) {
+  }, { onConflict: 'company_id,task_key,cutoff_label,cutoff_year' }).then(function(res) {
     if (res.error) console.warn('Could not save Dispute Summary review state for ' + clientKey + ' / ' + g.applicableCutoff, res.error);
   });
 }
@@ -20153,7 +20174,7 @@ function dsResetAll() {
     var applicableCutoff = (typeof dsApplicableCutoffKey === 'function') ? dsApplicableCutoffKey(clientObj) : g.applicableCutoff;
     if (!companyId || !applicableCutoff) return;
     supabaseClient.from('task_cutoff_review_state').delete()
-      .eq('company_id', companyId).eq('task_key', 'disputes_summary').eq('cutoff_label', applicableCutoff)
+      .eq('company_id', companyId).eq('task_key', 'disputes_summary').eq('cutoff_label', applicableCutoff).eq('cutoff_year', cutoffYearOf(applicableCutoff))
       .then(function(res) { if (res.error) console.warn('Could not clear saved Dispute Summary state for ' + g.clientKey, res.error); });
   });
   if (typeof openTaskRunner === 'function') openTaskRunner('disputes_summary', 'Dispute Summary');
@@ -21326,7 +21347,7 @@ async function emailDetectTk() {
     if (!companyId) continue;
     try {
       var res = await supabaseClient.from('task_cutoff_review_state').select('*')
-        .eq('company_id', companyId).eq('task_key', 'validation').eq('cutoff_label', getCurrentCutoffLabel(k)).maybeSingle();
+        .eq('company_id', companyId).eq('task_key', 'validation').eq('cutoff_label', getCurrentCutoffLabel(k)).eq('cutoff_year', cutoffYearOf(getCurrentCutoffLabel(k))).maybeSingle();
       var saved = (!res.error && res.data && res.data.data && res.data.data.tkReviewRows) || [];
       if (saved.length) byClient[k] = saved;
     } catch (err) { /* leave byClient[k] unset -- falls through to "no unusual pattern" below */ }
@@ -21424,7 +21445,7 @@ async function emailDetectVar() {
     try {
       var q = supabaseClient.from('task_cutoff_review_state').select('*')
         .eq('company_id', companyId).eq('task_key', 'variance');
-      if (targetPayout) q = q.eq('cutoff_label', targetPayout);
+      if (targetPayout) q = q.eq('cutoff_label', targetPayout).eq('cutoff_year', cutoffYearOf(targetPayout));
       var res = await q;
       if (res.error || !res.data) continue;
       res.data.forEach(function(row) {
@@ -21681,7 +21702,7 @@ async function emailRenderSnapshotPanel() {
     var sectionsHtml = '';
     try {
       var tkRes = await supabaseClient.from('task_cutoff_review_state').select('*')
-        .eq('company_id', companyId).eq('task_key', 'validation').eq('cutoff_label', cutoffLabel).maybeSingle();
+        .eq('company_id', companyId).eq('task_key', 'validation').eq('cutoff_label', cutoffLabel).eq('cutoff_year', cutoffYearOf(cutoffLabel)).maybeSingle();
       sectionsHtml += _histValidationSectionHtml(tkRes.error ? null : tkRes.data);
     } catch (err) {
       sectionsHtml += _histSectionWrap('Validation', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
@@ -21701,7 +21722,7 @@ async function emailRenderSnapshotPanel() {
       // getCurrentCutoffLabel form -- same strip _renderHistorySnapshotBody/dsShortLabel do.
       var dsShortLabel = String(cutoffLabel || '').split(' Payout')[0];
       var dsRes = await supabaseClient.from('task_cutoff_review_state').select('*')
-        .eq('company_id', companyId).eq('task_key', 'disputes_summary').eq('cutoff_label', dsShortLabel).maybeSingle();
+        .eq('company_id', companyId).eq('task_key', 'disputes_summary').eq('cutoff_label', dsShortLabel).eq('cutoff_year', cutoffYearOf(dsShortLabel)).maybeSingle();
       sectionsHtml += _histDisputesSectionHtml(dsRes.error ? null : dsRes.data);
     } catch (err) {
       sectionsHtml += _histSectionWrap('Dispute Summary', '<div style="font-size:12px;color:#c0392b;">Could not load saved results.</div>');
@@ -29237,7 +29258,9 @@ async function loadCutoffCoverageFromSupabase() {
   Object.keys(clientGroups).forEach(function(gk) {
     var scope = _procScope(gk);
     if (!scope) return;
-    var scopeRows = (res.data || []).filter(function(r){ return r.scope_type === scope.type && r.scope_id === scope.id; });
+    // Only this year's occurrence of each label -- last November's hand-off must not come back
+    // (and re-grant access) when this November's cut-off starts.
+    var scopeRows = (res.data || []).filter(function(r){ return r.scope_type === scope.type && r.scope_id === scope.id && (!r.cutoff_year || r.cutoff_year === cutoffYearOf(r.cutoff_label)); });
     if (!scopeRows.length) return;
     var subKeys = _procScopeSubKeys(gk, scope);
     var repClientKey = subKeys[0];
