@@ -192,10 +192,15 @@ function buildICS(calName, events, dtstampNow) {
 
 async function buildEventsForUser(userId) {
   const rels = await restGet('user_company_relations?user_id=eq.' + userId + '&relation_type=eq.processing&select=company_id');
-  const companyIds = rels.map(function (r) { return r.company_id; });
-  if (!companyIds.length) return [];
+  const relIds = rels.map(function (r) { return r.company_id; });
+  if (!relIds.length) return [];
 
-  const companies = await restGet('companies?id=in.' + inList(companyIds) + '&select=id,group_id');
+  // Churned clients (Client Profile > Churn sets companies.status) drop out of the feed entirely --
+  // their TAT deadlines and anniversaries shouldn't keep showing up in anyone's Google Calendar.
+  const companies = (await restGet('companies?id=in.' + inList(relIds) + '&select=id,group_id,status'))
+    .filter(function (c) { return c.status !== 'Churned'; });
+  const companyIds = companies.map(function (c) { return c.id; });
+  if (!companyIds.length) return [];
 
   const events = [];
 

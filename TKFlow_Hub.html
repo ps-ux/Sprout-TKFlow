@@ -6258,7 +6258,7 @@ function renderDashSchedule() {
     var seenGroups = {};
     currentUser.assignedClients.forEach(function(ck) {
       var cl = (typeof clients !== 'undefined') && clients[ck];
-      if (!cl || cl._isTest) return; // test clients are private sandboxes -- keep their dates off the dashboard
+      if (!cl || cl._isTest || cl._churned) return; // test (private sandbox) and churned clients stay off the dashboard
       // Use group key if available, else client key
       var grpKey = cl.group || ck;
       if (seenGroups[grpKey]) return;
@@ -6316,6 +6316,7 @@ function renderDashSchedule() {
   // Leave Monitoring anniversary transfers due today
   var seenLMClientsSched = {};
   (currentUser.processClients || []).forEach(function(ck) {
+    if (!clients[ck] || clients[ck]._churned || clients[ck]._isTest) return; // churned/test clients' anniversaries stay off the dashboard
     // Resolve to the shared roster key -- a real multi-entity group's subs all resolve to the
     // same one, so dedupe (seenLMClientsSched) must happen on THAT, not the raw sub key, or a
     // group's own reminder would surface once per sub instead of once for the whole roster.
@@ -6453,7 +6454,7 @@ function renderMiniCal() {
     var seenHolidayKeys = {};
     currentUser.assignedClients.forEach(function(ck) {
       var cl = (typeof clients !== 'undefined') && clients[ck];
-      if (!cl || cl._isTest) return; // test clients are private sandboxes -- keep their dates off the dashboard
+      if (!cl || cl._isTest || cl._churned) return; // test (private sandbox) and churned clients stay off the dashboard
       var grpKey = cl.group || ck;
       if (seenGrps[grpKey]) return;
       seenGrps[grpKey] = true;
@@ -6631,6 +6632,7 @@ function renderNotifCard() {
   var breached = [], dueSoon = [];
   allDisputes.forEach(function(d) {
     if ((currentUser.processClients||[]).indexOf(d.client) === -1) return;
+    if (clients[d.client] && clients[d.client]._churned) return; // churned clients' open tickets don't raise TAT alerts
     if (d.status === 'dst-closed') return;
     if (d.tat === 'tat-red')    breached.push(d);
     if (d.tat === 'tat-yellow') dueSoon.push(d);
@@ -6657,7 +6659,7 @@ function renderNotifCard() {
   var oneHourOut = new Date(nowForDl.getTime() + 60 * 60 * 1000);
   var seenCalStores = {};
   (currentUser.processClients || []).forEach(function(ck) {
-    if (clients[ck] && clients[ck]._isTest) return; // test clients' deadlines stay off the dashboard
+    if (clients[ck] && (clients[ck]._isTest || clients[ck]._churned)) return; // test and churned clients' deadlines stay off the dashboard
     var storeKey = Object.keys(clientGroups).find(function(gk){ return (clientGroups[gk].subs||[gk]).indexOf(ck) >= 0; }) || ck;
     if (seenCalStores[storeKey]) return;
     seenCalStores[storeKey] = true;
@@ -6695,6 +6697,7 @@ function renderNotifCard() {
   var todayISOForLM = todayForLM.getFullYear() + '-' + String(todayForLM.getMonth()+1).padStart(2,'0') + '-' + String(todayForLM.getDate()).padStart(2,'0');
   var seenLMClients = {};
   (currentUser.processClients || []).forEach(function(ck) {
+    if (!clients[ck] || clients[ck]._churned || clients[ck]._isTest) return; // churned/test clients' anniversaries stay out of To Do
     var lmKey = (typeof lmStorageKeyFor === 'function') ? lmStorageKeyFor(ck) : ck;
     if (seenLMClients[lmKey]) return;
     seenLMClients[lmKey] = true;
@@ -6940,7 +6943,7 @@ function renderMemberMetrics() {
   // Currently-open TAT overdue tickets across this person's assigned clients — a live snapshot,
   // not a historical monthly count (no log of past overdue tickets exists to sum over time).
   function openBreachesFor(uk) {
-    var subKeys = (USERS[uk].processClients || []).filter(function(sk){ return clients[sk] && !clients[sk]._isTest; });
+    var subKeys = (USERS[uk].processClients || []).filter(function(sk){ return clients[sk] && !clients[sk]._churned && !clients[sk]._isTest; });
     if (typeof allDisputes === 'undefined') return 0;
     return allDisputes.filter(function(d){ return subKeys.indexOf(d.client) >= 0 && d.tat === 'tat-red' && d.status !== 'dst-closed'; }).length;
   }
@@ -24657,7 +24660,7 @@ function openSearch(){var m=document.getElementById('search-modal');if(m){m.styl
 function closeSearch(){var m=document.getElementById('search-modal');if(m){m.style.display='none';var i=document.getElementById('search-input');if(i)i.value='';var r=document.getElementById('search-results');if(r)r.innerHTML='<div style="padding:24px;text-align:center;color:#9898a6;font-size:13px;">Start typing to search...</div>';}}
 document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeSearch();}if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();openSearch();}});
 document.getElementById('search-modal').addEventListener('click',function(e){if(e.target===this)closeSearch();});
-function runSearch(q){var results=document.getElementById('search-results');if(!q.trim()){results.innerHTML='<div style="padding:24px;text-align:center;color:#9898a6;font-size:13px;">Start typing...</div>';return;}q=q.toLowerCase();var hits=[];Object.entries(clients).forEach(function(e){var k=e[0],c=e[1];if(c.name.toLowerCase().includes(q))hits.push({icon:'ti-building',label:c.name,sub:c.hc+' employees',color:'#32CE13',action:"openWorkspace('"+k+"');closeSearch();"});});if(typeof allDisputes!=='undefined')allDisputes.forEach(function(d){if(d.name.toLowerCase().includes(q)||d.id.toLowerCase().includes(q))hits.push({icon:'ti-ticket',label:d.name,sub:d.id+' - '+d.client,color:'#c0392b',action:"openWorkspace('"+d.client+"');setTimeout(function(){switchTab('ws-disputes');},80);closeSearch();"});});[['dashboard','Dashboard','ti-layout-dashboard'],['admin','Admin','ti-shield-check'],['settings','Settings','ti-settings']].forEach(function(p){if(p[1].toLowerCase().includes(q))hits.push({icon:p[2],label:p[1],sub:'Page',color:'#1679FA',action:"switchPage('"+p[0]+"');closeSearch();"});});if('team members'.includes(q)||'org chart'.includes(q))hits.push({icon:'ti-users',label:'Team & Org Chart',sub:'Admin',color:'#1679FA',action:"switchPage('admin');setTimeout(function(){switchAdminTab('orgchart');},50);closeSearch();"});if(!hits.length){results.innerHTML='<div style="padding:24px;text-align:center;color:#9898a6;font-size:13px;">No results for "'+q+'"</div>';return;}results.innerHTML=hits.map(function(h){return '<div onclick="'+h.action+'" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:12px;cursor:pointer;" onmouseover="this.style.background=\'#F4F4F8\'" onmouseout="this.style.background=\'transparent\'"><i class="ti '+h.icon+'" style="font-size:16px;color:'+h.color+';width:20px;"></i><div style="flex:1;"><div style="font-size:13px;font-weight:500;color:#1a1a2e;">'+h.label+'</div><div style="font-size:11px;color:#9898a6;">'+h.sub+'</div></div></div>';}).join('');}
+function runSearch(q){var results=document.getElementById('search-results');if(!q.trim()){results.innerHTML='<div style="padding:24px;text-align:center;color:#9898a6;font-size:13px;">Start typing...</div>';return;}q=q.toLowerCase();var hits=[];Object.entries(clients).forEach(function(e){var k=e[0],c=e[1];if(c._churned)return;if(c.name.toLowerCase().includes(q))hits.push({icon:'ti-building',label:c.name,sub:c.hc+' employees',color:'#32CE13',action:"openWorkspace('"+k+"');closeSearch();"});});if(typeof allDisputes!=='undefined')allDisputes.forEach(function(d){if(clients[d.client]&&clients[d.client]._churned)return;if(d.name.toLowerCase().includes(q)||d.id.toLowerCase().includes(q))hits.push({icon:'ti-ticket',label:d.name,sub:d.id+' - '+d.client,color:'#c0392b',action:"openWorkspace('"+d.client+"');setTimeout(function(){switchTab('ws-disputes');},80);closeSearch();"});});[['dashboard','Dashboard','ti-layout-dashboard'],['admin','Admin','ti-shield-check'],['settings','Settings','ti-settings']].forEach(function(p){if(p[1].toLowerCase().includes(q))hits.push({icon:p[2],label:p[1],sub:'Page',color:'#1679FA',action:"switchPage('"+p[0]+"');closeSearch();"});});if('team members'.includes(q)||'org chart'.includes(q))hits.push({icon:'ti-users',label:'Team & Org Chart',sub:'Admin',color:'#1679FA',action:"switchPage('admin');setTimeout(function(){switchAdminTab('orgchart');},50);closeSearch();"});if(!hits.length){results.innerHTML='<div style="padding:24px;text-align:center;color:#9898a6;font-size:13px;">No results for "'+q+'"</div>';return;}results.innerHTML=hits.map(function(h){return '<div onclick="'+h.action+'" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:12px;cursor:pointer;" onmouseover="this.style.background=\'#F4F4F8\'" onmouseout="this.style.background=\'transparent\'"><i class="ti '+h.icon+'" style="font-size:16px;color:'+h.color+';width:20px;"></i><div style="flex:1;"><div style="font-size:13px;font-weight:500;color:#1a1a2e;">'+h.label+'</div><div style="font-size:11px;color:#9898a6;">'+h.sub+'</div></div></div>';}).join('');}
 var notifications=[];
 
 document.addEventListener('click',function(e){var p=document.getElementById('notif-panel'),b=document.getElementById('notif-btn');if(p&&p.style.display!=='none'&&!p.contains(e.target)&&b&&!b.contains(e.target))p.style.display='none';});
