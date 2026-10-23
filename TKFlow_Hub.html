@@ -22340,9 +22340,9 @@ function searchInDoc() {
     <div style="padding:18px 22px 14px;border-bottom:1px solid #EBEBEF;display:flex;align-items:center;justify-content:space-between;">
       <div>
         <div style="font-size:15px;font-weight:600;color:#c0392b;">Mark client as churned</div>
-        <div style="font-size:12px;color:#9898a6;margin-top:2px;">This will archive the client and remove them from the dashboard</div>
+        <div id="churn-modal-sub" style="font-size:12px;color:#9898a6;margin-top:2px;">This will archive the client and remove them from the dashboard</div>
       </div>
-      <div onclick="(function(){ const el=document.getElementById('churn-modal'); el.style.display='none'; el.style.pointerEvents='none'; })()" style="width:30px;height:30px;border-radius:12px;border:1px solid #EBEBEF;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9898a6;font-size:16px;"><i class="ti ti-x"></i></div>
+      <div onclick="closeChurnModal()" style="width:30px;height:30px;border-radius:12px;border:1px solid #EBEBEF;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9898a6;font-size:16px;"><i class="ti ti-x"></i></div>
     </div>
     <div style="padding:20px 22px;">
       <div style="background:#fff0f0;border:1px solid #f9a8d4;border-radius:14px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:#c0392b;">
@@ -22372,7 +22372,7 @@ function searchInDoc() {
       </div>
     </div>
     <div style="padding:14px 22px;border-top:1px solid #EBEBEF;display:flex;gap:8px;justify-content:flex-end;">
-      <button onclick="(function(){ const el=document.getElementById('churn-modal'); el.style.display='none'; el.style.pointerEvents='none'; })()" style="padding:9px 18px;border:1px solid #EBEBEF;border-radius:12px;background:#ffffff;color:#6b6b80;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Cancel</button>
+      <button onclick="closeChurnModal()" style="padding:9px 18px;border:1px solid #EBEBEF;border-radius:12px;background:#ffffff;color:#6b6b80;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;">Cancel</button>
       <button onclick="confirmChurn()" style="padding:9px 18px;border:none;border-radius:12px;background:#c0392b;color:#fff;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-archive"></i> Archive client</button>
     </div>
   </div>
@@ -22713,7 +22713,37 @@ async function removePOC(scope, key, idx) {
   }
 }
 
+// Client Profile's Churn button -- churns the WHOLE company (every active subcompany in the
+// group), not just whichever subcompany tab happens to be open. It used to churn only
+// currentWsClient, so a multi-subcompany client got one sub archived while the rest stayed on
+// the dashboard/sidebar. Single-subcompany churn is Admin > Client Assignments' "Churn this one".
 function openChurnModal() {
+  var gk = window.currentWsGroup && clientGroups[window.currentWsGroup] ? window.currentWsGroup
+    : Object.keys(clientGroups).find(function(k){ return (clientGroups[k].subs || [k]).includes(currentWsClient); });
+  window._churnPendingTarget = gk ? { groupKey: gk, subKeys: null } : null;
+  _showChurnModal();
+}
+
+function closeChurnModal() {
+  var el = document.getElementById('churn-modal');
+  el.style.display = 'none'; el.style.pointerEvents = 'none';
+  window._churnPendingTarget = null; // a cancelled Admin churn must not leak into the next churn
+}
+
+// Subtitle spells out exactly what gets archived, so a whole-company vs one-subcompany churn
+// is never a surprise.
+function _showChurnModal() {
+  var t = window._churnPendingTarget, subEl = document.getElementById('churn-modal-sub');
+  if (subEl) {
+    var grp = t && clientGroups[t.groupKey], txt = 'This will archive the client and remove them from the dashboard';
+    if (grp && t.subKeys) {
+      txt = 'Only the subcompany ' + ((clients[t.subKeys[0]] && clients[t.subKeys[0]].name) || t.subKeys[0]) + ' will be archived. The rest of ' + grp.name + ' stays active.';
+    } else if (grp) {
+      var n = (grp.subs || [t.groupKey]).filter(function(sk){ return clients[sk] && !clients[sk]._churned; }).length;
+      txt = 'This will archive ' + grp.name + (n > 1 ? ' and all ' + n + ' of its subcompanies' : '') + ' and remove it from the dashboard';
+    }
+    subEl.textContent = txt;
+  }
   const today = new Date().toISOString().split('T')[0];
   document.getElementById('churn-date').value = today;
   document.getElementById('churn-reason').value = '';
@@ -22727,11 +22757,11 @@ function openChurnModal() {
 // currentWsClient (its original, still-default behavior below).
 function openChurnGroupModal(groupKey) {
   window._churnPendingTarget = { groupKey: groupKey, subKeys: null };
-  openChurnModal();
+  _showChurnModal();
 }
 function openChurnSubModal(groupKey, subKey) {
   window._churnPendingTarget = { groupKey: groupKey, subKeys: [subKey] };
-  openChurnModal();
+  _showChurnModal();
 }
 
 function confirmChurn() {
@@ -22740,7 +22770,7 @@ function confirmChurn() {
   const notes  = document.getElementById('churn-notes').value;
   if (!date || !reason) { if (typeof showToast === 'function') showToast('Please fill in the date and reason', '#e67e00'); return; }
 
-  document.getElementById('churn-modal').style.display = 'none';
+  var _cm = document.getElementById('churn-modal'); _cm.style.display = 'none'; _cm.style.pointerEvents = 'none';
 
   if (window._churnPendingTarget) {
     var target = window._churnPendingTarget;
@@ -22764,6 +22794,9 @@ function confirmChurn() {
     addToArchives(target.groupKey, subKeys, date, reason, notes, isPartial);
 
     if (isPartial && window._policyFilterSub === subKeys[0]) window._policyFilterSub = null;
+    // Whole company churned while its own workspace is open (Client Profile's Churn button) --
+    // nothing left to show there, so go back to the dashboard like the old single-sub path did.
+    if (!isPartial && window.currentWsGroup === target.groupKey && typeof closeWorkspace === 'function') closeWorkspace();
     if (typeof renderClientProfile === 'function') renderClientProfile(target.groupKey);
     if (typeof filterPolicyFiles === 'function') filterPolicyFiles();
     if (typeof renderTKCalendar === 'function') renderTKCalendar();
