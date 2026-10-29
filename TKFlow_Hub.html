@@ -19147,6 +19147,11 @@ function lmPushManualRow(ck, empId, lastName, firstName, hireDate, targetYear) {
   var creditConfig = lmGetCreditConfig(ck);
   var sickEnabled = creditConfig.sickEnabled !== false;
 
+  // Years 2-4 keep the base credits (Sprout renews them automatically) -- nothing to monitor,
+  // same as the file upload in computeLeaveMonitoring. Used to fall through to the 5+ branch
+  // and get priced as year 5 (16 total, +1) even though they hadn't reached the 5-year tier.
+  if (yearsAtAnniversary >= 2 && yearsAtAnniversary < 5) return 'not-due';
+
   if (yearsAtAnniversary <= 1) {
     store.oneYear.push({
       empId: empId, lastName: lastName||'', firstName: firstName||'',
@@ -19161,7 +19166,7 @@ function lmPushManualRow(ck, empId, lastName, firstName, hireDate, targetYear) {
       });
     }
   } else {
-    var yearsForCalc = Math.max(yearsAtAnniversary, 5);
+    var yearsForCalc = yearsAtAnniversary;
     var totalCreditsForYear = lmCreditsForYear(creditConfig, yearsForCalc);
     var previousYearCredits = yearsForCalc === 5 ? creditConfig.baseCredits : lmCreditsForYear(creditConfig, yearsForCalc - 1);
     store.fiveYear.push({
@@ -19219,7 +19224,7 @@ function lmAddManualRowField() {
 function lmSubmitManualRows() {
   var ck = lmCurrentClientKey();
   var rowEls = document.querySelectorAll('#lm-manual-rows .lm-manual-row');
-  var added = 0, skipped = 0, duplicate = 0;
+  var added = 0, skipped = 0, duplicate = 0, notDue = 0;
   rowEls.forEach(function(rowEl) {
     var empId = rowEl.querySelector('.lm-manual-empid').value.trim();
     var lastName = rowEl.querySelector('.lm-manual-lastname').value.trim();
@@ -19228,15 +19233,17 @@ function lmSubmitManualRows() {
     if (!empId || !hireDateStr) { if (empId || lastName || firstName || hireDateStr) skipped++; return; }
     var hireDate = new Date(hireDateStr + 'T00:00:00');
     if (isNaN(hireDate)) { skipped++; return; }
-    if (lmPushManualRow(ck, empId, lastName, firstName, hireDate, window._lmActiveYear)) added++; else duplicate++;
+    var pushed = lmPushManualRow(ck, empId, lastName, firstName, hireDate, window._lmActiveYear);
+    if (pushed === 'not-due') notDue++; else if (pushed) added++; else duplicate++;
   });
-  if (added === 0 && skipped === 0 && duplicate === 0) { if (typeof showToast === 'function') showToast('Enter at least an Employee ID and hire date', '#e67e00'); return; }
+  if (added === 0 && skipped === 0 && duplicate === 0 && notDue === 0) { if (typeof showToast === 'function') showToast('Enter at least an Employee ID and hire date', '#e67e00'); return; }
   if (added && typeof _persistLeaveMonitoringYear === 'function') _persistLeaveMonitoringYear(ck, window._lmActiveYear);
   renderLeaveMonitoringLive();
   if (added && typeof _lmRefreshDashboardWidgets === 'function') _lmRefreshDashboardWidgets();
   lmCloseManualAddModal();
   var msg = added + ' employee' + (added!==1?'s':'') + ' added to monitoring';
   if (duplicate) msg += ', ' + duplicate + ' already tracked (skipped)';
+  if (notDue) msg += ', ' + notDue + ' in years 2–4 of service (no adjustment due, skipped)';
   if (skipped) msg += ', ' + skipped + ' incomplete row' + (skipped!==1?'s':'') + ' skipped';
   if (typeof showToast === 'function') showToast(msg, added ? undefined : '#e67e00');
 }
