@@ -3180,7 +3180,7 @@ function archiveBuildDisputesSnapshotHtml(data) {
   return '<div style="margin-bottom:10px;">'
     + '<div style="font-size:11px;font-weight:600;color:#1a1a2e;margin-bottom:4px;">Dispute summary (' + included.length + ')</div>'
     + '<div style="overflow-x:auto;border:1px solid #EBEBEF;border-radius:10px;"><table style="width:100%;border-collapse:collapse;">'
-    + '<thead><tr>' + th('Ticket#') + th('Name') + th('Nature') + th('Date/s') + th('Status') + th('Cut-off') + '</tr></thead>'
+    + '<thead><tr>' + th('Ticket#') + th('Name') + th('Nature') + th('Date/s') + th('Status') + th('Payout Cut-off') + '</tr></thead>'
     + '<tbody>' + summaryRows + '</tbody></table></div>'
     + '</div>'
     + '<div>'
@@ -19939,6 +19939,23 @@ function dtmPiLineEffectivePayout(d, l) {
   var clientObj = clients[d.client];
   return (clientObj && typeof ticketApplicableCutoffKey === 'function') ? (ticketApplicableCutoffKey(clientObj) || '') : '';
 }
+// The cut-off a ticket actually lands in for payroll, as reports show it: its Payroll
+// Instructions lines' Payout Inclusion (deduped, "; "-joined when a split ticket's lines go to
+// different payouts). Blank when the ticket has no PI lines -- a plain query never touches
+// payroll. Replaces the old ticket-level "Included In Cut-off" dropdown (d.cutoff), which the
+// user retired: it could disagree with the PI lines and the report showed the wrong one.
+function dtmTicketPayoutLabel(d) {
+  var seen = {}, out = [];
+  getPiLines(d).forEach(function(l) {
+    var v = dtmPiLineEffectivePayout(d, l);
+    if (!v) return;
+    var key = dtmResolvePayoutKey(v, d);
+    if (seen[key]) return;
+    seen[key] = true;
+    out.push(key);
+  });
+  return out.join('; ');
+}
 function dtmPiLineEffectivePeriod(d, l) {
   if (l.attendancePeriod) return l.attendancePeriod;
   if (d.attendancePeriod) return d.attendancePeriod;
@@ -20332,7 +20349,7 @@ function renderDsResult(g) {
         + td(d.recommendedResolution, 'font-size:11px;')
         + '<td style="padding:6px 10px;border-bottom:1px solid #EBEBEF;">'
         + '<span style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:20px;background:' + stBg(d.status) + ';color:' + stColor(d.status) + ';">' + (d.statusLabel || '') + '</span></td>'
-        + td(d.cutoff || d.payoutCutoff, 'font-size:11px;color:#9898a6;')
+        + td(dtmTicketPayoutLabel(d), 'font-size:11px;color:#9898a6;')
         + td(d.amount || '\u2014', 'font-weight:500;color:#e67e00;')
         + td(d.updateOpen, 'font-size:11px;')
         + td(d.otherRemarks, 'font-size:11px;color:#9898a6;')
@@ -20698,7 +20715,7 @@ function dsOverviewRows(finalizedGroups) {
         d.nature||'', d.fullDetails||'', d.disputeDates||'',
         d.dateAction||'', d.findings||'', d.recommendedResolution||'',
         d.statusLabel||'', d.status==='dst-closed'?(d.dateAction||''):'',
-        hasPI ? (d.cutoff||'') : '', amountStr,
+        hasPI ? dtmTicketPayoutLabel(d) : '', amountStr,
         d.updateOpen||'', d.otherRemarks||'']);
     });
   });
@@ -20786,7 +20803,7 @@ function dsGenerateAll() {
         g._lastGeneratedPrevRows = prevRows;
         g._lastGeneratedCurrRows = currRows;
         g._lastGeneratedSummary = (g.included || []).map(function(d) {
-          return { id: d.id, name: d.name, nature: d.nature || d.sub, disputeDates: d.disputeDates, status: d.status, statusLabel: d.statusLabel, cutoff: d.cutoff };
+          return { id: d.id, name: d.name, nature: d.nature || d.sub, disputeDates: d.disputeDates, status: d.status, statusLabel: d.statusLabel, cutoff: dtmTicketPayoutLabel(d) };
         });
         var filledXml = dsFillDisputesTemplateSheet(baseSheetXml, prevRows, currRows);
         var sheetName = ((g.clientKey || g.name || 'Sub') + ' Disputes').replace(/[:\\\/\?\*\[\]]/g,'-').slice(0,31);
@@ -20857,7 +20874,7 @@ function dsExportXLSX() {
   activeGroup._lastGeneratedPrevRows = prevRows;
   activeGroup._lastGeneratedCurrRows = currRows;
   activeGroup._lastGeneratedSummary = (activeGroup.included || []).map(function(d) {
-    return { id: d.id, name: d.name, nature: d.nature || d.sub, disputeDates: d.disputeDates, status: d.status, statusLabel: d.statusLabel, cutoff: d.cutoff };
+    return { id: d.id, name: d.name, nature: d.nature || d.sub, disputeDates: d.disputeDates, status: d.status, statusLabel: d.statusLabel, cutoff: dtmTicketPayoutLabel(d) };
   });
 
   JSZip.loadAsync(dsB64ToUint8Array(DISPUTES_TEMPLATE_B64)).then(function(zip) {
@@ -25708,7 +25725,7 @@ function lcvFindManualVLTickets(subKey) {
       id: d.id || '', dateSubmitted: d.dateSubmitted || '', empNo: d.empNo || '', name: d.name || '',
       nature: d.nature || '', details: d.fullDetails || '', dateAction: d.dateAction || '',
       actionMade: d.findings || '', recommendedResolution: d.recommendedResolution || '',
-      payoutCutoff: d.cutoff || d.payoutCutoff || '', rawAmount: d.amount || '',
+      payoutCutoff: dtmTicketPayoutLabel(d) || d.payoutCutoff || '', rawAmount: d.amount || '',
       disputeDates: d.disputeDates || '', coveredDates: lcvParseDateList(d.disputeDates || ''),
       suggestedDays: lcvParseVLDaysSuggestion(d.amount), confirmedDays: null, confirmed: false,
     };
@@ -25739,7 +25756,7 @@ function lcvFindPossibleManualVLTickets(subKey) {
       id: disp.id || '', dateSubmitted: disp.dateSubmitted || '', empNo: disp.empNo || '', name: disp.name || '',
       nature: disp.nature || '', details: disp.fullDetails || '', dateAction: disp.dateAction || '',
       actionMade: disp.findings || '', recommendedResolution: disp.recommendedResolution || '',
-      payoutCutoff: disp.cutoff || disp.payoutCutoff || '', rawAmount: disp.amount || '',
+      payoutCutoff: dtmTicketPayoutLabel(disp) || disp.payoutCutoff || '', rawAmount: disp.amount || '',
       disputeDates: disp.disputeDates || '', coveredDates: lcvParseDateList(disp.disputeDates || ''),
       suggestedDays: lcvParseVLDaysSuggestion(disp.amount), confirmedDays: null, confirmed: false,
       included: false,
@@ -27638,30 +27655,21 @@ function openDisputeTicket(id, clientContext) {
     // getTATClass/getTATLabel, dtmSaveDateAction). Used to be a separate "Replied At" field;
     // merged in since both described the same real moment of interacting with the employee.
     ['Date of Action',     'dateAction',    d, 'datetime'],
-    // Two distinct facts live in this one field now: a read-only "Received during" line (which
-    // cut-off was actually current when the email came in -- see dtmReceivedCutoffLabel,
-    // computed fresh from Email Received, never stored/editable) and the actual dropdown below
-    // it (which cut-off this is INCLUDED in for Payroll Instructions/Dispute Summary -- d.cutoff,
-    // see ticketApplicableCutoffKey/dsApplicableCutoffKey and the "Prior" badge, also keeps
-    // d.payoutCutoff in sync for exports). Transferring the dropdown for a ticket that came in
-    // near a cut-off boundary and got filed under the wrong one actually moves it, without
-    // touching the separate "received during" fact above it.
-    ['Included In Cut-off', 'cutoff', d, 'cutoffselect'],
+    // Read-only "Received during" (dtmReceivedCutoffLabel -- which cut-off had started when the
+    // email came in). The old "Included In Cut-off" dropdown is gone: reports take the payout from
+    // the Payroll Instructions lines instead (dtmTicketPayoutLabel). d.cutoff is still auto-set at
+    // creation/paste from Email Received and drives Dispute Summary's raised-this-cut-off / Prior logic.
+    ['Received During', 'cutoff', d, 'cutoffselect'],
   ];
   document.getElementById('dtm-fields-grid').innerHTML = fieldSpecs.map(function(f) {
     if (f[3] === 'cutoffselect') {
-      var copts = (typeof dtmCutoffOptions === 'function') ? dtmCutoffOptions() : [];
-      var cval = f[2].cutoff || '';
-      var hasMatch = copts.some(function(o){ return o.value === cval; });
+      // Read-only now: which cut-off had started when the email came in (dtmReceivedCutoffLabel).
+      // The editable "Included In Cut-off" dropdown was removed -- the payout a ticket lands in
+      // comes only from its Payroll Instructions lines (see dtmTicketPayoutLabel).
       var receivedLabel = (typeof dtmReceivedCutoffLabel === 'function') ? dtmReceivedCutoffLabel(f[2]) : '';
       return '<div style="background:var(--bg-secondary,#F4F4F8);border-radius:12px;padding:8px 12px;">'
-        + (receivedLabel ? '<div style="font-size:10px;color:var(--text-muted);margin-bottom:4px;">Received during <b style="color:var(--text-primary);">' + receivedLabel + '</b></div>' : '')
         + '<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">' + f[0] + '</div>'
-        + '<select onchange="dtmSaveCutoff(this.value)" style="width:100%;border:none;background:transparent;padding:0;font-size:13px;font-weight:500;color:var(--text-primary);outline:none;font-family:Rubik,sans-serif;">'
-        + (!hasMatch && cval ? '<option value="' + cval.replace(/"/g,'&quot;') + '" selected>' + cval + ' (not in current calendar)</option>' : '')
-        + (!cval ? '<option value="" selected disabled hidden></option>' : '')
-        + copts.map(function(o) { return '<option value="' + o.value.replace(/"/g,'&quot;') + '"' + (o.value === cval ? ' selected' : '') + '>' + o.label + '</option>'; }).join('')
-        + '</select>'
+        + '<div style="font-size:13px;font-weight:500;color:var(--text-primary);">' + (receivedLabel || '\u2014') + '</div>'
         + '</div>';
     }
     if (f[3] === 'select') {
@@ -27816,7 +27824,7 @@ function refreshWsDisputesBadgesAndList(key) {
     + '<div style="font-size:11px;color:var(--text-muted);margin-top:1px;">' + d.sub + '</div>'
     + '</div></div>'
     + '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">'
-    + '<span style="font-size:10px;background:var(--bg-secondary,#F4F4F8);color:var(--text-muted);padding:1px 8px;border-radius:20px;white-space:nowrap;">' + (d.cutoff||'') + ' cut-off</span>'
+    + '<span style="font-size:10px;background:var(--bg-secondary,#F4F4F8);color:var(--text-muted);padding:1px 8px;border-radius:20px;white-space:nowrap;">' + (dtmTicketPayoutLabel(d) ? dtmTicketPayoutLabel(d) + ' payout' : 'No payroll instruction') + '</span>'
     + piBadge
     + '<span style="font-size:11px;font-weight:500;padding:2px 9px;border-radius:20px;background:' + tatBgs[d.tat] + ';color:' + tatColors[d.tat] + ';white-space:nowrap;">' + d.tatLabel + '</span>'
     + '<span style="font-size:11px;font-weight:500;padding:2px 9px;border-radius:20px;background:' + stBgs[d.status] + ';color:' + stColors[d.status] + ';white-space:nowrap;">' + d.statusLabel + '</span>'
@@ -28958,7 +28966,7 @@ function dtmRenderSummary(filterClient, filterStatus, lockGroupKeys) {
       + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);max-width:220px;white-space:normal;">' + (d.findings || '\u2014') + '</td>'
       + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);max-width:220px;white-space:normal;">' + (d.recommendedResolution || '\u2014') + '</td>'
       + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);white-space:nowrap;"><span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:20px;background:' + dtmStBgs[d.status] + ';color:' + dtmStColors[d.status] + ';">' + d.statusLabel + '</span></td>'
-      + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);white-space:nowrap;">' + (d.cutoff || d.payoutCutoff || '\u2014') + '</td>'
+      + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);white-space:nowrap;">' + (dtmTicketPayoutLabel(d) || '\u2014') + '</td>'
       + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);white-space:nowrap;">' + (d.amount || '\u2014') + '</td>'
       + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);max-width:200px;white-space:normal;">' + (d.updateOpen || '\u2014') + '</td>'
       + '<td style="padding:8px 10px;border-bottom:1px solid var(--border,#EBEBEF);max-width:200px;white-space:normal;">' + (d.otherRemarks || '\u2014') + '</td>'
@@ -29000,7 +29008,7 @@ function dtmExport() {
       'Date/s of Dispute': d.disputeDates || '', 'Full Details': d.fullDetails || '',
       'Date of Action': d.dateAction || '', 'Findings': d.findings || '',
       'Recommended Resolution': d.recommendedResolution || '', 'Ticket Status': d.statusLabel,
-      'Payout Cut-Off Inclusion': d.cutoff || d.payoutCutoff || '',
+      'Payout Cut-Off Inclusion': dtmTicketPayoutLabel(d),
       'Amount': d.amount || '', 'Update for Open Tickets': d.updateOpen || '',
       'Other Remarks': d.otherRemarks || ''
     };
