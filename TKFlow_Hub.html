@@ -1480,6 +1480,7 @@ function signInWithGoogle() {
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
             <div style="font-size:13px;font-weight:500;color:var(--text-secondary);">All disputes for this client</div>
             <div style="display:flex;gap:8px;">
+              <button id="ws-disp-varcheck-btn" onclick="openEmployeeVarianceCheck()" title="Separate Variance run for specific employees — use it to confirm amounts for Payroll Instructions lines" style="display:flex;align-items:center;gap:6px;padding:8px 14px;background:var(--bg-secondary,#F4F4F8);color:var(--text-primary);border:1px solid var(--border,#EBEBEF);border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-table-plus" style="font-size:13px;"></i> Employee Variance check</button>
               <button id="ws-disp-import-btn" onclick="openImportLegacyDisputesModal()" style="display:none;align-items:center;gap:6px;padding:8px 14px;background:var(--bg-secondary,#F4F4F8);color:var(--text-primary);border:1px solid var(--border,#EBEBEF);border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-file-import" style="font-size:13px;"></i> Import legacy tickets</button>
               <button id="ws-disp-preview-btn" onclick="openAllTicketsForClient(currentWsClient)" style="display:flex;align-items:center;gap:6px;padding:8px 14px;background:var(--bg-secondary,#F4F4F8);color:var(--text-primary);border:1px solid var(--border,#EBEBEF);border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-table" style="font-size:13px;"></i> Preview all tickets</button>
               <button id="ws-disp-log-btn" onclick="openNewDisputeTicket(currentWsClient)" style="display:flex;align-items:center;gap:6px;padding:8px 14px;background:var(--ub-500);color:#fff;border:none;border-radius:12px;font-size:13px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-plus"></i> Log ticket</button>
@@ -11923,6 +11924,16 @@ function clearAllTaskCache() {
 // The X icon and the backdrop-click listener below both call this with no argument, so an
 // unfinished task always asks first.
 function closeTaskRunner(force) {
+  if (window._varSpotMode) {
+    if (!force) {
+      appConfirm('Close employee check?',
+        'Results from this check aren’t saved. Download the reports first if you still need them.',
+        function(){ closeTaskRunner(true); },
+        { okLabel: 'Close', cancelLabel: 'Keep working' });
+      return;
+    }
+    _varSpotRestore();
+  }
   if (!force && window._openTaskKey) {
     var st = (typeof getTaskStatus === 'function') ? getTaskStatus(window._openTaskKey).st : 'pending';
     if (st !== 'done' && st !== 'skipped') {
@@ -12286,6 +12297,7 @@ function buildVarianceRunner(body) {
 // Explicit reset — clears cached files/results for this task and starts a blank run
 function varResetAll() {
     appConfirm('Reset Variance Analysis', 'This clears all uploaded files and processed results for this workspace.', function() {
+  if (window._varSpotMode) { openEmployeeVarianceCheck(); return; }
   _auditTaskReset('variance');
   Object.keys(taskFiles).forEach(function(k) { if (k.indexOf('var-') === 0) delete taskFiles[k]; });
   varCutoffCounter = 1;
@@ -12334,6 +12346,51 @@ function varSetGroupClient(gi, key) {
   varBatchGroups[gi].name = key ? (clients[key].name || key) : ('Subcompany ' + (gi + 1));
 }
 
+// ── Employee Variance check (Disputes tab) ──────────────────────────────────
+// Optional, separate Variance run for confirming one employee's amount before filling a
+// dispute ticket's Payroll Instructions lines. Same window and processing as the Variance
+// task, but every cut-off card is a one-employee card (co._spot): never saved, finalized or
+// counted as a task run. The real Variance task's in-progress state (groups, uploads) is
+// stashed while this is open and put back on close (closeTaskRunner), so the two never mix.
+var _varSpotStash = null;
+function openEmployeeVarianceCheck() {
+  if (!window._varSpotMode) {
+    _varSpotStash = { groups: varBatchGroups, active: varActiveGroupIdx, counter: varCutoffCounter, wsKey: window._varWsKey, files: {} };
+    Object.keys(taskFiles).forEach(function(k) { if (k.indexOf('var-') === 0) _varSpotStash.files[k] = taskFiles[k]; });
+    window._varSpotMode = true;
+  }
+  Object.keys(taskFiles).forEach(function(k) { if (k.indexOf('var-') === 0) delete taskFiles[k]; });
+  varCutoffCounter = 1;
+  var _defaultSubs = subOptionsForCurrentGroup();
+  var _defaultKey = _defaultSubs.length === 1 ? _defaultSubs[0] : null;
+  varBatchGroups = [{ name: _defaultKey ? (clients[_defaultKey].name||_defaultKey) : 'Subcompany 1', clientKey: _defaultKey, cutoffs: [{ id: 1, _spot: true }], status: 'pending', errorMsg: '' }];
+  varActiveGroupIdx = -1;
+
+  window._openTaskKey = null;
+  window._taskFooterEl = null; // no Mark as done / Skip -- keepTaskFooterAttached must not re-add one
+  var modalBox = document.getElementById('task-modal-box');
+  if (modalBox) modalBox.style.width = '1400px';
+  document.getElementById('task-modal').style.display = 'flex';
+  document.getElementById('task-modal-title').textContent = 'Employee Variance check';
+  document.getElementById('task-modal-sub').textContent = 'Check specific employees before filling Payroll Instructions lines — not saved, not a task run';
+  var body = document.getElementById('task-modal-body');
+  body.innerHTML = varRenderGroups()
+    + '<button onclick="varResetAll()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:12px;background:none;color:#9898a6;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;margin-bottom:10px;"><i class="ti ti-refresh" style="font-size:12px;"></i> Reset and start over</button>'
+    + '<div id="var-batch-list"></div>';
+  renderVarBatchList();
+}
+function _varSpotRestore() {
+  if (!_varSpotStash) { window._varSpotMode = false; return; }
+  Object.keys(taskFiles).forEach(function(k) { if (k.indexOf('var-') === 0) delete taskFiles[k]; });
+  Object.keys(_varSpotStash.files).forEach(function(k) { taskFiles[k] = _varSpotStash.files[k]; });
+  varBatchGroups = _varSpotStash.groups;
+  varActiveGroupIdx = _varSpotStash.active;
+  varCutoffCounter = _varSpotStash.counter;
+  window._varWsKey = _varSpotStash.wsKey;
+  _varSpotStash = null;
+  window._varSpotMode = false;
+}
+
 function varRenderGroups() {
   return '<div id="var-upload-groups">' + varBatchGroups.map(varGroupCardHtml).join('') + '</div>'
     + '<button onclick="varAddGroup()" style="width:100%;padding:10px;border:1.5px dashed var(--border);border-radius:12px;background:none;color:var(--kk-600);font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;margin-bottom:12px;">+ Add another subcompany</button>'
@@ -12342,7 +12399,7 @@ function varRenderGroups() {
 }
 
 function varAddGroup() {
-  varBatchGroups.push({ name: 'Subcompany ' + (varBatchGroups.length + 1), clientKey: null, cutoffs: [{ id: ++varCutoffCounter }], status: 'pending', errorMsg: '' });
+  varBatchGroups.push({ name: 'Subcompany ' + (varBatchGroups.length + 1), clientKey: null, cutoffs: [{ id: ++varCutoffCounter, _spot: !!window._varSpotMode }], status: 'pending', errorMsg: '' });
   var gi = varBatchGroups.length - 1;
   var list = document.getElementById('var-upload-groups');
   if (list) list.insertAdjacentHTML('beforeend', varGroupCardHtml(varBatchGroups[gi], gi));
@@ -12378,7 +12435,7 @@ function addVarCutoffInGroup(gi) {
     return;
   }
   varCutoffCounter++;
-  var newCo = { id: varCutoffCounter };
+  var newCo = { id: varCutoffCounter, _spot: !!window._varSpotMode };
   g.cutoffs.push(newCo);
   var list = document.getElementById('var-cutoffs-list-' + gi);
   if (list) {
@@ -13120,16 +13177,14 @@ function buildVarCard(co, index, showRemove, gi) {
   // single-employee check can't overwrite or leak into the real cut-off's snapshot.
   var spot = !!co._spot;
   var _escAttr = function(s){ return String(s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); };
-  var spotLocked = co._attData !== undefined; // already processed -- can't switch modes after the fact
   var payoutFieldHtml = spot
     ? '<div style="margin-bottom:8px;"><label class="task-field-label">Name for this check</label>'
       + '<input class="task-input" type="text" id="var-payout-' + id + '" placeholder="e.g. Joanna Sta Maria" value="' + _escAttr(co._spotLabel) + '" oninput="varSetSpotLabel(' + id + ', this.value)" style="margin-bottom:8px;"></div>'
     : '<div style="margin-bottom:8px;"><label class="task-field-label">Payout date</label>'
       + '<input class="task-input" type="text" id="var-payout-' + id + '" readonly placeholder="Upload the client’s calendar in Client Profile to see this" value="' + _varPayoutVal + '" style="margin-bottom:8px;background:var(--bg-secondary,#F4F4F8);color:var(--text-primary);cursor:default;"></div>';
-  var spotToggleHtml = '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#6b6b80;margin:-4px 0 8px;cursor:' + (spotLocked ? 'default' : 'pointer') + ';"' + (spotLocked ? ' title="Already processed — reset to change this"' : '') + '>'
-    + '<input type="checkbox"' + (spot ? ' checked' : '') + (spotLocked ? ' disabled' : '') + ' onchange="varToggleSpot(' + (gi !== undefined ? gi : -1) + ',' + id + ', this.checked)">'
-    + ' One-employee check (type a name instead of using the payout)</label>'
-    + (spot ? '<div style="font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:6px 10px;margin-bottom:8px;">Not saved and can’t be finalized — stays out of Payroll Instructions, Email findings and the consolidated Attendance Items. Download the reports before leaving the page.</div>' : '');
+  // One-employee cards only exist in the separate Employee Variance check (Disputes tab, see
+  // openEmployeeVarianceCheck) -- the regular Variance task no longer has a checkbox for it.
+  var spotToggleHtml = spot ? '<div style="font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:6px 10px;margin-bottom:8px;">Not saved and can’t be finalized — stays out of Payroll Instructions, Email findings and the consolidated Attendance Items. Download the reports before closing.</div>' : '';
   return '<div class="var-cutoff-card" id="var-co-' + id + '"' + (spot ? ' data-spot="1"' : '') + ' style="background:#F8F8FA;border:1px solid #EBEBEF;border-radius:14px;padding:14px;margin-bottom:10px;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
     + '<div style="font-size:12px;font-weight:600;color:#32CE13;">' + (spot ? 'One-employee check' : 'Cut-off ' + index) + '</div>'
@@ -13173,19 +13228,6 @@ function varFileDZ(id, type, label) {
   return html;
 }
 
-// gi = -1 for the single-client flow (window.varCutoffs). Re-renders just this card in place
-// (uploaded files survive -- varFileDZ reads them back from taskFiles).
-function varToggleSpot(gi, coId, on) {
-  var list = gi >= 0 ? (varBatchGroups[gi] || {}).cutoffs || [] : varCutoffs;
-  var idx = list.findIndex(function(c){ return c.id === coId; });
-  var co = list[idx];
-  if (!co || co._attData !== undefined) return;
-  co._spot = !!on;
-  var el = document.getElementById('var-co-' + coId);
-  if (el) el.outerHTML = buildVarCard(co, idx + 1, list.length > 1, gi >= 0 ? gi : undefined);
-  var inp = on && document.getElementById('var-payout-' + coId);
-  if (inp) inp.focus();
-}
 function varSetSpotLabel(coId, val) {
   var all = varCutoffs.slice();
   varBatchGroups.forEach(function(g){ all = all.concat(g.cutoffs || []); });
