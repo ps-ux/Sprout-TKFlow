@@ -9141,6 +9141,11 @@ function parseTATEmailTime(timeStr) {
   return dt;
 }
 
+function _tatIsHoliday(dt) {
+  if (typeof _PH_HOLS === 'undefined') return false;
+  return !!_PH_HOLS[dt.getFullYear() + '-' + (dt.getMonth()+1) + '-' + dt.getDate()];
+}
+
 function getTATDeadline(emailTimeStr) {
   const emailDt = parseTATEmailTime(emailTimeStr);
   if (!emailDt) return null;
@@ -9157,6 +9162,17 @@ function getTATDeadline(emailTimeStr) {
     if (deadline.getDay() === 6) deadline.setDate(deadline.getDate() + 2);
     if (deadline.getDay() === 0) deadline.setDate(deadline.getDate() + 1);
     deadline.setHours(18, 0, 0, 0);
+  }
+  // PH holidays (_PH_HOLS): an email received ON a holiday is due EOD of the next working day,
+  // and a deadline never lands on a holiday/weekend. Weekend receipts keep their original
+  // same-day rule on purpose, so historical TAT results don't change.
+  if (_tatIsHoliday(emailDt) && deadline.toDateString() === emailDt.toDateString()) {
+    deadline.setDate(deadline.getDate() + 1);
+  }
+  if (_tatIsHoliday(emailDt) || _tatIsHoliday(deadline)) {
+    while (_tatIsHoliday(deadline) || deadline.getDay() === 0 || deadline.getDay() === 6) {
+      deadline.setDate(deadline.getDate() + 1);
+    }
   }
   return deadline;
 }
@@ -11137,7 +11153,7 @@ function addWorkingDays(date, days) {
   while (added < days) {
     result.setDate(result.getDate() + 1);
     var dow = result.getDay();
-    if (dow !== 0 && dow !== 6) added++;
+    if (dow !== 0 && dow !== 6 && !(typeof _tatIsHoliday === 'function' && _tatIsHoliday(result))) added++;
   }
   return result;
 }
@@ -29437,7 +29453,10 @@ var _PH_HOLS = {
   '2026-8-31':'National Heroes Day','2026-11-1':'All Saints\' Day','2026-11-2':'All Souls\' Day',
   '2026-11-30':'Bonifacio Day','2026-12-8':'Feast of the Immaculate Conception',
   '2026-12-24':'Christmas Eve','2026-12-25':'Christmas Day','2026-12-30':'Rizal Day',
-  '2026-12-31':'Last Day of the Year'
+  '2026-12-31':'Last Day of the Year',
+  // Sudden 3-day holiday declared Nov 2026. Keep api/calendar/[token].js TEAM_HOLS in sync.
+  '2026-11-16':'Special Non-Working Holiday','2026-11-17':'Special Non-Working Holiday',
+  '2026-11-18':'Special Non-Working Holiday'
 };
 
 function _allHols() {

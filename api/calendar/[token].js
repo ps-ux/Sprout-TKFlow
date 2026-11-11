@@ -97,7 +97,21 @@ function parseLegacyDateActionEOD(str) {
   return new Date(Date.UTC(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10), 18, 0, 0));
 }
 
-// Mirrors TKFlow_Hub.html:8263 exactly (re-anchored, see above). Returns PH-fields-as-UTC --
+// Mirrors the Hub's _PH_HOLS (TKFlow_Hub.html) -- keep in sync. 'Y-M-D', no zero padding.
+const TEAM_HOLS = new Set([
+  '2025-1-1','2025-4-17','2025-4-18','2025-4-19','2025-4-9','2025-5-1','2025-6-12','2025-8-21',
+  '2025-8-25','2025-11-1','2025-11-2','2025-11-30','2025-12-8','2025-12-24','2025-12-25',
+  '2025-12-30','2025-12-31',
+  '2026-1-1','2026-2-17','2026-4-2','2026-4-3','2026-4-4','2026-4-9','2026-5-1','2026-6-12',
+  '2026-8-21','2026-8-31','2026-11-1','2026-11-2','2026-11-30','2026-12-8','2026-12-24',
+  '2026-12-25','2026-12-30','2026-12-31',
+  '2026-11-16','2026-11-17','2026-11-18'
+]);
+function isTeamHoliday(dt) {
+  return TEAM_HOLS.has(dt.getUTCFullYear() + '-' + (dt.getUTCMonth() + 1) + '-' + dt.getUTCDate());
+}
+
+// Mirrors TKFlow_Hub.html getTATDeadline exactly (re-anchored, see above). Returns PH-fields-as-UTC --
 // caller must phToRealUTC() before treating it as a real instant.
 function getTATDeadline(emailTimeStr) {
   const emailDt = parseTATEmailTime(emailTimeStr);
@@ -112,6 +126,15 @@ function getTATDeadline(emailTimeStr) {
     if (deadline.getUTCDay() === 6) deadline.setUTCDate(deadline.getUTCDate() + 2);
     if (deadline.getUTCDay() === 0) deadline.setUTCDate(deadline.getUTCDate() + 1);
     deadline.setUTCHours(18, 0, 0, 0);
+  }
+  // Holidays (see the Hub's getTATDeadline): received on one -> next working day; never due on one.
+  if (isTeamHoliday(emailDt) && deadline.toISOString().slice(0, 10) === emailDt.toISOString().slice(0, 10)) {
+    deadline.setUTCDate(deadline.getUTCDate() + 1);
+  }
+  if (isTeamHoliday(emailDt) || isTeamHoliday(deadline)) {
+    while (isTeamHoliday(deadline) || deadline.getUTCDay() === 0 || deadline.getUTCDay() === 6) {
+      deadline.setUTCDate(deadline.getUTCDate() + 1);
+    }
   }
   return deadline;
 }
