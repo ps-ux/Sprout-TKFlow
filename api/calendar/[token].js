@@ -107,8 +107,23 @@ const TEAM_HOLS = new Set([
   '2026-12-25','2026-12-30','2026-12-31',
   '2026-11-16','2026-11-17','2026-11-18'
 ]);
+// Replaced per request from the `holidays` table (Settings > Holidays in the Hub); TEAM_HOLS
+// above is only the fallback if that table can't be read.
+let activeHols = TEAM_HOLS;
+async function loadTeamHolidays() {
+  try {
+    const rows = await restGet('holidays?select=holiday_date');
+    activeHols = new Set(rows.map(function (r) {
+      const p = String(r.holiday_date).split('-');
+      return (+p[0]) + '-' + (+p[1]) + '-' + (+p[2]);
+    }));
+  } catch (e) {
+    console.warn('holidays table unavailable, using built-in list', e.message);
+    activeHols = TEAM_HOLS;
+  }
+}
 function isTeamHoliday(dt) {
-  return TEAM_HOLS.has(dt.getUTCFullYear() + '-' + (dt.getUTCMonth() + 1) + '-' + dt.getUTCDate());
+  return activeHols.has(dt.getUTCFullYear() + '-' + (dt.getUTCMonth() + 1) + '-' + dt.getUTCDate());
 }
 
 // Mirrors TKFlow_Hub.html getTATDeadline exactly (re-anchored, see above). Returns PH-fields-as-UTC --
@@ -310,6 +325,7 @@ module.exports = async function handler(req, res) {
     const user = users[0];
     if (!user) { res.status(404).send('Not found'); return; }
 
+    await loadTeamHolidays();
     const events = await buildEventsForUser(user.id);
     const ics = buildICS('TKFlow — ' + user.name + '’s To-Dos', events, new Date());
 

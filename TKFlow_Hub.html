@@ -888,6 +888,7 @@ function assignAvClass(shortKey, siblingClasses) {
       // All nine depend on clients/clientGroups (companyId/groupId) already being populated above.
       await loadPolicyFilesFromSupabase();
       await loadCalendarsFromSupabase();
+      try { await loadHolidaysFromSupabase(); } catch (e) { console.warn('Holidays load failed', e); }
       await loadPocsFromSupabase();
       await loadAdhocLogsFromSupabase();
       await loadDisputesFromSupabase();
@@ -1740,6 +1741,7 @@ function signInWithGoogle() {
             <input type="file" id="cal-file-input" accept=".xlsx,.xls" style="display:none;" onchange="loadTKCalendarFile(this)">
             <div id="cal-file-name" style="font-size:11px;color:#9898a6;font-style:italic;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title=""></div>
             <button id="cal-remove-btn" onclick="removeTKCalendar()" style="display:none;align-items:center;gap:4px;padding:4px 10px;background:none;color:#c0392b;border:1px solid #EBEBEF;border-radius:10px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-trash" style="font-size:12px;"></i> Remove</button>
+            <button onclick="openHolidaySettings()" title="Add or remove team holidays" style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:none;color:#be185d;border:1px solid #f9a8d4;border-radius:10px;font-size:11px;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-calendar-event" style="font-size:12px;"></i> Holidays</button>
             <div style="margin-left:auto;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
               <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#6b6b80;"><span style="width:10px;height:10px;border-radius:3px;background:#EBFCF1;border:1px solid #95F0B7;display:inline-block;"></span>Payout</span>
               <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#6b6b80;"><span style="width:10px;height:10px;border-radius:3px;background:#dbeafe;border:1px solid #93c5fd;display:inline-block;"></span>Deadline</span>
@@ -2232,6 +2234,12 @@ function signInWithGoogle() {
           <div id="calendar-feed-body">
             <!-- Rendered by renderCalendarFeedSection() -->
           </div>
+        </div>
+        <!-- Holidays -->
+        <div class="settings-section" id="holidays-section">
+          <div class="settings-title">Holidays</div>
+          <div style="font-size:12px;color:var(--text-muted,#9898a6);margin-bottom:16px;">Holidays and sudden non-working days for the whole team. TAT due dates, the To-Do calendar feed, client calendars, payout dates and work-anniversary reminders all skip these days. Adding a date that's already listed just renames it.</div>
+          <div id="holidays-body"><!-- Rendered by renderHolidaysSection() --></div>
         </div>
         <!-- Member Permissions -->
         <div class="settings-section" id="permissions-section">
@@ -3066,8 +3074,22 @@ function archiveBuildValidationSnapshotHtml(data) {
   var rows = (data && data.tkReviewRows) || [];
   if (!rows.length) return '<div style="font-size:12px;color:#9898a6;">No absences recorded.</div>';
   var body = rows.map(function(r) {
-    var datesDisplay = (r.dates && r.dates.length) ? r.dates.join(', ') : '—';
-    var remarksDisplay = (r.remarks && r.remarks.length) ? r.remarks.join('; ') : '—';
+    // Absences only -- late/undertime dates and their remarks are hidden here so the history
+    // reads as "which days absent, and why". dates/remarks/evidence are pushed together
+    // (same index); if they ever don't line up, fall back to matching by date.
+    var dates = r.dates || [], remarks = r.remarks || [], ev = r.evidence || [];
+    var aligned = ev.length === dates.length;
+    var absentDateSet = {};
+    ev.forEach(function(e){ if ((e.flagType || 'absent') === 'absent') absentDateSet[e.date] = true; });
+    var keep = dates.map(function(dt, i) {
+      if (!ev.length) return true; // old snapshot without evidence -- can't tell, show everything
+      if (aligned) return (ev[i].flagType || 'absent') === 'absent';
+      return !!absentDateSet[dt];
+    });
+    var absDates = dates.filter(function(_, i){ return keep[i]; });
+    var absRemarks = remarks.filter(function(_, i){ return keep[i] && remarks[i]; });
+    var datesDisplay = absDates.length ? absDates.join(', ') : '—';
+    var remarksDisplay = absRemarks.length ? absRemarks.join('; ') : '—';
     var divider = 'border-right:1px solid #F4F4F8;';
     return '<tr>'
       + '<td style="padding:6px 10px;font-size:11px;color:#9898a6;font-family:monospace;white-space:nowrap;' + divider + '">' + (r.id||'') + '</td>'
@@ -27083,6 +27105,7 @@ if (_origSwitchPage2) {
         var permsSection = document.getElementById('permissions-section');
         if (permsSection) permsSection.style.display = currentUser.canManageAccess ? 'block' : 'none';
         renderMemberPermissions();
+        if (typeof renderHolidaysSection === 'function') renderHolidaysSection();
       }, 50);
     }
   };
@@ -29459,6 +29482,144 @@ var _PH_HOLS = {
   '2026-11-18':'Special Non-Working Holiday'
 };
 
+// ── Team holiday list (Settings > Holidays, `holidays` table) ─────────────────
+// Once the table is loaded it REPLACES _PH_HOLS' contents in place (same object, so every
+// existing reader -- TAT, payout roll-back, LM reminders, calendars -- picks it up untouched).
+// If the table can't be read (migration not run yet), the hardcoded list above stays in use.
+// api/calendar/[token].js reads the same table for the To-Do feed.
+var _holidayRows = null;
+function _hEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function _applyHolidayRows() {
+  if (!_holidayRows) return;
+  Object.keys(_PH_HOLS).forEach(function(k){ delete _PH_HOLS[k]; });
+  _holidayRows.forEach(function(r) {
+    var p = String(r.holiday_date).split('-');
+    _PH_HOLS[(+p[0]) + '-' + (+p[1]) + '-' + (+p[2])] = r.name;
+  });
+}
+async function loadHolidaysFromSupabase() {
+  var res = await supabaseClient.from('holidays').select('id,holiday_date,name').order('holiday_date');
+  if (res.error) { console.warn('Holidays table not available -- using built-in list', res.error); return; }
+  _holidayRows = res.data || [];
+  _applyHolidayRows();
+}
+function _refreshAfterHolidayChange() {
+  _applyHolidayRows();
+  renderHolidaysSection();
+  ['renderTKCalendar','renderDashSchedule','renderMiniCal','renderNotifCard','updateDashboardTATAlerts'].forEach(function(fn) {
+    if (typeof window[fn] === 'function') { try { window[fn](); } catch (e) { console.warn(fn, e); } }
+  });
+}
+function renderHolidaysSection() {
+  var el = document.getElementById('holidays-body');
+  if (!el) return;
+  if (!_holidayRows) {
+    el.innerHTML = '<div style="font-size:12px;color:#c0392b;">The holiday list isn’t set up in the database yet (run the holidays migration). The built-in 2025–2026 list is being used for now.</div>';
+    return;
+  }
+  var sel = document.getElementById('hol-year-filter');
+  var thisYr = new Date().getFullYear();
+  var yr = sel ? parseInt(sel.value, 10) : thisYr;
+  var years = {}; years[thisYr] = 1; years[thisYr + 1] = 1;
+  _holidayRows.forEach(function(r){ years[parseInt(String(r.holiday_date).slice(0,4), 10)] = 1; });
+  var yrList = Object.keys(years).map(Number).sort(function(a,b){ return b - a; });
+  var DNAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  var MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var rows = _holidayRows.filter(function(r){ return String(r.holiday_date).slice(0,4) === String(yr); });
+  var inp = 'padding:6px 10px;border:1px solid #EBEBEF;border-radius:10px;font-size:12px;font-family:Rubik,sans-serif;';
+  el.innerHTML =
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">'
+    + '<input type="date" id="hol-new-date" style="' + inp + '">'
+    + '<input type="text" id="hol-new-name" placeholder="Holiday name" value="Special Non-Working Holiday" style="' + inp + 'flex:1;min-width:180px;">'
+    + '<button onclick="addHoliday()" style="padding:7px 14px;background:var(--kk-500,#32CE13);color:#fff;border:none;border-radius:10px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-plus" style="font-size:12px;"></i> Add holiday</button>'
+    + '</div>'
+    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><span style="font-size:11px;color:#9898a6;">Year</span>'
+    + '<select id="hol-year-filter" onchange="renderHolidaysSection()" style="' + inp + 'padding:4px 8px;">'
+    + yrList.map(function(y){ return '<option value="' + y + '"' + (y === yr ? ' selected' : '') + '>' + y + '</option>'; }).join('')
+    + '</select><span style="font-size:11px;color:#9898a6;">' + rows.length + ' holiday' + (rows.length === 1 ? '' : 's') + '</span></div>'
+    + (rows.length ? rows.map(function(r) {
+        var p = String(r.holiday_date).split('-'); var dt = new Date(+p[0], +p[1]-1, +p[2]);
+        return '<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid #F4F4F8;">'
+          + '<div style="width:110px;font-size:12px;font-weight:600;color:#be185d;">' + MONS[dt.getMonth()] + ' ' + dt.getDate() + ' <span style="font-weight:400;color:#9898a6;">' + DNAMES[dt.getDay()] + '</span></div>'
+          + '<div style="flex:1;font-size:12px;color:#1a1a2e;">' + _hEsc(r.name) + '</div>'
+          + '<button onclick="removeHoliday(\'' + r.id + '\')" title="Remove" style="width:26px;height:26px;border-radius:6px;background:none;border:1px solid #EBEBEF;cursor:pointer;color:#c0392b;display:flex;align-items:center;justify-content:center;"><i class="ti ti-trash" style="font-size:12px;"></i></button>'
+          + '</div>';
+      }).join('') : '<div style="font-size:12px;color:#9898a6;padding:6px 0;">No holidays for ' + yr + ' yet.</div>');
+}
+async function addHoliday() {
+  var dv = (document.getElementById('hol-new-date') || {}).value;
+  var nm = ((document.getElementById('hol-new-name') || {}).value || '').trim() || 'Holiday';
+  if (!dv) { showToast('Pick a date first', '#e67e00'); return; }
+  var existing = (_holidayRows || []).find(function(r){ return r.holiday_date === dv; });
+  var res = await supabaseClient.from('holidays').upsert({ holiday_date: dv, name: nm, created_by: currentUser && currentUser.name || null }, { onConflict: 'holiday_date' }).select('id,holiday_date,name');
+  if (res.error || !(res.data || []).length) { showToast('Could not save holiday' + (res.error ? ': ' + res.error.message : ' (permission denied)'), '#c0392b'); return; }
+  _holidayRows = (_holidayRows || []).filter(function(r){ return r.holiday_date !== dv; }).concat(res.data);
+  _holidayRows.sort(function(a,b){ return a.holiday_date < b.holiday_date ? -1 : 1; });
+  if (typeof logAudit === 'function') logAudit({ action: existing ? 'holiday_renamed' : 'holiday_added', entityType: 'holiday', entityId: dv, entityLabel: nm, field: 'name', oldValue: existing ? existing.name : null, newValue: nm, description: (existing ? 'Renamed holiday ' : 'Added holiday ') + dv + ' (' + nm + ')' });
+  var sel = document.getElementById('hol-year-filter'); if (sel) sel.value = dv.slice(0,4);
+  _refreshAfterHolidayChange();
+  var sel2 = document.getElementById('hol-year-filter'); if (sel2 && sel2.value !== dv.slice(0,4)) { sel2.value = dv.slice(0,4); renderHolidaysSection(); }
+  showToast((existing ? 'Holiday updated: ' : 'Holiday added: ') + dv);
+}
+function removeHoliday(id) {
+  var row = (_holidayRows || []).find(function(r){ return r.id === id; });
+  if (!row) return;
+  appConfirm('Remove holiday?', 'Remove ' + row.holiday_date + ' (' + row.name + ')? TAT and calendar dates will treat it as a working day again.', async function() {
+    var res = await supabaseClient.from('holidays').delete().eq('id', id).select('id');
+    if (res.error || !(res.data || []).length) { showToast('Could not remove holiday' + (res.error ? ': ' + res.error.message : ' (permission denied)'), '#c0392b'); return; }
+    _holidayRows = _holidayRows.filter(function(r){ return r.id !== id; });
+    if (typeof logAudit === 'function') logAudit({ action: 'holiday_removed', entityType: 'holiday', entityId: row.holiday_date, entityLabel: row.name, field: 'name', oldValue: row.name, newValue: null, description: 'Removed holiday ' + row.holiday_date + ' (' + row.name + ')' });
+    _refreshAfterHolidayChange();
+    showToast('Holiday removed');
+  }, { okLabel: 'Remove' });
+}
+function openHolidaySettings() {
+  switchPage('settings');
+  setTimeout(function(){ var s = document.getElementById('holidays-section'); if (s) s.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 120);
+}
+
+// ── Move a calendar deadline (e.g. pushed by a sudden holiday) ─────────────────
+// Edits the deadline inside the saved calendar (calendars.cal_periods) -- the uploaded file
+// itself isn't touched, and re-uploading a calendar replaces any moves made here. The new date
+// must stay in the same month, because the calendar draws each deadline in its period's month.
+function calOpenDeadlineMove(pi, di) {
+  var box = document.getElementById('cal-mv-' + pi + '-' + di);
+  if (box) box.style.display = box.style.display === 'none' ? 'flex' : 'none';
+}
+async function calSaveDeadlineMove(pi, di) {
+  var store = _calGet();
+  var p = store.calPeriods[pi];
+  var dl = p && p.deadlines[di];
+  if (!dl || !dl.date) return;
+  var dv = (document.getElementById('cal-mv-date-' + pi + '-' + di) || {}).value;
+  var tv = (document.getElementById('cal-mv-time-' + pi + '-' + di) || {}).value;
+  if (!dv) { showToast('Pick the new date', '#e67e00'); return; }
+  var dp = dv.split('-');
+  var nd = new Date(+dp[0], +dp[1] - 1, +dp[2]);
+  if (nd.getMonth() !== p.month) { showToast('Keep the new date within ' + p.monthName + ' — the calendar shows this deadline in that month', '#e67e00'); return; }
+  if (tv) { var tp = tv.split(':'); nd.setHours(+tp[0], +tp[1], 0, 0); }
+  var scope = _calScope();
+  if (!scope) { showToast('No saved calendar for this client', '#c0392b'); return; }
+  var prevDate = dl.date, prevHasTime = dl.hasTime, prevMovedFrom = dl.movedFrom;
+  if (!dl.movedFrom) dl.movedFrom = prevDate.toISOString();
+  dl.date = nd; dl.hasTime = !!tv;
+  var res = await supabaseClient.from('calendars').update({ cal_periods: store.calPeriods }).eq('scope_type', scope.type).eq('scope_id', scope.id).select('id');
+  if (res.error || !(res.data || []).length) {
+    dl.date = prevDate; dl.hasTime = prevHasTime; dl.movedFrom = prevMovedFrom;
+    showToast('Could not move deadline' + (res.error ? ': ' + res.error.message : ' (permission denied)'), '#c0392b');
+    return;
+  }
+  var fmt = function(d, t){ return d.toLocaleDateString('en-PH', { month:'short', day:'numeric' }) + (t ? ' ' + d.toLocaleTimeString('en-PH', { hour:'numeric', minute:'2-digit', hour12:true }) : ''); };
+  if (typeof logAudit === 'function') {
+    var ck = _calKey();
+    logAudit({ action: 'calendar_deadline_moved', entityType: 'client', entityId: scope.id, entityLabel: (typeof _clientNameFor === 'function' && _clientNameFor(ck)) || ck, field: dl.label + ' (' + p.monthName + ' ' + (p.period === 1 ? '1st' : '2nd') + ')', oldValue: fmt(prevDate, prevHasTime), newValue: fmt(nd, !!tv), description: 'Moved ' + dl.label + ' from ' + fmt(prevDate, prevHasTime) + ' to ' + fmt(nd, !!tv) });
+  }
+  renderTKCalendar();
+  calShowDay(nd.getDate());
+  ['renderDashSchedule','renderMiniCal','renderNotifCard'].forEach(function(fn){ if (typeof window[fn] === 'function') { try { window[fn](); } catch (e) {} } });
+  showToast(dl.label + ' moved to ' + fmt(nd, !!tv));
+}
+
 function _allHols() {
   var r = Object.assign({}, _PH_HOLS);
   var uploaded = _calGet().calHolidays || {};
@@ -29993,12 +30154,27 @@ function calShowDay(d) {
     + '<button onclick="document.getElementById(\'cal-detail\').style.display=\'none\'" style="width:26px;height:26px;border-radius:6px;border:1px solid #EBEBEF;background:#fff;cursor:pointer;color:#9898a6;display:flex;align-items:center;justify-content:center;"><i class="ti ti-x"></i></button></div>';
 
   dayPeriods.forEach(function(p){
+    var pi = store.calPeriods.indexOf(p);
+    var pad2 = function(n){ return String(n).padStart(2,'0'); };
     html += '<div style="background:#F8F8FA;border-radius:12px;padding:10px 12px;margin-bottom:8px;">'
       + '<div style="font-size:11px;font-weight:600;color:#16A34A;margin-bottom:6px;">'+p.monthName+' '+p.period+(p.period===1?'st':'nd')+' Period</div>'
       + (p.attCov?'<div style="font-size:11px;color:#6b6b80;margin-bottom:6px;">Coverage: <b>'+p.attCov+'</b></div>':'')
       + (p.payout&&p.payout.getDate()===d?'<div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#16A34A;margin-bottom:4px;"><i class="ti ti-cash" style="font-size:11px;"></i> Payout date</div>':'')
-      + p.deadlines.filter(function(dl){return dl.date&&dl.date.getDate()===d;}).map(function(dl){
-          return '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#1679FA;margin-bottom:2px;"><i class="ti ti-clock" style="font-size:11px;"></i> '+dl.label+'</div>';
+      + p.deadlines.map(function(dl, di){
+          if (!(dl.date && dl.date.getDate()===d)) return '';
+          var tStr = dl.hasTime ? ' · ' + dl.date.toLocaleTimeString('en-PH',{hour:'numeric',minute:'2-digit',hour12:true}) : '';
+          var moved = dl.movedFrom ? ' <span style="font-size:10px;color:#e67e00;">(moved from ' + new Date(dl.movedFrom).toLocaleDateString('en-PH',{month:'short',day:'numeric'}) + ')</span>' : '';
+          var dVal = calYear + '-' + pad2(p.month+1) + '-' + pad2(dl.date.getDate());
+          var tVal = dl.hasTime ? pad2(dl.date.getHours()) + ':' + pad2(dl.date.getMinutes()) : '';
+          var inp = 'padding:4px 8px;border:1px solid #EBEBEF;border-radius:8px;font-size:11px;font-family:Rubik,sans-serif;';
+          return '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#1679FA;margin-bottom:2px;"><i class="ti ti-clock" style="font-size:11px;"></i> '+dl.label+tStr+moved
+            + '<button onclick="calOpenDeadlineMove('+pi+','+di+')" style="margin-left:auto;padding:2px 8px;font-size:10px;border:1px solid #EBEBEF;border-radius:8px;background:#fff;color:#6b6b80;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-calendar-share" style="font-size:10px;"></i> Move</button></div>'
+            + '<div id="cal-mv-'+pi+'-'+di+'" style="display:none;align-items:center;gap:6px;flex-wrap:wrap;margin:4px 0 8px 17px;">'
+            + '<input type="date" id="cal-mv-date-'+pi+'-'+di+'" value="'+dVal+'" style="'+inp+'">'
+            + '<input type="time" id="cal-mv-time-'+pi+'-'+di+'" value="'+tVal+'" title="Optional time" style="'+inp+'">'
+            + '<button onclick="calSaveDeadlineMove('+pi+','+di+')" style="padding:4px 10px;font-size:11px;border:none;border-radius:8px;background:#32CE13;color:#fff;cursor:pointer;font-family:Rubik,sans-serif;">Save</button>'
+            + '<button onclick="calOpenDeadlineMove('+pi+','+di+')" style="padding:4px 10px;font-size:11px;border:1px solid #EBEBEF;border-radius:8px;background:#fff;color:#6b6b80;cursor:pointer;font-family:Rubik,sans-serif;">Cancel</button>'
+            + '</div>';
         }).join('')
       + '</div>';
   });
