@@ -29519,7 +29519,9 @@ function renderHolidaysSection() {
   }
   var sel = document.getElementById('hol-year-filter');
   var thisYr = new Date().getFullYear();
-  var yr = sel ? parseInt(sel.value, 10) : thisYr;
+  var yr = sel ? parseInt(sel.value, 10) : NaN;
+  if (window._holYearSel) { yr = window._holYearSel; window._holYearSel = null; }
+  if (isNaN(yr)) yr = thisYr;
   var years = {}; years[thisYr] = 1; years[thisYr + 1] = 1;
   _holidayRows.forEach(function(r){ years[parseInt(String(r.holiday_date).slice(0,4), 10)] = 1; });
   var yrList = Object.keys(years).map(Number).sort(function(a,b){ return b - a; });
@@ -29532,6 +29534,20 @@ function renderHolidaysSection() {
     + '<input type="date" id="hol-new-date" style="' + inp + '">'
     + '<input type="text" id="hol-new-name" placeholder="Holiday name" value="Special Non-Working Holiday" style="' + inp + 'flex:1;min-width:180px;">'
     + '<button onclick="addHoliday()" style="padding:7px 14px;background:var(--kk-500,#32CE13);color:#fff;border:none;border-radius:10px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-plus" style="font-size:12px;"></i> Add holiday</button>'
+    + '<button onclick="holToggleBulk()" style="padding:7px 14px;background:#fff;color:#6b6b80;border:1px solid #EBEBEF;border-radius:10px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-list-details" style="font-size:12px;"></i> Bulk add</button>'
+    + '</div>'
+    + '<div id="hol-bulk" style="display:' + (window._holBulkOpen ? 'block' : 'none') + ';border:1px dashed #f9a8d4;border-radius:12px;padding:12px;margin-bottom:14px;background:#fffafc;">'
+    + '<div style="font-size:12px;color:#1a1a2e;font-weight:600;margin-bottom:4px;">Bulk add holidays</div>'
+    + '<div style="font-size:11px;color:#6b6b80;margin-bottom:8px;">One holiday per line: a date and a name, in any order, e.g. <b>January 1, 2027 New Year’s Day</b>, <b>2027-04-09 Araw ng Kagitingan</b>, or rows copied straight from Excel/Google Sheets. Or upload an .xlsx/.csv with a date column and a name column. Ranges like “April 1–3” need one line per day.</div>'
+    + '<textarea id="hol-bulk-text" rows="6" placeholder="January 1, 2027\tNew Year’s Day&#10;April 9, 2027\tAraw ng Kagitingan" style="width:100%;box-sizing:border-box;' + inp + 'font-family:monospace;resize:vertical;"></textarea>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;">'
+    + '<button onclick="document.getElementById(\'hol-bulk-file\').click()" style="padding:6px 12px;background:#fff;color:#6b6b80;border:1px solid #EBEBEF;border-radius:10px;font-size:12px;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-upload" style="font-size:12px;"></i> Upload .xlsx / .csv</button>'
+    + '<input type="file" id="hol-bulk-file" accept=".xlsx,.xls,.csv" style="display:none;" onchange="holBulkLoadFile(this)">'
+    + '<span style="font-size:11px;color:#9898a6;">Year for dates written without one</span>'
+    + '<input type="number" id="hol-bulk-year" value="' + (thisYr + 1) + '" style="' + inp + 'width:80px;">'
+    + '<button onclick="holBulkPreview()" style="padding:6px 12px;background:#be185d;color:#fff;border:none;border-radius:10px;font-size:12px;cursor:pointer;font-family:Rubik,sans-serif;">Preview</button>'
+    + '</div>'
+    + '<div id="hol-bulk-preview" style="margin-top:10px;"></div>'
     + '</div>'
     + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><span style="font-size:11px;color:#9898a6;">Year</span>'
     + '<select id="hol-year-filter" onchange="renderHolidaysSection()" style="' + inp + 'padding:4px 8px;">'
@@ -29556,9 +29572,8 @@ async function addHoliday() {
   _holidayRows = (_holidayRows || []).filter(function(r){ return r.holiday_date !== dv; }).concat(res.data);
   _holidayRows.sort(function(a,b){ return a.holiday_date < b.holiday_date ? -1 : 1; });
   if (typeof logAudit === 'function') logAudit({ action: existing ? 'holiday_renamed' : 'holiday_added', entityType: 'holiday', entityId: dv, entityLabel: nm, field: 'name', oldValue: existing ? existing.name : null, newValue: nm, description: (existing ? 'Renamed holiday ' : 'Added holiday ') + dv + ' (' + nm + ')' });
-  var sel = document.getElementById('hol-year-filter'); if (sel) sel.value = dv.slice(0,4);
+  window._holYearSel = parseInt(dv.slice(0,4), 10);
   _refreshAfterHolidayChange();
-  var sel2 = document.getElementById('hol-year-filter'); if (sel2 && sel2.value !== dv.slice(0,4)) { sel2.value = dv.slice(0,4); renderHolidaysSection(); }
   showToast((existing ? 'Holiday updated: ' : 'Holiday added: ') + dv);
 }
 function removeHoliday(id) {
@@ -29573,6 +29588,145 @@ function removeHoliday(id) {
     showToast('Holiday removed');
   }, { okLabel: 'Remove' });
 }
+// ── Bulk add (paste lines or upload .xlsx/.csv) ───────────────────────────────
+function holToggleBulk() {
+  window._holBulkOpen = !window._holBulkOpen;
+  var b = document.getElementById('hol-bulk');
+  if (b) b.style.display = window._holBulkOpen ? 'block' : 'none';
+}
+var _HOL_MONTHS = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, sept:8, oct:9, nov:10, dec:11 };
+// Pulls one date out of free text; returns { date, rest } (rest = the text with the date
+// removed, used as the holiday name) or null. fallbackYr is used when no year is written.
+function _holExtractDate(text, fallbackYr) {
+  var s = String(text || '');
+  var MON = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?';
+  // A weekday written right before the date ("Friday, April 9") is part of the date, not the
+  // name -- but weekdays elsewhere stay, since names like "Maundy Thursday" contain one.
+  var WD = '(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|mon|tue|wed|thu|fri|sat|sun)\\.?,?\\s+';
+  var pats = [
+    { re: new RegExp('(?:' + WD + ')?(\\d{4})-(\\d{1,2})-(\\d{1,2})', 'i'), f: function(m){ return [+m[1], +m[2]-1, +m[3]]; } },
+    { re: new RegExp('(?:' + WD + ')?(?<!\\d)(\\d{1,2})\\/(\\d{1,2})(?:\\/(\\d{2,4}))?(?!\\d)', 'i'), f: function(m){ var y = m[3] ? (+m[3] < 100 ? 2000 + (+m[3]) : +m[3]) : fallbackYr; return [y, +m[1]-1, +m[2]]; } },
+    { re: new RegExp('(?:' + WD + ')?(?<!\\d)(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?' + MON + '(?:,?\\s*(\\d{4}))?(?!\\d)', 'i'), f: function(m){ return [m[3] ? +m[3] : fallbackYr, _HOL_MONTHS[m[2].toLowerCase().slice(0, m[2].toLowerCase().indexOf('sept') === 0 ? 4 : 3)], +m[1]]; } },
+    { re: new RegExp('(?:' + WD + ')?' + MON + '\\s+(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?(?:,?\\s*(\\d{4}))?(?!\\d)', 'i'), f: function(m){ return [m[3] ? +m[3] : fallbackYr, _HOL_MONTHS[m[1].toLowerCase().slice(0, m[1].toLowerCase().indexOf('sept') === 0 ? 4 : 3)], +m[2]]; } }
+  ];
+  for (var i = 0; i < pats.length; i++) {
+    var m = s.match(pats[i].re);
+    if (!m) continue;
+    var ymd = pats[i].f(m);
+    if (!ymd[0] || ymd[1] == null || isNaN(ymd[1])) continue;
+    var d = new Date(ymd[0], ymd[1], ymd[2]);
+    if (d.getMonth() !== ymd[1] || d.getDate() !== ymd[2]) continue; // e.g. Feb 30
+    return { date: d, rest: s.replace(m[0], ' ') };
+  }
+  return null;
+}
+function _holCleanName(s) {
+  return String(s || '')
+    .replace(/\(\s*(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|mon|tue|wed|thu|fri|sat|sun)\.?\s*\)/gi, ' ') // "(Fri)" after a date
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,;:|()\-–—]+|[\s,;:|()\-–—]+$/g, '')
+    .trim();
+}
+// rows = array of arrays (cells). Text lines come in as single-cell rows.
+function _holParseRows(rows, fallbackYr) {
+  var out = [], skipped = [];
+  rows.forEach(function(cells) {
+    cells = (cells || []).filter(function(c){ return c !== null && c !== undefined && String(c).trim() !== ''; });
+    if (!cells.length) return;
+    var date = null, nameParts = [];
+    cells.forEach(function(c) {
+      // Excel date serials for 2020-2099 are ~43800-73000; a bare 2027 in a "Year" column is not a date.
+      if (!date && typeof c === 'number' && c > 30000 && c < 80000) { var xd = _xlsDate(c); if (xd) { date = xd; return; } }
+      if (!date && c instanceof Date && !isNaN(c)) { date = new Date(c.getFullYear(), c.getMonth(), c.getDate()); return; }
+      if (!date) { var ex = _holExtractDate(c, fallbackYr); if (ex) { date = ex.date; nameParts.push(ex.rest); return; } }
+      if (typeof c === 'number' || /^\s*\d+\s*$/.test(String(c))) return; // year / row-number columns
+      if (/^\s*(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|mon|tue|wed|thu|fri|sat|sun)\.?\s*$/i.test(String(c))) return; // a "Day" column
+      nameParts.push(String(c));
+    });
+    var line = cells.join(' · ');
+    if (!date) { skipped.push(line); return; }
+    var name = _holCleanName(nameParts.join(' ')) || 'Holiday';
+    var iso = date.getFullYear() + '-' + String(date.getMonth()+1).padStart(2,'0') + '-' + String(date.getDate()).padStart(2,'0');
+    out.push({ holiday_date: iso, name: name });
+  });
+  // Same date twice in the list -> keep the last one.
+  var byDate = {};
+  out.forEach(function(r){ byDate[r.holiday_date] = r; });
+  return { rows: Object.keys(byDate).sort().map(function(k){ return byDate[k]; }), skipped: skipped };
+}
+function holBulkLoadFile(input) {
+  var file = input.files && input.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', raw: true, cellDates: false });
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      window._holBulkFileRows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
+      window._holBulkFileName = file.name;
+      var ta = document.getElementById('hol-bulk-text');
+      if (ta) ta.value = '';
+      holBulkPreview();
+    } catch (err) {
+      showToast('Could not read that file: ' + (err.message || err), '#c0392b');
+    }
+    input.value = '';
+  };
+  reader.readAsArrayBuffer(file);
+}
+function holBulkPreview() {
+  var yr = parseInt((document.getElementById('hol-bulk-year') || {}).value, 10) || (new Date().getFullYear() + 1);
+  var text = ((document.getElementById('hol-bulk-text') || {}).value || '').trim();
+  var src;
+  if (text) {
+    window._holBulkFileRows = null;
+    src = text.split(/\r?\n/).map(function(line){ return line.indexOf('\t') >= 0 ? line.split('\t') : [line]; });
+  } else if (window._holBulkFileRows) {
+    src = window._holBulkFileRows;
+  } else { showToast('Paste some lines or upload a file first', '#e67e00'); return; }
+  var parsed = _holParseRows(src, yr);
+  window._holBulkPending = parsed.rows;
+  var existing = {};
+  (_holidayRows || []).forEach(function(r){ existing[r.holiday_date] = r.name; });
+  var DN = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  var el = document.getElementById('hol-bulk-preview');
+  if (!el) return;
+  var newCount = parsed.rows.filter(function(r){ return !(r.holiday_date in existing); }).length;
+  el.innerHTML =
+      (window._holBulkFileRows ? '<div style="font-size:11px;color:#6b6b80;margin-bottom:6px;">From file: <b>' + _hEsc(window._holBulkFileName || '') + '</b></div>' : '')
+    + '<div style="font-size:12px;font-weight:600;color:#1a1a2e;margin-bottom:6px;">' + parsed.rows.length + ' holiday' + (parsed.rows.length === 1 ? '' : 's') + ' found'
+    + (parsed.rows.length ? ' — ' + newCount + ' new, ' + (parsed.rows.length - newCount) + ' already listed (will be renamed)' : '') + '</div>'
+    + (parsed.rows.length ? '<div style="max-height:240px;overflow:auto;border:1px solid #EBEBEF;border-radius:10px;background:#fff;">' + parsed.rows.map(function(r) {
+        var p = r.holiday_date.split('-'); var dt = new Date(+p[0], +p[1]-1, +p[2]);
+        var tag = (r.holiday_date in existing)
+          ? (existing[r.holiday_date] === r.name ? '<span style="font-size:10px;color:#9898a6;">no change</span>' : '<span style="font-size:10px;color:#e67e00;">rename from “' + _hEsc(existing[r.holiday_date]) + '”</span>')
+          : '<span style="font-size:10px;color:#16A34A;">new</span>';
+        return '<div style="display:flex;gap:10px;align-items:center;padding:5px 10px;border-bottom:1px solid #F4F4F8;font-size:12px;">'
+          + '<span style="width:130px;color:#be185d;font-weight:600;">' + r.holiday_date + ' <span style="color:#9898a6;font-weight:400;">' + DN[dt.getDay()] + '</span></span>'
+          + '<span style="flex:1;">' + _hEsc(r.name) + '</span>' + tag + '</div>';
+      }).join('') + '</div>' : '')
+    + (parsed.skipped.length ? '<div style="font-size:11px;color:#c0392b;margin-top:6px;">Skipped ' + parsed.skipped.length + ' line' + (parsed.skipped.length === 1 ? '' : 's') + ' with no date I could read: ' + parsed.skipped.slice(0, 5).map(_hEsc).join(' | ') + (parsed.skipped.length > 5 ? ' …' : '') + '</div>' : '')
+    + (parsed.rows.length ? '<button onclick="holBulkSave()" style="margin-top:10px;padding:7px 14px;background:var(--kk-500,#32CE13);color:#fff;border:none;border-radius:10px;font-size:12px;font-weight:500;cursor:pointer;font-family:Rubik,sans-serif;"><i class="ti ti-check" style="font-size:12px;"></i> Add ' + parsed.rows.length + ' holiday' + (parsed.rows.length === 1 ? '' : 's') + '</button>' : '');
+}
+async function holBulkSave() {
+  var pending = window._holBulkPending || [];
+  if (!pending.length) return;
+  if (!_holidayRows) { showToast('The holiday list isn’t set up in the database yet (run the holidays migration first)', '#c0392b'); return; }
+  var by = currentUser && currentUser.name || null;
+  var payload = pending.map(function(r){ return { holiday_date: r.holiday_date, name: r.name, created_by: by }; });
+  var res = await supabaseClient.from('holidays').upsert(payload, { onConflict: 'holiday_date' }).select('id,holiday_date,name');
+  if (res.error || !(res.data || []).length) { showToast('Could not save holidays' + (res.error ? ': ' + res.error.message : ' (permission denied)'), '#c0392b'); return; }
+  var saved = {};
+  res.data.forEach(function(r){ saved[r.holiday_date] = r; });
+  _holidayRows = _holidayRows.filter(function(r){ return !saved[r.holiday_date]; }).concat(res.data);
+  _holidayRows.sort(function(a,b){ return a.holiday_date < b.holiday_date ? -1 : 1; });
+  if (typeof logAudit === 'function') logAudit({ action: 'holidays_bulk_added', entityType: 'holiday', entityId: pending[0].holiday_date + '..' + pending[pending.length-1].holiday_date, entityLabel: res.data.length + ' holidays', description: 'Bulk added/updated ' + res.data.length + ' holidays: ' + pending.map(function(r){ return r.holiday_date + ' ' + r.name; }).join('; ') });
+  window._holBulkPending = null; window._holBulkFileRows = null; window._holBulkOpen = false;
+  window._holYearSel = parseInt(pending[0].holiday_date.slice(0,4), 10);
+  _refreshAfterHolidayChange();
+  showToast(res.data.length + ' holiday' + (res.data.length === 1 ? '' : 's') + ' saved');
+}
+
 function openHolidaySettings() {
   switchPage('settings');
   setTimeout(function(){ var s = document.getElementById('holidays-section'); if (s) s.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 120);
